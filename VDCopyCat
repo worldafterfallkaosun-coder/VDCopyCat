@@ -1,5 +1,5 @@
 --[[
-    Distrik Pembantai v8.1  (PlaceId 93978595733734)  -  Delta / Luau
+    Distrik Pembantai v8.2  (PlaceId 93978595733734)  -  Delta / Luau
 
     Fitur
       1. Auto Parry        : Parrying Dagger, delay dipelajari otomatis (sama kayak v6)
@@ -10,6 +10,11 @@
       4. Auto Skill Check  : jarum + zona dari GUI, tekan di tengah zona, ada verifikasi + auto-unstick UI
 
     Kontrol : tombol bulat "DP" (geser bebas)  |  F1 parry  F2 snap  F3 skill  F4 panel  F5 trigger
+
+    v8.2
+      - Parry disamain sama script lama yang parry-nya jalan: delay tetap 0.12s (bukan belajar dari 0.04s),
+        remote dicari ulang tiap kali, ga lewat hook, cooldown server ga nahan lagi (CFG.parry.useServerCd).
+      - Log PARRY lebih jelas: "kirim parry", "animasi serang kebaca tapi ga ngancam", "dagger ga ada".
 
     v8.1
       - AKAR "ga ada peluru": log() ke label GUI dipanggil dari dalam hook FireServer (thread game) -> thread game
@@ -54,12 +59,14 @@ local CFG = {
     parry = {
         enabled     = true,
         via         = "remote",   -- "remote" | "input"
-        range       = 14,
-        frontDot    = 0.2,
-        jitter      = 0.015,
-        spacing     = 0.5,
+        range       = 13,
+        frontDot    = 0.35,
+        delay       = 0.12,       -- jeda tetap setelah animasi serang mulai (detik), sama kayak script lama
+        jitter      = 0.03,
+        spacing     = 0.6,
         autoEquip   = true,
-        learn       = true,
+        learn       = false,      -- true = delay dipelajari (mulai dari 0.04s, bisa kecepetan). default OFF
+        useServerCd = false,      -- true = nahan parry selama cooldown dari parryResult server
         minPriority = Enum.AnimationPriority.Action,
     },
 
@@ -129,7 +136,7 @@ end
 
 local function notify(msg)
     pcall(function()
-        StarterGui:SetCore("SendNotification", { Title = "DP v8.1", Text = msg, Duration = 2.5 })
+        StarterGui:SetCore("SendNotification", { Title = "DP v8.2", Text = msg, Duration = 2.5 })
     end)
     log("INFO", msg)
 end
@@ -547,6 +554,7 @@ end)
 ------------------------------------------------------------------ 1) AUTO PARRY
 local Parry = { watched = setmetatable({}, { __mode = "k" }), last = 0, cdUntil = 0, stats = {}, remote = nil }
 local BUCKETS = { 0.04, 0.08, 0.12, 0.17, 0.23, 0.30 }
+local parrySeenAt, parryWhyAt = 0, 0
 
 local function pickBucket(key)
     local st = Parry.stats[key]
@@ -574,16 +582,23 @@ local function findDagger()
     return t, false
 end
 
-local function parryNow(key, bi)
+local function parryNow(key, bi, base)
     if not CFG.parry.enabled then return end
     local now = os.clock()
-    if now - Parry.last < CFG.parry.spacing or now < Parry.cdUntil then return end
+    if now - Parry.last < CFG.parry.spacing then return end
+    if CFG.parry.useServerCd and now < Parry.cdUntil then return end
     local hum, char = myHum(), myChar()
     if not hum or hum.Health <= 0 or not char then return end
     if hum.Health < hum.MaxHealth * 0.5 then return end   -- client game nolak parry kalau HP < 50%
 
     local tool, equipped = findDagger()
-    if not tool then return end
+    if not tool then
+        if now - parryWhyAt > 3 then
+            parryWhyAt = now
+            log("PARRY", "Parrying Dagger ga ada di tangan / backpack")
+        end
+        return
+    end
     if not equipped then
         if not CFG.parry.autoEquip then return end
         hum:EquipTool(tool)
@@ -594,22 +609,36 @@ local function parryNow(key, bi)
     local before = char:GetAttribute("ParryLands") or 0
 
     if CFG.parry.via == "input" then
-        local ok, how = press(getBind("kb_item", "MouseButton2"), 0.04, "vim")
+        local ok = press(getBind("kb_item", "MouseButton2"), 0.04, "vim")
         if not ok then press(getBind("kb_item", "MouseButton2"), 0.04, "all") end
-    elseif Parry.remote then
-        Parry.remote:FireServer(char)
+    else
+        -- cari ulang tiap kali (sama kayak script lama), jangan pegang remote lama yang bisa udah ke-replace
+        local ev = Parry.remote
+        if not (ev and ev.Parent) then
+            local okf, r = pcall(function() return RS.Remotes.Items["Parrying Dagger"].parry end)
+            if okf and r then
+                ev = r
+                Parry.remote = r
+            end
+        end
+        if not ev then
+            log("PARRY", "remote parry ga ketemu")
+            return
+        end
+        ev:FireServer(char)
     end
+    log("PARRY", string.format("kirim parry (delay %.2f)", base or 0))
 
     task.delay(0.9, function()
         if not alive() then return end
         local after = (myChar() == char) and (char:GetAttribute("ParryLands") or 0) or before
         local ok = after > before
-        local st = Parry.stats[key]
+        local st = bi and Parry.stats[key]
         if st and st[bi] then
             st[bi].n = st[bi].n + 1
             if ok then st[bi].s = st[bi].s + 1 end
         end
-        log("PARRY", string.format("delay=%.2f %s", BUCKETS[bi], ok and "SUKSES" or "meleset"))
+        log("PARRY", string.format("delay=%.2f %s", base or 0, ok and "SUKSES" or "meleset"))
     end)
 end
 
@@ -632,10 +661,22 @@ local function watchKiller(k)
         if track.Looped then return end
         if track.Priority.Value < CFG.parry.minPriority.Value then return end
         local key = (track.Animation and track.Animation.AnimationId) or track.Name
-        local bi = pickBucket(key)
-        local delay = BUCKETS[bi] + (math.random() * 2 - 1) * CFG.parry.jitter
+        local bi, base
+        if CFG.parry.learn then
+            bi = pickBucket(key)
+            base = BUCKETS[bi]
+        else
+            base = CFG.parry.delay
+        end
+        local delay = base + (math.random() * 2 - 1) * CFG.parry.jitter
         task.delay(math.max(0, delay), function()
-            if track.IsPlaying and threatens(k) then parryNow(key, bi) end
+            if not track.IsPlaying then return end
+            if threatens(k) then
+                parryNow(key, bi, base)
+            elseif os.clock() - parrySeenAt > 2 then
+                parrySeenAt = os.clock()
+                log("PARRY", "animasi serang kebaca tapi killer ga ngancam (jarak/arah)")
+            end
         end)
     end)
 end
@@ -644,7 +685,7 @@ task.spawn(function()
     pcall(function()
         local pd = RS:WaitForChild("Remotes", 20):WaitForChild("Items", 20):WaitForChild("Parrying Dagger", 20)
         Parry.remote = pd:WaitForChild("parry", 10)
-        Spy[Parry.remote] = "parry"
+        -- sengaja ga didaftarin ke Spy: parry ga boleh lewat hook, biar sama persis kayak script lama
         pd:WaitForChild("parryResult", 10).OnClientEvent:Connect(function(success, cooldown)
             local cd = tonumber(cooldown)
             if cd and cd > 0 then Parry.cdUntil = os.clock() + cd end
@@ -1841,4 +1882,4 @@ UIS.InputBegan:Connect(function(i, gp)
     end
 end)
 
-notify("v8.1 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap tombol DP buat panel")
+notify("v8.2 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap tombol DP buat panel")
