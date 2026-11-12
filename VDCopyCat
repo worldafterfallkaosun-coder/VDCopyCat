@@ -1,71 +1,75 @@
 --[[
-    Distrik Pembantai v6  (PlaceId 93978595733734)  -  Delta / Luau
+    Distrik Pembantai v7  (PlaceId 93978595733734)  -  Delta / Luau
 
     Fitur
-      1. Auto Parry       : Parrying Dagger, delay dipelajari otomatis (pakai ParryLands sebagai penanda sukses)
-      2. Gun Auto-Hit     : hook Fire:FireServer -> arah tembakan dibelokkan ke badan killer terdekat
-                            (nembak asal arah pun tetep kena). Auto Fire = tahan aim + klik trigger otomatis
-      3. Auto Skill Check : cari needle + zona dari GUI (self-calibrating), tekan di tengah zona
+      1. Auto Parry        : Parrying Dagger, delay dipelajari otomatis (sama kayak v6)
+      2. Gun Manual Trigger: KAMU yang bidik (tahan aim sendiri). Pas crosshair udah di badan killer dan
+                             charge penuh, script nembak otomatis lewat jalur tembak asli game, dan arah peluru
+                             dikunci ke badan killer -> pasti kena. Kalau belum pas, ga nembak.
+      3. Gun Snap          : tembakan manual kamu yang udah deket killer (<= snapFov) dibelokkan pas ke badan
+      4. Auto Skill Check  : jarum + zona dari GUI, tekan di tengah zona, ada verifikasi + auto-unstick UI
 
-    Kontrol : tombol bulat "DP" di layar (geser bebas)  |  F1 parry  F2 gun hit  F3 skill  F4 panel
-    v6      : skill check ngerekam timeline tiap check (baris 'TRACE' di Copy Log) + pantau kedua GUI skill check.
-    v5      : event gun dari pemain lain diabaikan; auto gun mundur kalau aim ditolak (ga ganggu gun manual);
-              skill check: tekan cepat buat zona deket posisi awal jarum, tracker lama kalah sama event baru.
-    v4      : gun auto-fire cek dulu syarat aim dari game (HP>=50%, ga lagi repair/heal, ga cooldown, dll) dan
-              verifikasi tembakan diterima. Skill check pakai objek Line/Goal langsung + prediksi waktu + auto-tune.
-    Debug   : tombol "Copy Log" dan "Copy Dump" di panel -> tempel hasilnya kalau ada yang masih ga jalan
+    Kontrol : tombol bulat "DP" (geser bebas)  |  F1 parry  F2 snap  F3 skill  F4 panel  F5 trigger
+
+    v7 (perbaikan dari v6)
+      - AKAR "stuck/ngebug": v6 nembak input palsu ke SEMUA handler UserInputService (Space = skill check +
+        action + drop pallet + vault, MouseButton1 = trigger + interact + basic attack). Objek input palsunya
+        juga beda antara Begin dan End, jadi handler yang nunggu End dari objek yang sama nyangkut.
+        v7: input dikirim cuma ke script yang relevan (TwistoffateClient / pemilik SkillCheckEvent), objek
+        yang sama dipakai buat Begin dan End, dan kalau ga masuk otomatis pindah tier (owner -> vim -> all).
+      - Gun: auto-aim + kunci kamera dari v6 DIBUANG (itu yang bikin aim/tembak nyangkut). Sekarang manual.
+      - Gun: ga nembak kalau bakal macet (baca tofRoll vs batas jam tiap step), nunggu charge sesuai step.
+      - Skill check: slope jarum pakai regresi 5 sample, belajar dari hasil Result DAN Fail, tune boleh negatif,
+        verifikasi tekanan masuk (kalau ga masuk -> retry tier lain), watchdog buat UI yang nyangkut.
+    Debug   : "Copy Log" dan "Copy Dump" di panel -> tempel hasilnya kalau ada yang masih ga jalan
 ]]
 
 ------------------------------------------------------------------ CONFIG
 local CFG = {
     keys = {
         parry = Enum.KeyCode.F1,
-        gun   = Enum.KeyCode.F2,
+        snap  = Enum.KeyCode.F2,
         skill = Enum.KeyCode.F3,
         panel = Enum.KeyCode.F4,
+        trig  = Enum.KeyCode.F5,
     },
-
-    -- cara kirim input ke game (dipakai auto fire, skill check, parry mode INPUT)
-    --   "signal" = panggil langsung handler UserInputService (jalan di mobile/emulator)
-    --   "vim"    = VirtualInputManager
-    --   "remote" = khusus auto fire: kirim remote Aim/Fire langsung tanpa input
-    input = "signal",
 
     parry = {
         enabled     = true,
         via         = "remote",   -- "remote" | "input"
-        range       = 14,         -- stud
-        frontDot    = 0.2,        -- killer harus madep ke kita
+        range       = 14,
+        frontDot    = 0.2,
         jitter      = 0.015,
-        spacing     = 0.5,        -- jeda minimum antar parry (detik)
+        spacing     = 0.5,
         autoEquip   = true,
-        learn       = true,       -- cari delay terbaik per animasi
+        learn       = true,
         minPriority = Enum.AnimationPriority.Action,
     },
 
     gun = {
-        hit          = true,      -- silent aim: tembakan manual dibelokkan ke killer
-        auto         = false,     -- auto aim + auto tembak
+        snap         = true,      -- tembakan manual yang deket killer dibelokkan pas ke badan
+        trigger      = true,      -- nembak otomatis pas crosshair kamu di badan killer (kamu yang bidik)
+        fireStep     = 3,         -- 3 = charge penuh (ga pernah macet). 1/2 = lebih cepet, cuma kalau tofRoll aman
+        hitRadius    = 2.2,       -- stud: jarak peluru-ke-badan yang dianggap "aim pas" (makin gede makin longgar)
+        snapFov      = 8,         -- derajat: batas belok buat tembakan manual (snap)
         maxDist      = 180,
-        fov          = 75,        -- derajat dari arah bidikan aslinya
         aimPart      = "UpperTorso",
-        lead         = 0,         -- 0 = hitscan. 1 = prediksi gerak (kalau peluru ternyata ada travel time)
+        lead         = 0,         -- 0 = hitscan. 1 = prediksi gerak kalau ternyata peluru ada travel time
         bulletSpeed  = 800,
-        losHit       = false,     -- true = hanya belok kalau ga ketutup tembok
-        losAuto      = true,      -- auto fire cuma kalau killer keliatan
-        fireCooldown = 0.8,
-        lockCamera   = true,      -- auto fire: kamera ngunci ke killer selama bidik
-        chargeMargin = 0.2,       -- detik, tambahan di atas waktu charge penuh (biar server ga nolak)
-        confirmWait  = 0.8,       -- detik, nunggu bukti tembakan diterima (echo server / shots / cooldown)
+        needLOS      = true,      -- trigger cuma nembak kalau killer ga ketutup tembok
+        chargeMargin = 0.12,      -- detik, tambahan di atas waktu charge step (biar server ga nolak)
+        shotGap      = 0.8,       -- detik, jeda minimum antar tembakan trigger
+        confirmWait  = 0.7,       -- detik, nunggu bukti tembakan kekirim
     },
 
     skill = {
         enabled = true,
-        lead    = 0.02,           -- detik, kompensasi latency
+        lead    = 0.02,           -- dipakai metode lama
         offset  = 0,              -- derajat, geser titik tekan (tombol di panel)
         maxWait = 6,
-        latency = 0.04,           -- detik, awal tekan sebelum jarum sampai tengah (di-tune otomatis)
-        learn   = true,           -- tune latency otomatis dari hasil tiap skill check
+        latency = 0.015,          -- detik, awal tekan sebelum jarum sampai tengah (di-tune otomatis, boleh negatif)
+        learn   = true,
+        unstick = true,           -- sembunyiin Check yang nyangkut (jarum diem >1.2s padahal ga ada event)
     },
 }
 
@@ -86,13 +90,14 @@ local ENV = (getgenv and getgenv()) or _G
 local TOKEN = {}
 ENV.DP3_TOKEN = TOKEN
 local function alive() return ENV.DP3_TOKEN == TOKEN end
+pcall(function() RunService:UnbindFromRenderStep("DP3_CamLock") end)   -- sisa v6 (kunci kamera)
 
 ------------------------------------------------------------------ LOG
 local LOG, logLabel = {}, nil
 local function log(tag, msg)
     local line = string.format("[%.1f] %s %s", os.clock() % 1000, tag, tostring(msg))
     LOG[#LOG + 1] = line
-    if #LOG > 100 then table.remove(LOG, 1) end
+    if #LOG > 120 then table.remove(LOG, 1) end
     if logLabel then
         logLabel.Text = table.concat(LOG, "\n", math.max(1, #LOG - 8), #LOG)
     end
@@ -101,7 +106,7 @@ end
 
 local function notify(msg)
     pcall(function()
-        StarterGui:SetCore("SendNotification", { Title = "DP v3", Text = msg, Duration = 2.5 })
+        StarterGui:SetCore("SendNotification", { Title = "DP v7", Text = msg, Duration = 2.5 })
     end)
     log("INFO", msg)
 end
@@ -159,7 +164,7 @@ local function nameHas(name, pats)
     return false
 end
 
------------------------------------------------------------------- INPUT
+------------------------------------------------------------------ INPUT (targeted)
 local function parseBind(raw)
     if raw == "MouseButton1" then return "mouse", 0 end
     if raw == "MouseButton2" then return "mouse", 1 end
@@ -180,7 +185,9 @@ local function viewCenter()
     return s.X / 2, s.Y / 2
 end
 
-local function fakeInput(kind, v, down)
+-- objek input palsu. Begin dan End PAKAI OBJEK YANG SAMA (handler game banyak yang cocokin identitas objek
+-- atau nunggu input.Changed), jadi state-nya diubah in-place lalu Changed ditembak.
+local function newInput(kind, v)
     local cx, cy = viewCenter()
     local utype, kcode
     if kind == "mouse" then
@@ -190,13 +197,24 @@ local function fakeInput(kind, v, down)
         utype = Enum.UserInputType.Keyboard
         kcode = v
     end
-    return {
+    local be = Instance.new("BindableEvent")
+    local obj = {
         UserInputType  = utype,
         KeyCode        = kcode,
-        UserInputState = down and Enum.UserInputState.Begin or Enum.UserInputState.End,
+        UserInputState = Enum.UserInputState.Begin,
         Position       = Vector3.new(cx, cy, 0),
         Delta          = Vector3.new(0, 0, 0),
+        Changed        = be.Event,
     }
+    function obj:GetPropertyChangedSignal() return be.Event end
+    function obj:IsModifierKeyDown() return false end
+    obj.__be = be
+    return obj
+end
+
+local function setState(obj, st)
+    obj.UserInputState = st
+    pcall(function() obj.__be:Fire("UserInputState") end)
 end
 
 local function isOurs(f)
@@ -205,50 +223,97 @@ local function isOurs(f)
     return ok and r == true
 end
 
-local function sendInput(raw, down)
-    local kind, v = parseBind(raw)
-    if not kind then return false end
-    local mode = CFG.input
-    if mode == "remote" then mode = "signal" end
-
-    if mode == "signal" and getconnections then
-        local obj = fakeInput(kind, v, down)
-        local okc, conns = pcall(getconnections, down and UIS.InputBegan or UIS.InputEnded)
-        if okc and conns then
-            local n = 0
-            for _, c in ipairs(conns) do
-                local okf, f = pcall(function() return c.Function end)
-                if okf and type(f) == "function" and not isOurs(f) then
-                    task.spawn(pcall, f, obj, false)
-                    n = n + 1
-                end
-            end
-            if n > 0 then return true end
+-- nama script pemilik sebuah fungsi (buat nyaring handler). hasilnya di-cache.
+local ownerCache = setmetatable({}, { __mode = "k" })
+local function ownerOf(f)
+    local c = ownerCache[f]
+    if c ~= nil then return c or nil end
+    local name
+    if debug and debug.info then
+        local ok, s = pcall(debug.info, f, "s")
+        if ok and type(s) == "string" and s ~= "" and s ~= "[C]" then name = s end
+    end
+    if not name and getfenv then
+        local ok, env = pcall(getfenv, f)
+        if ok and type(env) == "table" then
+            local ok2, sc = pcall(function() return env.script end)
+            if ok2 and typeof(sc) == "Instance" then name = sc:GetFullName() end
         end
     end
-
-    if VIM then
-        local cx, cy = viewCenter()
-        if kind == "mouse" then
-            VIM:SendMouseButtonEvent(cx, cy, v, down, game, 0)
-        else
-            VIM:SendKeyEvent(down, v, false, game)
-        end
-        return true
-    end
-    return false
+    ownerCache[f] = name or false
+    return name
 end
 
-local function click(raw, hold)
-    sendInput(raw, true)
-    task.wait(hold or 0.04)
-    sendInput(raw, false)
+-- panggil handler sebuah signal. filter(ownerName) -> true = ikut. return (dipanggil, total)
+local function fireHandlers(sig, obj, filter)
+    local ok, conns = pcall(getconnections, sig)
+    if not ok or not conns then return 0, 0 end
+    local n, total = 0, 0
+    for _, c in ipairs(conns) do
+        local okf, f = pcall(function() return c.Function end)
+        local en = true
+        pcall(function() if c.Enabled == false then en = false end end)
+        if en and okf and type(f) == "function" and not isOurs(f) then
+            total = total + 1
+            if (not filter) or filter(ownerOf(f) or "") then
+                task.spawn(pcall, f, obj, false)
+                n = n + 1
+            end
+        end
+    end
+    return n, total
+end
+
+-- tier: "owner" (cuma handler yang lolos filter) | "vim" (input asli lewat VirtualInputManager) | "all" (semua handler)
+-- return ok, keterangan
+local function press(raw, hold, tier, filter)
+    local kind, v = parseBind(raw)
+    if not kind then return false, "bind ga dikenal: " .. tostring(raw) end
+    hold = hold or 0.04
+    tier = tier or "all"
+
+    if tier == "vim" then
+        if not VIM then return false, "VIM ga ada" end
+        local cx, cy = viewCenter()
+        local ok = pcall(function()
+            if kind == "mouse" then VIM:SendMouseButtonEvent(cx, cy, v, true, game, 0)
+            else VIM:SendKeyEvent(true, v, false, game) end
+        end)
+        if not ok then return false, "VIM error" end
+        task.delay(hold, function()
+            pcall(function()
+                if kind == "mouse" then VIM:SendMouseButtonEvent(cx, cy, v, false, game, 0)
+                else VIM:SendKeyEvent(false, v, false, game) end
+            end)
+        end)
+        return true, "vim"
+    end
+
+    if not getconnections then return false, "getconnections ga ada" end
+    local flt = (tier == "owner") and filter or nil
+    local obj = newInput(kind, v)
+    local n, total = fireHandlers(UIS.InputBegan, obj, flt)
+    if n == 0 then
+        pcall(function() obj.__be:Destroy() end)
+        return false, string.format("%s: ga ada handler (0/%d)", tier, total)
+    end
+    task.delay(hold, function()
+        setState(obj, Enum.UserInputState.End)
+        fireHandlers(UIS.InputEnded, obj, flt)
+        task.delay(0.05, function() pcall(function() obj.__be:Destroy() end) end)
+    end)
+    return true, string.format("%s %d/%d handler", tier, n, total)
 end
 
 ------------------------------------------------------------------ REMOTE SPY + HOOK
 local Spy = {}   -- [RemoteEvent] = nama
-local Gun = { fire = nil, aim = nil, hold = nil, busy = false, lockPart = nil, hookOK = false,
-              echo = 0, aimSeen = 0, lockUntil = 0, lastShot = -10, lastWhy = 0, pauseUntil = 0, failStreak = 0 }
+local Gun = {
+    fire = nil, hookOK = false,
+    fireCount = 0, fireSeen = 0, chargeStart = 0, wasAiming = false,
+    pending = nil, pendingAt = 0, holdoff = 0, firing = false,
+    tierIdx = 1, tierGood = {}, failStreak = 0, cycles = 0, pauseUntil = 0,
+    lockUntil = 0, status = "-", lastWhy = 0, lastWhyText = "",
+}
 local SkillHook = { judged = function() end }   -- diisi di bagian skill check
 
 local function logSpy(name, args, n)
@@ -284,8 +349,15 @@ local function muzzleOrigin()
     return b
 end
 
+-- survivor lain ditembus peluru (lihat aimPoint/survivorOf di game), jadi ga dianggap penghalang
 local function visibleFrom(origin, part)
-    rayP.FilterDescendantsInstances = { myChar(), part.Parent }
+    local ign = { myChar(), part.Parent }
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LP and p.Character and not (p.Team and p.Team.Name:lower():find("killer")) then
+            ign[#ign + 1] = p.Character
+        end
+    end
+    rayP.FilterDescendantsInstances = ign
     return workspace:Raycast(origin, part.Position - origin, rayP) == nil
 end
 
@@ -301,10 +373,23 @@ local function dirTo(origin, part)
     return d.Unit
 end
 
--- dipanggil dari hook: orig = arah bidikan asli game
-local function rewriteDir(orig)
+-- dipanggil dari hook pas game ngirim gun.Fire. orig = arah bidikan asli game
+local function snapDir(orig)
     local origin = muzzleOrigin()
-    if not origin or orig.Magnitude < 0.01 then return nil end
+    if not origin then return nil end
+
+    -- 1) tembakan dari auto-trigger: target udah dipilih, arah dihitung ULANG pas ini (posisi paling baru)
+    local p = Gun.pending
+    if p and p.Parent and os.clock() - Gun.pendingAt < 0.8 then
+        local nd = dirTo(origin, p)
+        if nd then
+            log("HIT", string.format("kunci ke %s (%.0f stud)", p.Parent.Name, (p.Position - origin).Magnitude))
+            return nd
+        end
+    end
+
+    -- 2) tembakan manual: belok kalau killer deket arah bidikan
+    if not CFG.gun.snap or orig.Magnitude < 0.01 then return nil end
     local o = orig.Unit
     local best, bestAng, bestDist
     for _, k in ipairs(killers()) do
@@ -314,48 +399,54 @@ local function rewriteDir(orig)
             local dist = to.Magnitude
             if dist <= CFG.gun.maxDist and dist > 0.5 then
                 local ang = math.deg(math.acos(math.clamp(o:Dot(to.Unit), -1, 1)))
-                if ang <= CFG.gun.fov and (not best or ang < bestAng) then
-                    if (not CFG.gun.losHit) or visibleFrom(origin, part) then
-                        best, bestAng, bestDist = part, ang, dist
-                    end
+                if ang <= CFG.gun.snapFov and (not best or ang < bestAng) then
+                    if visibleFrom(origin, part) then best, bestAng, bestDist = part, ang, dist end
                 end
             end
         end
     end
-    if not best then
-        log("HIT", "ga ada killer di FOV " .. CFG.gun.fov)
-        return nil
-    end
+    if not best then return nil end
     local nd = dirTo(origin, best)
-    if nd then
-        log("HIT", string.format("belok %.0f deg -> %s (%.0f stud)", bestAng, best.Parent.Name, bestDist))
-    end
+    if nd then log("HIT", string.format("snap %.1f deg -> %s (%.0f stud)", bestAng, best.Parent.Name, bestDist)) end
     return nd
+end
+
+local function onGunFire(args)
+    local now = os.clock()
+    Gun.fireCount = Gun.fireCount + 1
+    Gun.fireSeen = now
+    Gun.chargeStart = now            -- charge mulai ulang dari tembakan (sama kayak game)
+    if amSurvivor() and typeof(args[2]) == "Vector3" then
+        local nd = snapDir(args[2])
+        if nd then args[2] = nd end
+    end
+    Gun.pending = nil
 end
 
 local oldNC
 local function hookBody(self, ...)
     local method = getnamecallmethod()
-    if method == "FireServer" and Spy[self] and alive() then
+    if method == "FireServer" then
         local name = Spy[self]
-        local n = select("#", ...)
-        local args = { ... }
-        if name == "gun.Aim" and args[2] == true then Gun.aimSeen = os.clock() end
-        if name == "Generator.Result" or name == "Healing.Result" then pcall(SkillHook.judged, args) end
-        if name == "gun.Fire" and CFG.gun.hit and amSurvivor() and typeof(args[2]) == "Vector3" then
-            local ok, nd = pcall(rewriteDir, args[2])
-            if ok and nd then args[2] = nd end
+        if name and alive() then
+            local n = select("#", ...)
+            local args = { ... }
+            if name == "gun.Fire" then pcall(onGunFire, args) end
+            if name == "Generator.Result" or name == "Healing.Result"
+                or name == "Generator.Fail" or name == "Healing.Fail" then
+                pcall(SkillHook.judged, args, name)
+            end
+            pcall(logSpy, name, args, n)
+            setnamecallmethod(method)
+            return oldNC(self, table.unpack(args, 1, n))
         end
-        pcall(logSpy, name, args, n)
-        setnamecallmethod(method)
-        return oldNC(self, table.unpack(args, 1, n))
     end
     return oldNC(self, ...)
 end
 
 local function installHook()
     if not (hookmetamethod and getnamecallmethod and setnamecallmethod and newcclosure) then
-        log("HOOK", "executor ga support hookmetamethod -> pakai kunci kamera")
+        log("HOOK", "executor ga support hookmetamethod -> snap/kunci arah ga jalan")
         return false
     end
     local ok, err = pcall(function()
@@ -373,40 +464,14 @@ task.spawn(function()
         local items = remotes:WaitForChild("Items", 20)
         local tof = items:WaitForChild("Twist of Fate", 20)
         Gun.fire = tof:WaitForChild("Fire", 10)
-        Gun.aim  = tof:WaitForChild("Aim", 10)
-        Gun.hold = tof:WaitForChild("AimHold", 10)
         Spy[Gun.fire] = "gun.Fire"
-        Spy[Gun.aim]  = "gun.Aim"
-        Spy[Gun.hold] = "gun.Hold"
-        -- server nyiarin Fire/Jammed ke SEMUA pemain. cuma dianggap punya kita kalau ada Instance
-        -- (tool/karakter) yang ada di dalam karakter kita; sisanya diabaikan.
-        local function isMine(...)
-            local c = myChar()
-            if not c then return false end
-            for i = 1, select("#", ...) do
-                local v = select(i, ...)
-                if typeof(v) == "Instance" and (v == c or v:IsDescendantOf(c)) then return true end
-            end
-            return false
-        end
-        local seenOther = 0
-        Gun.fire.OnClientEvent:Connect(function(...)
-            if isMine(...) then
-                Gun.echo = Gun.echo + 1
-                log("SERVER Fire", "punya kita")
-            elseif seenOther < 3 then
-                seenOther = seenOther + 1
-                local t = {}
-                for i = 1, math.min(select("#", ...), 4) do t[#t + 1] = typeof((select(i, ...))) end
-                log("SERVER Fire", "bukan punya kita / ga bisa dipastikan (" .. table.concat(t, ",") .. ") - diabaikan")
-            end
-        end)
         local jm = tof:FindFirstChild("Jammed")
         if jm then
-            jm.OnClientEvent:Connect(function(...)
-                if isMine(...) then
+            jm.OnClientEvent:Connect(function(tool)
+                local c = myChar()
+                if c and typeof(tool) == "Instance" and tool:IsDescendantOf(c) then
                     Gun.lockUntil = os.clock() + 1.2
-                    log("SERVER Jammed", "gun kita jam")
+                    log("SERVER Jammed", "gun kita macet")
                 end
             end)
         end
@@ -464,7 +529,8 @@ local function parryNow(key, bi)
     local before = char:GetAttribute("ParryLands") or 0
 
     if CFG.parry.via == "input" then
-        click(getBind("kb_item", "MouseButton2"), 0.04)
+        local ok, how = press(getBind("kb_item", "MouseButton2"), 0.04, "vim")
+        if not ok then press(getBind("kb_item", "MouseButton2"), 0.04, "all") end
     elseif Parry.remote then
         Parry.remote:FireServer(char)
     end
@@ -528,7 +594,9 @@ task.spawn(function()
     end
 end)
 
------------------------------------------------------------------- 2) GUN
+------------------------------------------------------------------ 2) GUN: MANUAL AIM + AUTO TRIGGER
+local NO_AIM_FLAGS = { "isVaulting", "isSliding", "isDroppingPallet", "isRepairing", "isHealing", "isUnhooking", "isExiting" }
+
 local function equippedGun()
     local c = myChar()
     if not c then return nil end
@@ -543,230 +611,275 @@ local function equippedGun()
     return nil
 end
 
-local function chargeTime()
-    local ok, t = pcall(function()
-        local T = require(RS.Modules.Items.TwistOfFate.TwistoffateTuning)
-        return T.STEPS[#T.STEPS].at
-    end)
-    if ok and type(t) == "number" then return t end
-    return (RS:GetAttribute("RankedMode") == true) and 2.0 or 3.0
-end
-
-local function bestTarget()
-    local origin = muzzleOrigin()
-    if not origin then return nil end
-    local best, bestD
-    for _, k in ipairs(killers()) do
-        local part = pickPart(k.char)
-        if part then
-            local d = (part.Position - origin).Magnitude
-            if d <= CFG.gun.maxDist and (not bestD or d < bestD)
-                and ((not CFG.gun.losAuto) or visibleFrom(origin, part)) then
-                best, bestD = part, d
-            end
-        end
-    end
-    return best
-end
-
-local NO_AIM_FLAGS = { "isVaulting", "isSliding", "isDroppingPallet", "isRepairing", "isHealing", "isUnhooking", "isExiting" }
-
 local function aimingNow()
     local c = myChar()
     return c ~= nil and c:GetAttribute("Aiming") == true
 end
 
-local function dumpGun(tool, tag)
-    local parts = {}
-    for k, v in pairs(tool:GetAttributes()) do parts[#parts + 1] = k .. "=" .. tostring(v) end
-    table.sort(parts)
-    local hum = myHum()
-    log(tag, string.format("tool{%s} HP=%.0f/%.0f Aiming=%s echo=%d",
-        table.concat(parts, " "), hum and hum.Health or -1, hum and hum.MaxHealth or -1,
-        tostring(aimingNow()), Gun.echo))
+local TuningMod, EffectsMod
+local function tuning()
+    if TuningMod == nil then
+        local ok, t = pcall(function() return require(RS.Modules.Items.TwistOfFate.TwistoffateTuning) end)
+        TuningMod = (ok and t) or false
+    end
+    return TuningMod or nil
 end
 
--- kebalikan dari syarat yang dicek TwistoffateClient sebelum game mau mulai aim
--- (return nil = aman, string = alasan kenapa game bakal nolak)
-local function whyNoAim(tool)
+-- (waktu charge, batas jam kalau ada peluru, batas macet kalau peluru habis) buat step n
+local function stepInfo(n)
+    local T = tuning()
+    local s = T and T.STEPS and T.STEPS[n]
+    if s and type(s.at) == "number" then return s.at, s.jam or 0, s.empty or 0 end
+    local ranked = RS:GetAttribute("RankedMode") == true
+    local defs = { { 0.75, 0.4, 0.8 }, { ranked and 1.3 or 1.8, 0.2, 0.65 }, { ranked and 2.0 or 3.0, 0, 0.5 } }
+    local d = defs[n] or defs[3]
+    return d[1], d[2], d[3]
+end
+
+-- arah tembak PERSIS yang bakal dipakai game kalau kamu nembak sekarang (muzzle -> titik yang diliat kamera)
+local function gameAimDir()
+    local cam = workspace.CurrentCamera
+    if EffectsMod == nil then
+        local ok, m = pcall(function() return require(RS.Modules.Items.TwistOfFate.TwistoffateEffects) end)
+        EffectsMod = (ok and m) or false
+    end
+    if EffectsMod and EffectsMod.aimDirection then
+        local ok, d = pcall(EffectsMod.aimDirection, myChar(), cam.CFrame)
+        if ok and typeof(d) == "Vector3" then return d end
+    end
+    return cam.CFrame.LookVector
+end
+
+-- killer yang lagi kena crosshair (jarak peluru-ke-badan <= hitRadius)
+local function findTarget()
+    local origin = muzzleOrigin()
+    if not origin then return nil end
+    local dir = gameAimDir()
+    local best, bestMiss
+    for _, k in ipairs(killers()) do
+        local part = pickPart(k.char)
+        if part then
+            local to = part.Position - origin
+            local dist = to.Magnitude
+            if dist <= CFG.gun.maxDist and dist > 1 then
+                local along = to:Dot(dir)
+                if along > 0 then
+                    local miss = (to - dir * along).Magnitude
+                    if miss <= CFG.gun.hitRadius and (not bestMiss or miss < bestMiss) then
+                        if (not CFG.gun.needLOS) or visibleFrom(origin, part) then
+                            best, bestMiss = part, miss
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return best, bestMiss
+end
+
+-- kebalikan syarat game buat nembak (return nil = aman, string = alasan nahan)
+local function whyNoShoot(tool, jam, empty)
     local c, hum, root = myChar(), myHum(), myRoot()
-    if not (c and hum and root) or hum.Health <= 0 then return "karakter belum siap/mati" end
-    if os.clock() < Gun.pauseUntil then return "jeda (aim ditolak berulang)" end
-    if UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then return "kamu lagi aim manual" end
-    if hum.Health < hum.MaxHealth * 0.5 then return "HP < 50% (game nolak aim)" end
+    if not (c and hum and root) or hum.Health <= 0 then return "karakter belum siap" end
+    if os.clock() < Gun.pauseUntil then return "jeda (trigger gagal berulang)" end
+    if Gun.firing then return "nunggu konfirmasi" end
+    if hum.Health < hum.MaxHealth * 0.5 then return "HP < 50%" end
     if CS:HasTag(c, "Silenced") then return "Silenced" end
     if tool:GetAttribute("tofState") == "cooldown" then return "gun cooldown" end
-    local shots = tool:GetAttribute("shots")
-    if (shots == nil and 1 or shots) <= 0 then return "peluru habis (shots=0)" end
-    if os.clock() < Gun.lockUntil then return "lock setelah jam" end
+    if os.clock() < Gun.lockUntil then return "gun macet (lock)" end
     for _, a in ipairs({ "Trapped", "IsCarried", "IsHooked" }) do
         if c:GetAttribute(a) then return a end
     end
     if LP:GetAttribute("IsDead") then return "IsDead" end
-    if CS:HasTag(root, "doing action") and not aimingNow() then return "lagi action (repair/heal/vault)" end
     local ci = c:FindFirstChild("CheckInterractable")
     if ci then
         for _, a in ipairs(NO_AIM_FLAGS) do
             if ci:GetAttribute(a) then return a end
         end
     end
-    if os.clock() - Gun.lastShot < CFG.gun.fireCooldown then return "jeda antar tembakan" end
+    local shots = tool:GetAttribute("shots")
+    local hasShots = (shots == nil and 1 or shots) > 0
+    local roll = tool:GetAttribute("tofRoll")
+    local limit = hasShots and jam or empty
+    if type(roll) == "number" and type(limit) == "number" and roll < limit then
+        return string.format("roll %.2f < %.2f (bakal macet)", roll, limit)
+    end
+    if (not hasShots) and type(roll) ~= "number" then return "peluru habis" end
     return nil
 end
 
-local function autoFire(tool, part)
-    Gun.busy = true
-    local aimRaw  = getBind("kb_item", "MouseButton2")
-    local trigRaw = getBind("kb_itemtrigger", "MouseButton1")
-    local useRemote = (CFG.input == "remote") and Gun.fire and Gun.aim and Gun.hold
-    local lock = CFG.gun.lockCamera or not Gun.hookOK
-
-    local function release()
-        if useRemote then
-            pcall(function() Gun.hold:FireServer(tool, false) end)
-            pcall(function() Gun.aim:FireServer(tool, false) end)
-        else
-            sendInput(aimRaw, false)
-        end
-        Gun.lockPart = nil
-    end
-
-    -- 1) mulai aim. kamera BELUM dikunci: biar ketahuan game beneran masuk mode aim atau nolak
-    local t0 = os.clock()
-    if useRemote then
-        pcall(function() Gun.hold:FireServer(tool, true) end)
-        pcall(function() Gun.aim:FireServer(tool, true) end)
-    else
-        sendInput(aimRaw, true)
-    end
-    local aimOK, viaAttr = useRemote and true or false, false
-    while not aimOK and os.clock() - t0 < 0.8 do
-        task.wait(0.03)
-        viaAttr = aimingNow()
-        aimOK = viaAttr or Gun.aimSeen >= t0
-    end
-    if not aimOK then
-        log("AUTO", "game ga nerima input aim (kb_item=" .. tostring(aimRaw) .. ") -> bukan cuma kamera, aim game ga jalan")
-        dumpGun(tool, "AUTO")
-        Gun.lockPart = nil     -- aim ga pernah mulai: JANGAN kirim release palsu (bisa batalin aim manualmu)
-        Gun.failStreak = Gun.failStreak + 1
-        if Gun.failStreak >= 3 then
-            Gun.failStreak = 0
-            Gun.pauseUntil = os.clock() + 10
-            log("AUTO", "aim ditolak 3x berturut-turut -> auto gun jeda 10 detik")
-        end
-        task.wait(1.5)
-        Gun.busy = false
-        return
-    end
-    Gun.failStreak = 0
-
-    -- 2) charge penuh (dihitung dari aim mulai)
-    if lock then Gun.lockPart = part end
-    local need = chargeTime() + CFG.gun.chargeMargin
-    local aimT = os.clock()
-    local ok = true
-    while os.clock() - aimT < need do
-        task.wait(0.05)
-        local hum = myHum()
-        if not (alive() and CFG.gun.auto and equippedGun() == tool and part.Parent and hum and hum.Health > 0) then
-            ok = false
-            break
-        end
-        if viaAttr and not aimingNow() then
-            log("AUTO", "aim dibatalin game (kena damage/silenced/dll)")
-            ok = false
-            break
-        end
-    end
-
-    -- 3) tembak + verifikasi
-    if ok then
-        local echo0 = Gun.echo
-        local shots0, state0 = tool:GetAttribute("shots"), tool:GetAttribute("tofState")
-        if useRemote then
-            local origin = muzzleOrigin()
-            local d = origin and dirTo(origin, part)
-            if d then pcall(function() Gun.fire:FireServer(tool, d, 3) end) end
-        else
-            click(trigRaw, 0.04)
-        end
-        Gun.lastShot = os.clock()
-        log("AUTO", string.format("tembak (charge %.1fs)", os.clock() - aimT))
-        task.wait(0.15)
-        Gun.lockPart = nil
-
-        local accepted = false
-        local tv = os.clock()
-        while os.clock() - tv < CFG.gun.confirmWait do
-            if Gun.echo > echo0 or tool:GetAttribute("shots") ~= shots0
-                or (tool:GetAttribute("tofState") == "cooldown" and state0 ~= "cooldown") then
-                accepted = true
-                break
-            end
-            task.wait(0.05)
-        end
-        if accepted then
-            log("AUTO", "tembakan masuk")
-        else
-            log("AUTO", "tembakan ga masuk (server nolak / jam) - cek Copy Log")
-            dumpGun(tool, "AUTO")
-        end
-    end
-
-    release()
-    task.wait(CFG.gun.fireCooldown)
-    Gun.busy = false
+-- filter handler: cuma script gun
+local function gunFilter(name)
+    return name:find("TwistoffateClient", 1, true) ~= nil
 end
 
-pcall(function() RunService:UnbindFromRenderStep("DP3_CamLock") end)
-RunService:BindToRenderStep("DP3_CamLock", Enum.RenderPriority.Camera.Value + 1, function()
-    local p = Gun.lockPart
-    if alive() and p and p.Parent then
-        local cam = workspace.CurrentCamera
-        cam.CFrame = CFrame.lookAt(cam.CFrame.Position, p.Position)
+local function gunTiers()
+    local t = {}
+    if getconnections then t[#t + 1] = "owner" end
+    if VIM then t[#t + 1] = "vim" end
+    if getconnections then t[#t + 1] = "all" end
+    return t
+end
+
+local function gunEscalate(why)
+    local list = gunTiers()
+    if #list == 0 then return end
+    local cur = list[Gun.tierIdx] or list[1]
+    Gun.tierIdx = Gun.tierIdx % #list + 1
+    Gun.failStreak = 0
+    if Gun.tierIdx == 1 then
+        Gun.cycles = Gun.cycles + 1
+        if Gun.cycles >= 2 then
+            Gun.cycles = 0
+            Gun.pauseUntil = os.clock() + 8
+            log("TRIG", "semua tier gagal 2 putaran -> trigger jeda 8 detik (Copy Log)")
+        end
     end
-end)
+    log("TRIG", string.format("tier %s gagal (%s) -> pindah ke %s", cur, why, list[Gun.tierIdx] or "?"))
+end
+
+local function fireTrigger(tool, part)
+    local list = gunTiers()
+    if #list == 0 then
+        Gun.pauseUntil = os.clock() + 30
+        log("TRIG", "executor ga punya getconnections maupun VirtualInputManager -> trigger ga bisa")
+        return
+    end
+    local tier = list[Gun.tierIdx] or list[1]
+    local trigRaw = getBind("kb_itemtrigger", "MouseButton1")
+    local before = Gun.fireCount
+
+    Gun.firing = true
+    Gun.pending, Gun.pendingAt = part, os.clock()
+    local ok, how = press(trigRaw, 0.05, tier, gunFilter)
+    log("TRIG", string.format("tembak via %s (%s)", tier, tostring(how)))
+
+    if not ok then
+        Gun.pending = nil
+        Gun.firing = false
+        Gun.holdoff = os.clock() + 0.3
+        gunEscalate("input ga masuk")
+        return
+    end
+
+    task.delay(CFG.gun.confirmWait, function()
+        Gun.firing = false
+        if not alive() then return end
+        if Gun.fireCount > before then
+            Gun.tierGood[tier] = true
+            Gun.failStreak = 0
+            Gun.cycles = 0
+            Gun.holdoff = os.clock() + CFG.gun.shotGap
+            log("TRIG", "tembakan keluar (tier " .. tier .. ")")
+        else
+            Gun.pending = nil
+            Gun.holdoff = os.clock() + 0.7
+            Gun.failStreak = Gun.failStreak + 1
+            log("TRIG", "game belum ngirim tembakan (streak " .. Gun.failStreak .. ")")
+            if (not Gun.tierGood[tier]) and Gun.failStreak >= 2 then gunEscalate("2x ga keluar") end
+        end
+    end)
+end
+
+local function gunStep()
+    local tool = equippedGun()
+    local aiming = tool ~= nil and aimingNow()
+    if aiming and not Gun.wasAiming then Gun.chargeStart = os.clock() end
+    Gun.wasAiming = aiming
+
+    if not tool then Gun.status = "gun ga dipegang"; return end
+    if not aiming then Gun.status = "tahan aim, bidik killer"; return end
+    if not CFG.gun.trigger then Gun.status = "trigger OFF (snap manual aja)"; return end
+    if not amSurvivor() then Gun.status = "bukan survivor"; return end
+
+    local now = os.clock()
+    if now < Gun.holdoff then return end
+
+    local at, jam, empty = stepInfo(CFG.gun.fireStep)
+    local need = at + CFG.gun.chargeMargin
+    local charged = now - Gun.chargeStart
+    if charged < need then
+        Gun.status = string.format("charge %.1f/%.1fs", charged, need)
+        return
+    end
+
+    local why = whyNoShoot(tool, jam, empty)
+    if why then
+        Gun.status = "nahan: " .. why
+        if why ~= Gun.lastWhyText or now - Gun.lastWhy > 4 then
+            Gun.lastWhy, Gun.lastWhyText = now, why
+            log("TRIG", "nahan: " .. why)
+        end
+        return
+    end
+
+    local part, miss = findTarget()
+    if not part then
+        Gun.status = "siap - arahkan crosshair ke killer"
+        return
+    end
+    Gun.status = string.format("KENA CROSSHAIR (%.1f stud) -> tembak", miss or 0)
+    fireTrigger(tool, part)
+end
 
 task.spawn(function()
-    local lastStatus = 0
+    local acc, lastErr = 0, 0
     while alive() do
-        task.wait(0.1)
-        if CFG.gun.auto and not Gun.busy and amSurvivor() then
-            local tool = equippedGun()
-            local why = tool and whyNoAim(tool)
-            if why and os.clock() - Gun.lastWhy > 4 and bestTarget() then
-                Gun.lastWhy = os.clock()
-                log("AUTO", "ga aim: " .. why)
-            end
-            if tool and not why then
-                local part = bestTarget()
-                if part then
-                    task.spawn(function()
-                        local ok, err = pcall(autoFire, tool, part)
-                        if not ok then
-                            log("AUTO", "error: " .. tostring(err))
-                            Gun.lockPart = nil
-                            Gun.busy = false
-                        end
-                    end)
-                end
-            end
-        end
-        if os.clock() - lastStatus > 5 then
-            lastStatus = os.clock()
-            if CFG.gun.auto or CFG.gun.hit then
-                local tool = equippedGun()
-                log("GUN", string.format("tool=%s killer=%d hook=%s surv=%s",
-                    tool and tool.Name or "-", #killers(), tostring(Gun.hookOK), tostring(amSurvivor())))
+        local dt = RunService.Heartbeat:Wait()
+        acc = acc + dt
+        if acc >= 1 / 30 then
+            acc = 0
+            local ok, err = pcall(gunStep)
+            if not ok and os.clock() - lastErr > 3 then
+                lastErr = os.clock()
+                log("GUN", "error: " .. tostring(err))
             end
         end
     end
 end)
 
 ------------------------------------------------------------------ 3) AUTO SKILL CHECK
-local Skill = { active = false, lastDump = "(belum ada dump)", tune = nil, pressClock = -10, cur = nil, gen = 0, w0 = nil }
-Skill.tune = CFG.skill.latency
+local Skill = {
+    active = false, lastDump = "(belum ada dump)", tune = CFG.skill.latency,
+    pressClock = -10, lastResult = -10, lastEvent = -10, cur = nil, gen = 0, w0 = nil,
+    tierName = nil, tierGood = {}, owners = {}, events = {}, retried = false,
+    hidden = {}, stuck = {},
+}
+
+local function refreshOwners()
+    Skill.owners = {}
+    if not getconnections then return end
+    for _, ev in pairs(Skill.events) do
+        local ok, conns = pcall(getconnections, ev.OnClientEvent)
+        if ok and conns then
+            for _, c in ipairs(conns) do
+                local okf, f = pcall(function() return c.Function end)
+                if okf and type(f) == "function" and not isOurs(f) then
+                    local nm = ownerOf(f)
+                    if nm and nm ~= "" then Skill.owners[nm] = true end
+                end
+            end
+        end
+    end
+end
+
+local function skillFilter(name) return Skill.owners[name] == true end
+
+local function skillTiers()
+    local t = {}
+    if getconnections then
+        refreshOwners()
+        if next(Skill.owners) then t[#t + 1] = "owner" end
+    end
+    if VIM then t[#t + 1] = "vim" end
+    if getconnections then t[#t + 1] = "all" end
+    return t
+end
+
+local function indexOf(list, v)
+    for i, x in ipairs(list) do if x == v then return i end end
+    return nil
+end
 
 local function skillRoots(wide)
     local pg = LP:FindFirstChildOfClass("PlayerGui")
@@ -843,36 +956,190 @@ local function snapshot(tag, extra)
     if writefile then pcall(writefile, "dp3_skillcheck_dump.txt", Skill.lastDump) end
 end
 
-local ZONE_NAMES = { "great", "perfect", "success", "zone", "target", "area", "good", "safe", "hit" }
-
-local function pickNeedle(list, stats)
-    local best, bestE = nil, 30
-    for _, o in ipairs(list) do
-        local s = stats[o]
-        if s and s.n >= 3 and s.ema > bestE and o.Parent and shown(o) then best, bestE = o, s.ema end
+-- semua pasangan (Check, Line=jarum, Goal=zona) di GUI keyboard dan gamepad, tampil atau nggak
+local function skillPairs()
+    local out = {}
+    local pg = LP:FindFirstChildOfClass("PlayerGui")
+    if not pg then return out end
+    for _, n in ipairs({ "SkillCheckPromptGui", "SkillCheckPromptGui-con" }) do
+        local g = pg:FindFirstChild(n)
+        local chk = g and g:FindFirstChild("Check")
+        local line, goal = chk and chk:FindFirstChild("Line"), chk and chk:FindFirstChild("Goal")
+        if chk and line and goal then out[#out + 1] = { gui = g, chk = chk, line = line, goal = goal } end
     end
-    return best
+    return out
 end
 
-local function pickZone(list, stats, needle)
-    local best, bestScore, bestArea
-    for _, o in ipairs(list) do
-        local s = stats[o]
-        if s and o ~= needle and s.still >= 8 and o.Parent and shown(o) then
-            local score = 0
-            if nameHas(o.Name, ZONE_NAMES) then score = 3 end
-            if math.abs(angDiff(s.rot, 0)) > 1 then score = score + 1 end
-            if o:IsA("UIGradient") then score = score + 0.5 end
-            if score >= 1 then
-                local area = 0
-                if o:IsA("GuiObject") then area = o.AbsoluteSize.X * o.AbsoluteSize.Y end
-                if not best or score > bestScore or (score == bestScore and area < bestArea) then
-                    best, bestScore, bestArea = o, score, area
-                end
+-- tekan tombol skill check lewat tier yang kerja (owner -> vim -> all). return tier yang dipakai
+local function pressSkill()
+    local raw = getBind("kb_skillcheck", "Space")
+    local list = skillTiers()
+    if #list == 0 then log("SKILL", "ga ada cara kirim input (getconnections/VIM ga ada)"); return nil end
+    local tier = Skill.tierName
+    if not tier or not indexOf(list, tier) then tier = list[1] end
+    Skill.pressClock = os.clock()
+    local ok, how = press(raw, 0.06, tier, skillFilter)
+    if not ok then
+        -- tier ini mati total (0 handler): lompat ke tier berikut langsung
+        local nxt = list[(indexOf(list, tier) % #list) + 1]
+        log("SKILL", string.format("tier %s ga bisa (%s) -> %s", tier, tostring(how), nxt))
+        tier = nxt
+        Skill.tierName = tier
+        ok, how = press(raw, 0.06, tier, skillFilter)
+    end
+    log("SKILL", string.format("input via %s (%s)", tier, tostring(how)))
+    return tier
+end
+
+-- cek tekanan masuk; kalau game diem aja dan Check masih tampil -> ganti tier + retry sekali
+local function verifyPress(p, tierUsed, myClock)
+    task.delay(0.4, function()
+        if not alive() or Skill.pressClock ~= myClock then return end
+        if Skill.lastResult >= myClock then
+            Skill.tierGood[tierUsed or "?"] = true
+            Skill.tierName = tierUsed
+            return
+        end
+        if p.chk.Parent and p.chk.Visible and not Skill.retried and not Skill.tierGood[tierUsed or "?"] then
+            Skill.retried = true
+            local list = skillTiers()
+            local i = indexOf(list, tierUsed or "")
+            if #list > 1 then
+                Skill.tierName = list[((i or 0) % #list) + 1]
+                log("SKILL", "tekanan ga diterima (" .. tostring(tierUsed) .. ") -> coba " .. Skill.tierName)
+                local t = pressSkill()
+                if t then verifyPress(p, t, Skill.pressClock) end
             end
         end
+    end)
+end
+
+-- regresi linear: kecepatan sudut (deg/s) dari sample (waktu, sudut kontinu)
+local function slope(samples)
+    local n = #samples
+    if n < 2 then return nil end
+    local t0 = samples[1][1]
+    local sx, sy, sxx, sxy = 0, 0, 0, 0
+    for i = 1, n do
+        local x, y = samples[i][1] - t0, samples[i][2]
+        sx, sy, sxx, sxy = sx + x, sy + y, sxx + x * x, sxy + x * y
     end
-    return best
+    local den = n * sxx - sx * sx
+    if math.abs(den) < 1e-9 then return nil end
+    return (n * sxy - sx * sy) / den
+end
+
+-- true = ditangani (ditekan / selesai / ga muncul, trace ditulis ke log), false = GUI skill check ga ada -> metode lama
+local function skillTrackNamed(evtInfo, gen)
+    local P = skillPairs()
+    if #P == 0 then return false end
+
+    local t0 = os.clock()
+    local trace, lastTr = {}, -1
+    local function tr(s)
+        if #trace < 40 then trace[#trace + 1] = string.format("%.2f %s", os.clock() - t0, s) end
+    end
+    local act, samples, moved = nil, {}, false
+    local lastRot
+
+    while os.clock() - t0 < 3.5 and alive() and CFG.skill.enabled and Skill.gen == gen do
+        local dtf = RunService.RenderStepped:Wait()
+        local now = os.clock()
+
+        local cur
+        for _, p in ipairs(P) do
+            if p.chk.Parent and p.chk.Visible and p.gui.Enabled ~= false then cur = p break end
+        end
+
+        if now - lastTr >= 0.12 then
+            lastTr = now
+            local p = cur or P[1]
+            tr(string.format("%s vis=%s L=%.0f G=%.0f", p.gui.Name == "SkillCheckPromptGui" and "kb" or "pad",
+                tostring(cur ~= nil), p.line.AbsoluteRotation, p.goal.AbsoluteRotation))
+        end
+
+        if cur then
+            if cur ~= act then
+                act, samples, lastRot = cur, {}, nil
+                Skill.cur = { line = cur.line, goal = cur.goal, w = 0 }
+                local kids = {}
+                for _, c in ipairs(cur.goal:GetChildren()) do kids[#kids + 1] = c.ClassName .. ":" .. c.Name end
+                log("SKILL", string.format("check muncul %.2fs setelah event (tune=%.0fms) goal anak={%s}",
+                    now - t0, Skill.tune * 1000, table.concat(kids, ",")))
+            end
+            local raw = act.line.AbsoluteRotation
+            local a = raw
+            if #samples > 0 then a = samples[#samples][2] + angDiff(raw, samples[#samples][2]) end   -- kontinu (anti wrap)
+            -- sample baru cuma kalau jarum beneran gerak (game update per frame, jangan dobel)
+            if (not lastRot) or math.abs(angDiff(raw, lastRot)) > 0.01 then
+                samples[#samples + 1] = { now, a }
+                if #samples > 5 then table.remove(samples, 1) end
+                lastRot = raw
+            end
+
+            local w
+            if #samples >= 3 then
+                w = slope(samples)
+                if w and math.abs(w) > 20 then Skill.w0 = w end
+            elseif #samples == 2 then
+                w = Skill.w0 or slope(samples)
+            else
+                w = Skill.w0
+            end
+
+            if w and math.abs(w) > 20 and #samples >= 1 then
+                moved = true
+                Skill.cur.w = w
+                local last = samples[#samples]
+                local zone = act.goal.AbsoluteRotation + CFG.skill.offset
+                local dir = (w >= 0) and 1 or -1
+                local rem = ((zone - last[2]) * dir) % 360          -- sisa sudut ke tengah zona, searah jarum
+                rem = rem - w * dir * (now - last[1]) * 0 + 0       -- sample udah terbaru (per frame)
+                local frame = math.clamp(dtf, 1 / 120, 1 / 20)
+                if rem > 360 - math.abs(w) * frame * 0.5 then rem = 0 end
+                local T = rem / math.abs(w)
+                if T <= Skill.tune + frame * 0.5 then
+                    local myClock = os.clock()
+                    Skill.retried = false
+                    local tier = pressSkill()
+                    log("SKILL", string.format("TEKAN sisa=%.1f deg (%.0f ms) kecepatan=%.0f deg/s fps~%.0f sample=%d",
+                        rem, T * 1000, w, 1 / frame, #samples))
+                    if tier then verifyPress(act, tier, Skill.pressClock) end
+                    return true
+                end
+            end
+        elseif act then
+            break      -- tadinya tampil, sekarang ketutup: check selesai
+        end
+    end
+
+    local why
+    if not act then why = "check ga pernah tampil dalam 3.5s"
+    elseif not moved then why = "check tampil tapi jarum ga kebaca gerak"
+    else why = "jarum kebaca tapi ga ketekan (kelewat / check selesai duluan)" end
+    log("SKILL", why)
+    log("SKILL", "TRACE " .. table.concat(trace, " | "))
+    return true
+end
+
+-- hook ngirim: game ngirim hasil skill check (Result ATAU Fail): ukur seberapa meleset, lalu tune
+SkillHook.judged = function(args, name)
+    Skill.lastResult = os.clock()
+    local c = Skill.cur
+    if not c or not c.line.Parent then return end
+    local since = os.clock() - Skill.pressClock
+    local w = c.w or 0
+    local dir = (w >= 0) and 1 or -1
+    local err = angDiff(c.line.AbsoluteRotation, c.goal.AbsoluteRotation + CFG.skill.offset) * dir
+    local errT = (math.abs(w) > 1) and (err / math.abs(w)) or 0
+    local mine = since >= 0 and since < 0.8
+    log("SKILL", string.format("HASIL %s %s %s | err=%+.1f deg (%+.0f ms %s) | tekan->hasil %.0f ms | %s",
+        tostring(name), tostring(args[1]), tostring(args[2]), err, errT * 1000, errT > 0 and "telat" or "kecepatan",
+        since * 1000, mine and "tekanan skrip" or "BUKAN dari tekanan skrip"))
+    if mine and CFG.skill.learn and math.abs(errT) < 0.25 then
+        Skill.tune = math.clamp(Skill.tune + 0.5 * errT, -0.06, 0.3)
+    end
+    Skill.cur = nil
 end
 
 local function skillTrackLegacy(evtInfo, gen)
@@ -881,6 +1148,36 @@ local function skillTrackLegacy(evtInfo, gen)
     local list, lastList, lastZone = {}, -1, -1
     local needle, zone, prevDiff
     local wide, dumped = false, false
+
+    local ZONE_NAMES = { "great", "perfect", "success", "zone", "target", "area", "good", "safe", "hit" }
+    local function pickNeedle(lst, st)
+        local best, bestE = nil, 30
+        for _, o in ipairs(lst) do
+            local s = st[o]
+            if s and s.n >= 3 and s.ema > bestE and o.Parent and shown(o) then best, bestE = o, s.ema end
+        end
+        return best
+    end
+    local function pickZone(lst, st, nd)
+        local best, bestScore, bestArea
+        for _, o in ipairs(lst) do
+            local s = st[o]
+            if s and o ~= nd and s.still >= 8 and o.Parent and shown(o) then
+                local score = 0
+                if nameHas(o.Name, ZONE_NAMES) then score = 3 end
+                if math.abs(angDiff(s.rot, 0)) > 1 then score = score + 1 end
+                if o:IsA("UIGradient") then score = score + 0.5 end
+                if score >= 1 then
+                    local area = 0
+                    if o:IsA("GuiObject") then area = o.AbsoluteSize.X * o.AbsoluteSize.Y end
+                    if not best or score > bestScore or (score == bestScore and area < bestArea) then
+                        best, bestScore, bestArea = o, score, area
+                    end
+                end
+            end
+        end
+        return best
+    end
 
     while os.clock() - t0 < CFG.skill.maxWait and alive() and CFG.skill.enabled and (not gen or Skill.gen == gen) do
         local dt = RunService.RenderStepped:Wait()
@@ -933,8 +1230,9 @@ local function skillTrackLegacy(evtInfo, gen)
             local tight = math.max(1.2, math.abs(ns.sv) * dt * 0.8)
             local crossed = prevDiff and (prevDiff * diff < 0) and (math.abs(prevDiff) + math.abs(diff) < 30)
             if math.abs(diff) <= tight or crossed then
-                click(getBind("kb_skillcheck", "Space"), 0.03)
-                log("SKILL", string.format("TEKAN diff=%.1f needle=%s zone=%s", diff, needle.Name, zone.Name))
+                Skill.retried = true
+                pressSkill()
+                log("SKILL", string.format("TEKAN (lama) diff=%.1f needle=%s zone=%s", diff, needle.Name, zone.Name))
                 task.delay(0.3, function() snapshot("skillcheck after press") end)
                 return
             end
@@ -944,7 +1242,6 @@ local function skillTrackLegacy(evtInfo, gen)
         end
     end
 
-    -- gagal: simpan kandidat buat kalibrasi
     local rows = {}
     for _, o in ipairs(list) do
         local s = stats[o]
@@ -957,127 +1254,6 @@ local function skillTrackLegacy(evtInfo, gen)
     log("SKILL", "needle/zona ga ketemu - tap Copy Dump")
 end
 
-
--- semua pasangan (Check, Line=jarum, Goal=zona) di GUI keyboard dan gamepad, tampil atau nggak
-local function skillPairs()
-    local out = {}
-    local pg = LP:FindFirstChildOfClass("PlayerGui")
-    if not pg then return out end
-    for _, n in ipairs({ "SkillCheckPromptGui", "SkillCheckPromptGui-con" }) do
-        local g = pg:FindFirstChild(n)
-        local chk = g and g:FindFirstChild("Check")
-        local line, goal = chk and chk:FindFirstChild("Line"), chk and chk:FindFirstChild("Goal")
-        if chk and line and goal then out[#out + 1] = { gui = g, chk = chk, line = line, goal = goal } end
-    end
-    return out
-end
-
-local function pressSkill()
-    local raw = getBind("kb_skillcheck", "Space")
-    Skill.pressClock = os.clock()
-    sendInput(raw, true)
-    task.delay(0.06, function() sendInput(raw, false) end)   -- jangan blok loop
-end
-
--- true = ditangani (ditekan / selesai / ga muncul, trace ditulis ke log), false = GUI skill check ga ada -> metode lama
-local function skillTrackNamed(evtInfo, gen)
-    local P = skillPairs()
-    if #P == 0 then return false end
-
-    local t0 = os.clock()
-    local trace, lastTr = {}, -1
-    local function tr(s)
-        if #trace < 40 then trace[#trace + 1] = string.format("%.2f %s", os.clock() - t0, s) end
-    end
-    local act, samples, prevA, moved = nil, {}, nil, false
-
-    while os.clock() - t0 < 3.5 and alive() and CFG.skill.enabled and Skill.gen == gen do
-        local dtf = RunService.RenderStepped:Wait()
-        local now = os.clock()
-
-        local cur
-        for _, p in ipairs(P) do
-            if p.chk.Parent and p.chk.Visible and p.gui.Enabled ~= false then cur = p break end
-        end
-
-        if now - lastTr >= 0.12 then
-            lastTr = now
-            local p = cur or P[1]
-            tr(string.format("%s vis=%s L=%.0f G=%.0f", p.gui.Name == "SkillCheckPromptGui" and "kb" or "pad",
-                tostring(cur ~= nil), p.line.AbsoluteRotation, p.goal.AbsoluteRotation))
-        end
-
-        if cur then
-            if cur ~= act then
-                act, samples, prevA = cur, {}, nil
-                Skill.cur = { line = cur.line, goal = cur.goal, w = 0 }
-                log("SKILL", string.format("check muncul %.2fs setelah event (tune=%.0fms)", now - t0, Skill.tune * 1000))
-            end
-            local a = act.line.AbsoluteRotation
-            if prevA then a = prevA + angDiff(a, prevA) end         -- sudut kontinu (anti wrap 360)
-            prevA = a
-            samples[#samples + 1] = { now, a }
-            if #samples > 6 then table.remove(samples, 1) end
-
-            -- kecepatan jarum: 2 sample terakhir; kalau baru 1 sample pakai kecepatan check sebelumnya
-            local w
-            if #samples >= 2 then
-                local f, l = samples[1], samples[#samples]
-                w = (l[2] - f[2]) / math.max(l[1] - f[1], 1e-3)
-                if #samples >= 4 and math.abs(w) > 20 then Skill.w0 = w end
-            else
-                w = Skill.w0
-            end
-
-            if w and math.abs(w) > 20 then
-                moved = true
-                Skill.cur.w = w
-                local zone = act.goal.AbsoluteRotation + CFG.skill.offset
-                local dir = (w >= 0) and 1 or -1
-                local rem = ((zone - a) * dir) % 360                -- sisa sudut ke tengah zona, searah jarum
-                local frame = math.max(dtf, 1 / 120)
-                if rem > 360 - math.abs(w) * frame * 0.5 then rem = 0 end
-                local T = rem / math.abs(w)
-                if T <= Skill.tune + frame * 0.5 then
-                    pressSkill()
-                    log("SKILL", string.format("TEKAN sisa=%.1f deg (%.0f ms) kecepatan=%.0f deg/s fps~%.0f sample=%d",
-                        rem, T * 1000, w, 1 / frame, #samples))
-                    return true
-                end
-            end
-        elseif act then
-            break      -- tadinya tampil, sekarang ketutup: check selesai
-        end
-    end
-
-    local why
-    if not act then why = "check ga pernah tampil dalam 3.5s"
-    elseif not moved then why = "check tampil tapi jarum ga kebaca gerak"
-    else why = "jarum kebaca tapi ga ketekan (kelewat / check selesai duluan)" end
-    log("SKILL", why)
-    log("SKILL", "TRACE " .. table.concat(trace, " | "))
-    return true
-end
-
--- dipanggil dari hook pas game ngirim hasil skill check: ukur seberapa meleset, lalu tune
-SkillHook.judged = function(args)
-    local c = Skill.cur
-    if not c or not c.line.Parent then return end
-    local since = os.clock() - Skill.pressClock
-    local w = c.w or 0
-    local dir = (w >= 0) and 1 or -1
-    local err = angDiff(c.line.AbsoluteRotation, c.goal.AbsoluteRotation + CFG.skill.offset) * dir
-    local errT = (math.abs(w) > 1) and (err / math.abs(w)) or 0
-    local mine = since >= 0 and since < 0.8
-    log("SKILL", string.format("HASIL %s %s | err=%+.1f deg (%+.0f ms %s) | tekan->hasil %.0f ms | %s",
-        tostring(args[1]), tostring(args[2]), err, errT * 1000, errT > 0 and "telat" or "kecepatan",
-        since * 1000, mine and "tekanan skrip" or "BUKAN dari tekanan skrip"))
-    if mine and CFG.skill.learn and math.abs(errT) < 0.3 then
-        Skill.tune = math.clamp(Skill.tune + 0.6 * errT, 0, 0.4)
-    end
-    Skill.cur = nil
-end
-
 local function skillTrack(evtInfo, gen)
     local ok, handled = pcall(skillTrackNamed, evtInfo, gen)
     if not ok then log("SKILL", "named error: " .. tostring(handled)) end
@@ -1087,9 +1263,18 @@ local function skillTrack(evtInfo, gen)
     skillTrackLegacy(evtInfo, gen)
 end
 
+local function unhideChecks()
+    for chk, _ in pairs(Skill.hidden) do
+        if chk.Parent then pcall(function() chk.Visible = true end) end
+        Skill.hidden[chk] = nil
+    end
+end
+
 local function runSkillCheck(info)
     if not CFG.skill.enabled then return end
     Skill.gen = Skill.gen + 1          -- event baru selalu menang: tracker lama berhenti sendiri
+    Skill.lastEvent = os.clock()
+    unhideChecks()                     -- Check yang tadi kita sembunyiin (nyangkut) dibalikin, game yang atur sisanya
     local gen = Skill.gen
     Skill.active = true
     task.spawn(function()
@@ -1104,6 +1289,7 @@ local function hookSkillEvents(folder)
         pcall(function()
             local f = RS:WaitForChild("Remotes", 20):WaitForChild(folder, 20)
             local ev = f:WaitForChild("SkillCheckEvent", 10)
+            Skill.events[folder] = ev
             Spy[f:WaitForChild("SkillCheckResultEvent", 10)] = folder .. ".Result"
             Spy[f:WaitForChild("SkillCheckFailEvent", 10)] = folder .. ".Fail"
             ev.OnClientEvent:Connect(function(...)
@@ -1123,8 +1309,47 @@ end
 hookSkillEvents("Generator")
 hookSkillEvents("Healing")
 
+-- watchdog: Check yang tampil tapi jarumnya diem >1.2s padahal ga ada event baru = UI nyangkut -> sembunyiin
+task.spawn(function()
+    while alive() do
+        task.wait(0.4)
+        if CFG.skill.unstick then
+            for _, p in ipairs(skillPairs()) do
+                if p.chk.Visible and p.gui.Enabled ~= false then
+                    local rot = p.line.AbsoluteRotation
+                    local st = Skill.stuck[p.chk]
+                    if st and math.abs(angDiff(rot, st.rot)) < 0.01 then
+                        st.n = st.n + 1
+                        if st.n >= 3 and os.clock() - Skill.lastEvent > 1.5 then
+                            p.chk.Visible = false
+                            Skill.hidden[p.chk] = true
+                            Skill.stuck[p.chk] = nil
+                            log("SKILL", "UI skill check nyangkut -> disembunyiin (" .. p.gui.Name .. ")")
+                        end
+                    else
+                        Skill.stuck[p.chk] = { rot = rot, n = 0 }
+                    end
+                else
+                    Skill.stuck[p.chk] = nil
+                end
+            end
+        end
+    end
+end)
+
+------------------------------------------------------------------ RESET
+local function resetAll()
+    Gun.pending, Gun.firing, Gun.holdoff, Gun.failStreak, Gun.cycles = nil, false, 0, 0, 0
+    Gun.pauseUntil, Gun.lockUntil, Gun.tierIdx, Gun.tierGood = 0, 0, 1, {}
+    Skill.tierName, Skill.tierGood, Skill.retried = nil, {}, false
+    Skill.gen = Skill.gen + 1
+    unhideChecks()
+    pcall(function() RunService:UnbindFromRenderStep("DP3_CamLock") end)
+    notify("Reset: state gun/skill dibersihin")
+end
+
 ------------------------------------------------------------------ UI
-local panel
+local panel, statusLabel
 local function buildUI()
     local parent
     pcall(function() parent = (gethui and gethui()) or game:GetService("CoreGui") end)
@@ -1154,7 +1379,7 @@ local function buildUI()
     panel = Instance.new("Frame")
     panel.Size = UDim2.fromOffset(238, 0)
     panel.AutomaticSize = Enum.AutomaticSize.Y
-    panel.Position = UDim2.new(0, 60, 0.5, -170)
+    panel.Position = UDim2.new(0, 60, 0.5, -190)
     panel.BackgroundColor3 = Color3.fromRGB(16, 16, 20)
     panel.BackgroundTransparency = 0.08
     panel.Visible = false
@@ -1188,41 +1413,48 @@ local function buildUI()
         return b
     end
     local function onoff(v) return v and "ON" or "OFF" end
+    local function cycle(list, cur)
+        for i, v in ipairs(list) do
+            if v == cur then return list[i % #list + 1] end
+        end
+        return list[1]
+    end
+    local function mkRow()
+        local row = Instance.new("Frame")
+        row.Size, row.BackgroundTransparency = UDim2.new(1, 0, 0, 30), 1
+        row.Parent = panel
+        local l = Instance.new("UIListLayout")
+        l.FillDirection = Enum.FillDirection.Horizontal
+        l.Padding = UDim.new(0, 4)
+        l.Parent = row
+        return row
+    end
 
     mkBtn(panel, function() return "Auto Parry: " .. onoff(CFG.parry.enabled), CFG.parry.enabled end,
         function() CFG.parry.enabled = not CFG.parry.enabled end)
     mkBtn(panel, function() return "Parry via: " .. CFG.parry.via:upper(), true end,
         function() CFG.parry.via = (CFG.parry.via == "remote") and "input" or "remote" end)
-    mkBtn(panel, function() return "Gun Auto-Hit: " .. onoff(CFG.gun.hit), CFG.gun.hit end,
-        function() CFG.gun.hit = not CFG.gun.hit end)
-    mkBtn(panel, function() return "Gun Auto Fire: " .. onoff(CFG.gun.auto), CFG.gun.auto end,
-        function() CFG.gun.auto = not CFG.gun.auto end)
+    mkBtn(panel, function() return "Gun Auto Trigger: " .. onoff(CFG.gun.trigger), CFG.gun.trigger end,
+        function() CFG.gun.trigger = not CFG.gun.trigger end)
+    mkBtn(panel, function() return "Gun Snap (manual): " .. onoff(CFG.gun.snap), CFG.gun.snap end,
+        function() CFG.gun.snap = not CFG.gun.snap end)
+
+    local rowG = mkRow()
+    mkBtn(rowG, function() return "Step: " .. CFG.gun.fireStep, true end,
+        function() CFG.gun.fireStep = cycle({ 3, 2, 1 }, CFG.gun.fireStep) end, 0.5)
+    mkBtn(rowG, function() return "Radius: " .. CFG.gun.hitRadius, true end,
+        function() CFG.gun.hitRadius = cycle({ 1.6, 2.2, 3.0, 4.0 }, CFG.gun.hitRadius) end, 0.5)
+
     mkBtn(panel, function() return "Skill Check: " .. onoff(CFG.skill.enabled), CFG.skill.enabled end,
         function() CFG.skill.enabled = not CFG.skill.enabled end)
-    mkBtn(panel, function() return "Input: " .. CFG.input:upper(), true end,
-        function()
-            CFG.input = (CFG.input == "signal") and "vim" or ((CFG.input == "vim") and "remote" or "signal")
-        end)
 
-    local row1 = Instance.new("Frame")
-    row1.Size, row1.BackgroundTransparency = UDim2.new(1, 0, 0, 30), 1
-    row1.Parent = panel
-    local l1 = Instance.new("UIListLayout")
-    l1.FillDirection = Enum.FillDirection.Horizontal
-    l1.Padding = UDim.new(0, 4)
-    l1.Parent = row1
+    local row1 = mkRow()
     mkBtn(row1, function() return string.format("Zona -2 (%d)", CFG.skill.offset), true end,
         function() CFG.skill.offset = CFG.skill.offset - 2 end, 0.5)
     mkBtn(row1, function() return string.format("Zona +2 (%d)", CFG.skill.offset), true end,
         function() CFG.skill.offset = CFG.skill.offset + 2 end, 0.5)
 
-    local row2 = Instance.new("Frame")
-    row2.Size, row2.BackgroundTransparency = UDim2.new(1, 0, 0, 30), 1
-    row2.Parent = panel
-    local l2 = Instance.new("UIListLayout")
-    l2.FillDirection = Enum.FillDirection.Horizontal
-    l2.Padding = UDim.new(0, 4)
-    l2.Parent = row2
+    local row2 = mkRow()
     mkBtn(row2, function() return "Copy Log", true end, function()
         notify(copy(table.concat(LOG, "\n")) and "Log disalin" or "setclipboard ga ada")
     end, 0.5)
@@ -1230,8 +1462,22 @@ local function buildUI()
         notify(copy(Skill.lastDump) and "Dump disalin" or "setclipboard ga ada")
     end, 0.5)
 
+    mkBtn(panel, function() return "Reset (kalau nyangkut)", true end, resetAll)
+
+    statusLabel = Instance.new("TextLabel")
+    statusLabel.Size = UDim2.new(1, 0, 0, 30)
+    statusLabel.BackgroundColor3 = Color3.new(0, 0, 0)
+    statusLabel.BackgroundTransparency = 0.35
+    statusLabel.TextColor3 = Color3.fromRGB(255, 220, 120)
+    statusLabel.Font, statusLabel.TextSize = Enum.Font.Code, 11
+    statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+    statusLabel.TextWrapped = true
+    statusLabel.Text = "gun: -"
+    statusLabel.Parent = panel
+    corner(statusLabel, 6)
+
     logLabel = Instance.new("TextLabel")
-    logLabel.Size = UDim2.new(1, 0, 0, 120)
+    logLabel.Size = UDim2.new(1, 0, 0, 110)
     logLabel.BackgroundColor3 = Color3.new(0, 0, 0)
     logLabel.BackgroundTransparency = 0.35
     logLabel.TextColor3 = Color3.fromRGB(120, 255, 120)
@@ -1255,7 +1501,7 @@ local function buildUI()
             if d.Magnitude > 8 then moved = true end
             if moved then
                 fab.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
-                panel.Position = UDim2.new(fab.Position.X.Scale, fab.Position.X.Offset + 50, fab.Position.Y.Scale, fab.Position.Y.Offset - 148)
+                panel.Position = UDim2.new(fab.Position.X.Scale, fab.Position.X.Offset + 50, fab.Position.Y.Scale, fab.Position.Y.Offset - 168)
             end
         end
     end)
@@ -1266,6 +1512,13 @@ local function buildUI()
     end)
     fab.MouseButton1Click:Connect(function()
         if not moved then panel.Visible = not panel.Visible end
+    end)
+
+    task.spawn(function()
+        while alive() and gui.Parent do
+            task.wait(0.25)
+            if panel.Visible and statusLabel then statusLabel.Text = "gun: " .. tostring(Gun.status) end
+        end
     end)
 end
 local okUI, errUI = pcall(buildUI)
@@ -1278,9 +1531,12 @@ UIS.InputBegan:Connect(function(i, gp)
     if k == CFG.keys.parry then
         CFG.parry.enabled = not CFG.parry.enabled
         notify("Auto Parry: " .. (CFG.parry.enabled and "ON" or "OFF"))
-    elseif k == CFG.keys.gun then
-        CFG.gun.hit = not CFG.gun.hit
-        notify("Gun Auto-Hit: " .. (CFG.gun.hit and "ON" or "OFF"))
+    elseif k == CFG.keys.snap then
+        CFG.gun.snap = not CFG.gun.snap
+        notify("Gun Snap: " .. (CFG.gun.snap and "ON" or "OFF"))
+    elseif k == CFG.keys.trig then
+        CFG.gun.trigger = not CFG.gun.trigger
+        notify("Gun Auto Trigger: " .. (CFG.gun.trigger and "ON" or "OFF"))
     elseif k == CFG.keys.skill then
         CFG.skill.enabled = not CFG.skill.enabled
         notify("Auto Skill Check: " .. (CFG.skill.enabled and "ON" or "OFF"))
@@ -1289,4 +1545,4 @@ UIS.InputBegan:Connect(function(i, gp)
     end
 end)
 
-notify("v6 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap tombol DP buat panel")
+notify("v7 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap tombol DP buat panel")
