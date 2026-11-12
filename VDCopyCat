@@ -1,5 +1,5 @@
 --[[
-    Distrik Pembantai v5  (PlaceId 93978595733734)  -  Delta / Luau
+    Distrik Pembantai v6  (PlaceId 93978595733734)  -  Delta / Luau
 
     Fitur
       1. Auto Parry       : Parrying Dagger, delay dipelajari otomatis (pakai ParryLands sebagai penanda sukses)
@@ -8,6 +8,7 @@
       3. Auto Skill Check : cari needle + zona dari GUI (self-calibrating), tekan di tengah zona
 
     Kontrol : tombol bulat "DP" di layar (geser bebas)  |  F1 parry  F2 gun hit  F3 skill  F4 panel
+    v6      : skill check ngerekam timeline tiap check (baris 'TRACE' di Copy Log) + pantau kedua GUI skill check.
     v5      : event gun dari pemain lain diabaikan; auto gun mundur kalau aim ditolak (ga ganggu gun manual);
               skill check: tekan cepat buat zona deket posisi awal jarum, tracker lama kalah sama event baru.
     v4      : gun auto-fire cek dulu syarat aim dari game (HP>=50%, ga lagi repair/heal, ga cooldown, dll) dan
@@ -947,7 +948,7 @@ local function skillTrackLegacy(evtInfo, gen)
     local rows = {}
     for _, o in ipairs(list) do
         local s = stats[o]
-        if s then
+        if s and (s.ema > 0 or o:GetFullName():find("SkillCheck", 1, true)) then
             rows[#rows + 1] = string.format("%s [%s] ema=%.0f still=%d rot=%.1f", o:GetFullName(), o.ClassName, s.ema, s.still, s.rot)
         end
     end
@@ -957,19 +958,18 @@ local function skillTrackLegacy(evtInfo, gen)
 end
 
 
--- cari frame Check yang lagi tampil + objek Line (jarum) dan Goal (zona) langsung dari nama
-local function skillObjects()
+-- semua pasangan (Check, Line=jarum, Goal=zona) di GUI keyboard dan gamepad, tampil atau nggak
+local function skillPairs()
+    local out = {}
     local pg = LP:FindFirstChildOfClass("PlayerGui")
-    if not pg then return nil end
+    if not pg then return out end
     for _, n in ipairs({ "SkillCheckPromptGui", "SkillCheckPromptGui-con" }) do
         local g = pg:FindFirstChild(n)
         local chk = g and g:FindFirstChild("Check")
-        if chk and g.Enabled ~= false and chk.Visible then
-            local line, goal = chk:FindFirstChild("Line"), chk:FindFirstChild("Goal")
-            if line and goal then return chk, line, goal end
-        end
+        local line, goal = chk and chk:FindFirstChild("Line"), chk and chk:FindFirstChild("Goal")
+        if chk and line and goal then out[#out + 1] = { gui = g, chk = chk, line = line, goal = goal } end
     end
-    return nil
+    return out
 end
 
 local function pressSkill()
@@ -979,66 +979,84 @@ local function pressSkill()
     task.delay(0.06, function() sendInput(raw, false) end)   -- jangan blok loop
 end
 
--- true = ditangani (ditekan / check selesai / jarum kebaca tapi kelewat), false = objek/jarum ga kebaca -> metode lama
+-- true = ditangani (ditekan / selesai / ga muncul, trace ditulis ke log), false = GUI skill check ga ada -> metode lama
 local function skillTrackNamed(evtInfo, gen)
+    local P = skillPairs()
+    if #P == 0 then return false end
+
     local t0 = os.clock()
-    local chk, line, goal
-    while os.clock() - t0 < 1.5 and alive() and CFG.skill.enabled and Skill.gen == gen do
-        chk, line, goal = skillObjects()
-        if chk then break end
-        RunService.RenderStepped:Wait()
+    local trace, lastTr = {}, -1
+    local function tr(s)
+        if #trace < 40 then trace[#trace + 1] = string.format("%.2f %s", os.clock() - t0, s) end
     end
-    if not chk then return false end
+    local act, samples, prevA, moved = nil, {}, nil, false
 
-    Skill.cur = { line = line, goal = goal, w = 0 }
-    local tShow = os.clock()
-    local samples, prevA, moved = {}, nil, false
-    log("SKILL", string.format("check muncul %.2fs setelah event (tune=%.0fms)", tShow - t0, Skill.tune * 1000))
-
-    while os.clock() - tShow < 4 and alive() and CFG.skill.enabled and Skill.gen == gen do
+    while os.clock() - t0 < 3.5 and alive() and CFG.skill.enabled and Skill.gen == gen do
         local dtf = RunService.RenderStepped:Wait()
-        if not chk.Parent or not chk.Visible then return true end   -- check udah selesai
-
         local now = os.clock()
-        local a = line.AbsoluteRotation
-        if prevA then a = prevA + angDiff(a, prevA) end             -- sudut kontinu (anti wrap 360)
-        prevA = a
-        samples[#samples + 1] = { now, a }
-        if #samples > 6 then table.remove(samples, 1) end
 
-        -- kecepatan jarum: dari 2 sample terakhir; kalau baru 1 sample pakai kecepatan check sebelumnya
-        local w
-        if #samples >= 2 then
-            local f, l = samples[1], samples[#samples]
-            w = (l[2] - f[2]) / math.max(l[1] - f[1], 1e-3)
-            if #samples >= 4 and math.abs(w) > 20 then Skill.w0 = w end
-        else
-            w = Skill.w0
+        local cur
+        for _, p in ipairs(P) do
+            if p.chk.Parent and p.chk.Visible and p.gui.Enabled ~= false then cur = p break end
         end
 
-        if w and math.abs(w) > 20 then
-            moved = true
-            Skill.cur.w = w
-            local zone = goal.AbsoluteRotation + CFG.skill.offset
-            local dir = (w >= 0) and 1 or -1
-            local rem = ((zone - a) * dir) % 360                    -- sisa sudut ke tengah zona, searah jarum
-            local frame = math.max(dtf, 1 / 120)
-            if rem > 360 - math.abs(w) * frame * 0.5 then rem = 0 end   -- baru lewat <= setengah frame: tekan sekarang
-            local T = rem / math.abs(w)
-            if T <= Skill.tune + frame * 0.5 then
-                pressSkill()
-                log("SKILL", string.format("TEKAN sisa=%.1f deg (%.0f ms) kecepatan=%.0f deg/s fps~%.0f sample=%d",
-                    rem, T * 1000, w, 1 / frame, #samples))
-                return true
+        if now - lastTr >= 0.12 then
+            lastTr = now
+            local p = cur or P[1]
+            tr(string.format("%s vis=%s L=%.0f G=%.0f", p.gui.Name == "SkillCheckPromptGui" and "kb" or "pad",
+                tostring(cur ~= nil), p.line.AbsoluteRotation, p.goal.AbsoluteRotation))
+        end
+
+        if cur then
+            if cur ~= act then
+                act, samples, prevA = cur, {}, nil
+                Skill.cur = { line = cur.line, goal = cur.goal, w = 0 }
+                log("SKILL", string.format("check muncul %.2fs setelah event (tune=%.0fms)", now - t0, Skill.tune * 1000))
             end
+            local a = act.line.AbsoluteRotation
+            if prevA then a = prevA + angDiff(a, prevA) end         -- sudut kontinu (anti wrap 360)
+            prevA = a
+            samples[#samples + 1] = { now, a }
+            if #samples > 6 then table.remove(samples, 1) end
+
+            -- kecepatan jarum: 2 sample terakhir; kalau baru 1 sample pakai kecepatan check sebelumnya
+            local w
+            if #samples >= 2 then
+                local f, l = samples[1], samples[#samples]
+                w = (l[2] - f[2]) / math.max(l[1] - f[1], 1e-3)
+                if #samples >= 4 and math.abs(w) > 20 then Skill.w0 = w end
+            else
+                w = Skill.w0
+            end
+
+            if w and math.abs(w) > 20 then
+                moved = true
+                Skill.cur.w = w
+                local zone = act.goal.AbsoluteRotation + CFG.skill.offset
+                local dir = (w >= 0) and 1 or -1
+                local rem = ((zone - a) * dir) % 360                -- sisa sudut ke tengah zona, searah jarum
+                local frame = math.max(dtf, 1 / 120)
+                if rem > 360 - math.abs(w) * frame * 0.5 then rem = 0 end
+                local T = rem / math.abs(w)
+                if T <= Skill.tune + frame * 0.5 then
+                    pressSkill()
+                    log("SKILL", string.format("TEKAN sisa=%.1f deg (%.0f ms) kecepatan=%.0f deg/s fps~%.0f sample=%d",
+                        rem, T * 1000, w, 1 / frame, #samples))
+                    return true
+                end
+            end
+        elseif act then
+            break      -- tadinya tampil, sekarang ketutup: check selesai
         end
     end
-    if moved then
-        log("SKILL", "jarum kebaca tapi ga ketekan (kelewat?) Goal=" .. string.format("%.0f", goal.AbsoluteRotation)
-            .. " Line=" .. string.format("%.0f", line.AbsoluteRotation) .. " visible=" .. tostring(chk.Visible))
-        return true
-    end
-    return false
+
+    local why
+    if not act then why = "check ga pernah tampil dalam 3.5s"
+    elseif not moved then why = "check tampil tapi jarum ga kebaca gerak"
+    else why = "jarum kebaca tapi ga ketekan (kelewat / check selesai duluan)" end
+    log("SKILL", why)
+    log("SKILL", "TRACE " .. table.concat(trace, " | "))
+    return true
 end
 
 -- dipanggil dari hook pas game ngirim hasil skill check: ukur seberapa meleset, lalu tune
@@ -1271,4 +1289,4 @@ UIS.InputBegan:Connect(function(i, gp)
     end
 end)
 
-notify("v5 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap tombol DP buat panel")
+notify("v6 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap tombol DP buat panel")
