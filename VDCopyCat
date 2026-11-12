@@ -1,0 +1,475 @@
+--[[
+    Distrik Pembantai (PlaceId 93978595733734) - Delta script
+    Fitur : Auto Parry (Parrying Dagger) | Auto Aim + Auto Fire (Twist of Fate) | Auto Skill Check
+    Executor: Delta (Luau)
+
+    Hotkey (bisa diubah di CFG.keys):
+        F1 = toggle Auto Parry
+        F2 = toggle Auto Aim / Auto Fire gun
+        F3 = toggle Auto Skill Check
+        F4 = dump isi GUI skill check ke console (buat kalibrasi)
+
+    Yang SUDAH terverifikasi dari dump:
+      - Parry   : Remotes.Items["Parrying Dagger"].parry:FireServer(character)
+                  syarat client: dagger ke-equip, HP >= 50%, tidak busy (trapped/hooked/carried/vault/dll)
+                  tombol parry = attribute player "kb_item" (default MouseButton2)
+      - Gun     : Remotes.Items["Twist of Fate"].Fire:FireServer(tool, aimDirection, stepIndex)
+                  tombol aim = "kb_item" (hold), tembak = "kb_itemtrigger" (MouseButton1)
+                  jam roll: step 1 jam 40%, step 2 jam 20%, step 3 jam 0%  (STEPS.at = 0.75 / 1.8 / 3.0 detik,
+                  ranked 0.75 / 1.3 / 2.0) -> nahan aim sampai step 3 = ga bakal jam
+      - Skill   : Remotes.Generator.SkillCheckEvent + Remotes.Healing.SkillCheckEvent (server -> client)
+                  tombol = attribute "kb_skillcheck" (default Space)
+      - Team    : Teams.Survivors / Teams.Killer / Teams.Spectator
+
+    Yang BELUM ada di dump (script skill check generator & animasi serangan killer ga ke-dump karena
+    dump diambil pas jadi Spectator di lobby), jadi:
+      - deteksi serangan killer = heuristik animasi (tuning di CFG.parry)
+      - deteksi needle/zone skill check = heuristik GUI + logger (F4 buat dump struktur aslinya)
+]]
+
+------------------------------------------------------------------ CONFIG
+local CFG = {
+    keys = {
+        parry      = Enum.KeyCode.F1,
+        gun        = Enum.KeyCode.F2,
+        skillcheck = Enum.KeyCode.F3,
+        dump       = Enum.KeyCode.F4,
+    },
+
+    parry = {
+        enabled     = true,
+        range       = 13,     -- stud: killer harus segini deket
+        frontDot    = 0.35,   -- killer harus madep ke kita (dot LookVector . arahKeKita)
+        delay       = 0.12,   -- jeda setelah animasi serang mulai, sebelum parry (detik)
+        jitter      = 0.03,   -- acak biar ga robotik
+        cooldown    = 0.6,    -- jangan spam parry
+        autoEquip   = true,   -- auto equip Parrying Dagger kalau ada di Backpack
+        useRemote   = false,  -- true = FireServer langsung (skip input). default simulasi tombol asli
+        minPriority = Enum.AnimationPriority.Action, -- animasi killer >= ini dianggap serangan
+    },
+
+    gun = {
+        enabled     = true,
+        fov         = 220,    -- px dari tengah layar, target di luar ini diabaikan
+        maxDist     = 140,    -- stud
+        aimPart     = "UpperTorso", -- fallback: Torso / HumanoidRootPart
+        smooth      = 0.35,   -- 0..1 (1 = snap instan). rendah = halus
+        needLOS     = true,   -- cek garis pandang (ga ketutup tembok)
+        autoFire    = true,   -- tembak otomatis kalau target pas di crosshair
+        fullCharge  = 3.0,    -- detik nahan aim sebelum nembak (3.0 casual / 2.0 ranked -> no jam)
+        fireTol     = 0.04,   -- toleransi sudut (radian) buat auto fire
+    },
+
+    skill = {
+        enabled   = true,
+        zoneHalf  = 9,        -- derajat, kalau zone lebar ga bisa dibaca dari GUI
+        lead      = 0.015,    -- detik, kompensasi latency input
+        verbose   = false,    -- print arg SkillCheckEvent ke console
+    },
+}
+
+------------------------------------------------------------------ SERVICES
+local Players       = game:GetService("Players")
+local RS            = game:GetService("ReplicatedStorage")
+local RunService    = game:GetService("RunService")
+local UIS           = game:GetService("UserInputService")
+local StarterGui    = game:GetService("StarterGui")
+local VIM           = nil
+pcall(function() VIM = game:GetService("VirtualInputManager") end)
+
+local LP     = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+local function notify(msg)
+    pcall(function()
+        StarterGui:SetCore("SendNotification", { Title = "Distrik Pembantai", Text = msg, Duration = 2.5 })
+    end)
+    print("[DP] " .. msg)
+end
+
+------------------------------------------------------------------ INPUT HELPERS
+local function parseBind(raw)
+    -- raw: "MouseButton1" / "MouseButton2" / "Space" / "F" / dst
+    if raw == "MouseButton1" then return "mouse", 0 end
+    if raw == "MouseButton2" then return "mouse", 1 end
+    local ok, kc = pcall(function() return Enum.KeyCode[raw] end)
+    if ok and kc then return "key", kc end
+    return nil
+end
+
+local function getBind(attr, default)
+    local raw = LP:GetAttribute(attr)
+    if type(raw) ~= "string" or raw == "" then raw = default end
+    return raw
+end
+
+local function press(raw, holdTime)
+    local kind, v = parseBind(raw)
+    if not kind then return false end
+    holdTime = holdTime or 0.03
+    local cx, cy = Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2
+    if VIM then
+        if kind == "mouse" then
+            VIM:SendMouseButtonEvent(cx, cy, v, true, game, 0)
+            task.wait(holdTime)
+            VIM:SendMouseButtonEvent(cx, cy, v, false, game, 0)
+        else
+            VIM:SendKeyEvent(true, v, false, game)
+            task.wait(holdTime)
+            VIM:SendKeyEvent(false, v, false, game)
+        end
+        return true
+    end
+    -- fallback fungsi bawaan Delta
+    if kind == "mouse" then
+        if v == 0 and mouse1click then mouse1click() return true end
+        if v == 1 and mouse2click then mouse2click() return true end
+    elseif keypress and keyrelease then
+        keypress(v.Value); task.wait(holdTime); keyrelease(v.Value)
+        return true
+    end
+    return false
+end
+
+------------------------------------------------------------------ COMMON
+local function myChar() return LP.Character end
+local function myHum()
+    local c = myChar()
+    return c and c:FindFirstChildOfClass("Humanoid")
+end
+local function myRoot()
+    local c = myChar()
+    return c and c:FindFirstChild("HumanoidRootPart")
+end
+
+local function isKillerPlayer(plr)
+    local t = plr.Team
+    return t ~= nil and t.Name == "Killer"
+end
+
+local function killers()
+    local out = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LP and isKillerPlayer(p) and p.Character then
+            local hum = p.Character:FindFirstChildOfClass("Humanoid")
+            local root = p.Character:FindFirstChild("HumanoidRootPart")
+            if hum and root and hum.Health > 0 then
+                table.insert(out, { player = p, char = p.Character, hum = hum, root = root })
+            end
+        end
+    end
+    return out
+end
+
+local function iAmSurvivor()
+    return LP.Team ~= nil and LP.Team.Name == "Survivors"
+end
+
+------------------------------------------------------------------ 1) AUTO PARRY
+local Parry = { lastParry = 0, conns = {}, watched = {} }
+
+local function findDagger()
+    local c = myChar()
+    if not c then return nil end
+    local t = c:FindFirstChild("Parrying Dagger")
+    if t then return t, true end
+    local bp = LP:FindFirstChildOfClass("Backpack")
+    t = bp and bp:FindFirstChild("Parrying Dagger")
+    return t, false
+end
+
+local function parryNow()
+    if not CFG.parry.enabled then return end
+    local now = os.clock()
+    if now - Parry.lastParry < CFG.parry.cooldown then return end
+
+    local hum = myHum()
+    if not hum or hum.Health <= 0 then return end
+    -- client game nolak parry kalau HP < 50%
+    if hum.Health < hum.MaxHealth * 0.5 then return end
+
+    local tool, equipped = findDagger()
+    if not tool then return end
+    if not equipped then
+        if not CFG.parry.autoEquip then return end
+        hum:EquipTool(tool)
+        task.wait(0.08)
+    end
+
+    Parry.lastParry = os.clock()
+
+    if CFG.parry.useRemote then
+        local ok, ev = pcall(function()
+            return RS.Remotes.Items["Parrying Dagger"].parry
+        end)
+        if ok and ev then ev:FireServer(myChar()) end
+    else
+        press(getBind("kb_item", "MouseButton2"))
+    end
+end
+
+local function killerThreatens(k)
+    local me = myRoot()
+    if not me then return false end
+    local to = me.Position - k.root.Position
+    local dist = to.Magnitude
+    if dist > CFG.parry.range then return false end
+    if dist < 0.01 then return true end
+    return k.root.CFrame.LookVector:Dot(to.Unit) >= CFG.parry.frontDot
+end
+
+local function watchKiller(k)
+    local animator = k.hum:FindFirstChildOfClass("Animator")
+    if not animator or Parry.watched[animator] then return end
+    Parry.watched[animator] = true
+    local c = animator.AnimationPlayed:Connect(function(track)
+        if not CFG.parry.enabled or not iAmSurvivor() then return end
+        if track.Priority.Value < CFG.parry.minPriority.Value then return end
+        if track.Looped then return end -- idle/walk/run biasanya looped
+        task.spawn(function()
+            task.wait(math.max(0, CFG.parry.delay + (math.random() * 2 - 1) * CFG.parry.jitter))
+            if track.IsPlaying and killerThreatens(k) then parryNow() end
+        end)
+    end)
+    table.insert(Parry.conns, c)
+end
+
+task.spawn(function()
+    while true do
+        if CFG.parry.enabled then
+            for _, k in ipairs(killers()) do watchKiller(k) end
+        end
+        task.wait(1)
+    end
+end)
+
+------------------------------------------------------------------ 2) AUTO AIM + AUTO FIRE (Twist of Fate)
+local Gun = { aimStart = nil, lastFire = 0 }
+
+local function equippedGun()
+    local c = myChar()
+    return c and c:FindFirstChild("Twist of Fate")
+end
+
+local function pickAimPart(char)
+    return char:FindFirstChild(CFG.gun.aimPart)
+        or char:FindFirstChild("Torso")
+        or char:FindFirstChild("HumanoidRootPart")
+end
+
+local rayParams = RaycastParams.new()
+rayParams.FilterType = Enum.RaycastFilterType.Exclude
+
+local function visible(part, char)
+    if not CFG.gun.needLOS then return true end
+    local me = myChar()
+    rayParams.FilterDescendantsInstances = { me, char }
+    local origin = Camera.CFrame.Position
+    local hit = workspace:Raycast(origin, part.Position - origin, rayParams)
+    return hit == nil
+end
+
+local function bestTarget()
+    local center = Camera.ViewportSize / 2
+    local best, bestD = nil, math.huge
+    for _, k in ipairs(killers()) do
+        local part = pickAimPart(k.char)
+        if part then
+            local dist3 = (part.Position - Camera.CFrame.Position).Magnitude
+            if dist3 <= CFG.gun.maxDist then
+                local sp, onScreen = Camera:WorldToViewportPoint(part.Position)
+                if onScreen then
+                    local d = (Vector2.new(sp.X, sp.Y) - center).Magnitude
+                    if d <= CFG.gun.fov and d < bestD and visible(part, k.char) then
+                        best, bestD = part, d
+                    end
+                end
+            end
+        end
+    end
+    return best
+end
+
+local aiming = false
+UIS.InputBegan:Connect(function(i, gp)
+    if gp then return end
+    local raw = getBind("kb_item", "MouseButton2")
+    local match = (raw == "MouseButton2" and i.UserInputType == Enum.UserInputType.MouseButton2)
+        or (raw == "MouseButton1" and i.UserInputType == Enum.UserInputType.MouseButton1)
+        or (i.UserInputType == Enum.UserInputType.Keyboard and i.KeyCode.Name == raw)
+    if match and equippedGun() then
+        aiming = true
+        Gun.aimStart = os.clock()
+    end
+end)
+UIS.InputEnded:Connect(function(i)
+    local raw = getBind("kb_item", "MouseButton2")
+    local match = (raw == "MouseButton2" and i.UserInputType == Enum.UserInputType.MouseButton2)
+        or (raw == "MouseButton1" and i.UserInputType == Enum.UserInputType.MouseButton1)
+        or (i.UserInputType == Enum.UserInputType.Keyboard and i.KeyCode.Name == raw)
+    if match then aiming = false; Gun.aimStart = nil end
+end)
+
+RunService:BindToRenderStep("DP_AutoAim", Enum.RenderPriority.Camera.Value + 2, function()
+    if not CFG.gun.enabled or not aiming or not equippedGun() then return end
+    local part = bestTarget()
+    if not part then return end
+
+    local cam = Camera.CFrame
+    local want = CFrame.lookAt(cam.Position, part.Position)
+    Camera.CFrame = cam:Lerp(want, math.clamp(CFG.gun.smooth, 0.01, 1))
+
+    if CFG.gun.autoFire and Gun.aimStart
+        and (os.clock() - Gun.aimStart) >= CFG.gun.fullCharge
+        and (os.clock() - Gun.lastFire) > 0.8 then
+        local dir = (part.Position - Camera.CFrame.Position).Unit
+        local ang = math.acos(math.clamp(Camera.CFrame.LookVector:Dot(dir), -1, 1))
+        if ang <= CFG.gun.fireTol then
+            Gun.lastFire = os.clock()
+            task.spawn(press, getBind("kb_itemtrigger", "MouseButton1"))
+        end
+    end
+end)
+
+------------------------------------------------------------------ 3) AUTO SKILL CHECK
+local Skill = { active = false }
+
+local function skillGui()
+    local pg = LP:FindFirstChildOfClass("PlayerGui")
+    if not pg then return nil end
+    local g = pg:FindFirstChild("SkillCheckPromptGui") or pg:FindFirstChild("SkillCheckPromptGui-con")
+    return g
+end
+
+local function dumpTree(root, indent, out)
+    indent = indent or ""
+    out = out or {}
+    for _, d in ipairs(root:GetChildren()) do
+        local info = d.ClassName .. " " .. d.Name
+        if d:IsA("GuiObject") then
+            info = info .. string.format(" [vis=%s rot=%.1f size=%s]", tostring(d.Visible), d.Rotation, tostring(d.Size))
+        end
+        table.insert(out, indent .. info)
+        dumpTree(d, indent .. "  ", out)
+    end
+    return out
+end
+
+local function dumpSkillGui()
+    local g = skillGui()
+    if not g then notify("SkillCheckPromptGui belum ada (masuk match dulu)") return end
+    print("=========== SKILLCHECK GUI DUMP ===========")
+    print(table.concat(dumpTree(g), "\n"))
+    print("===========================================")
+    notify("GUI skill check di-dump ke console (F9)")
+end
+
+local NEEDLE_PAT = { "needle", "pointer", "hand", "arrow", "indicator", "marker", "line", "cursor" }
+local ZONE_PAT   = { "zone", "success", "great", "perfect", "target", "area", "good", "safe", "hit" }
+
+local function nameHas(name, pats)
+    name = name:lower()
+    for _, p in ipairs(pats) do
+        if name:find(p, 1, true) then return true end
+    end
+    return false
+end
+
+local function angDiff(a, b)
+    local d = (a - b) % 360
+    if d > 180 then d = d - 360 end
+    return d
+end
+
+-- cari needle & zone di GUI skill check (heuristik)
+local function findParts(g)
+    local needle, zone
+    for _, d in ipairs(g:GetDescendants()) do
+        if d:IsA("GuiObject") and d.Name ~= "Space" then
+            if not needle and nameHas(d.Name, NEEDLE_PAT) then needle = d end
+            if not zone and nameHas(d.Name, ZONE_PAT) then zone = d end
+        end
+    end
+    return needle, zone
+end
+
+local function runSkillCheck()
+    if Skill.active or not CFG.skill.enabled then return end
+    Skill.active = true
+    task.spawn(function()
+        local started = os.clock()
+        local g
+        -- tunggu GUI muncul / visible
+        while os.clock() - started < 2 do
+            g = skillGui()
+            if g and (not g:IsA("ScreenGui") or g.Enabled) then break end
+            task.wait()
+        end
+        if not g then Skill.active = false return end
+
+        local needle, zone
+        while os.clock() - started < 2 and not (needle and zone) do
+            needle, zone = findParts(g)
+            task.wait()
+        end
+
+        if not (needle and zone) then
+            warn("[DP] needle/zone skill check ga ketemu. Tekan F4 pas skill check muncul & kirim output console.")
+            Skill.active = false
+            return
+        end
+
+        local key = getBind("kb_skillcheck", "Space")
+        local prevRot, prevT = needle.Rotation, os.clock()
+        local hitUntil = os.clock() + 4
+        while os.clock() < hitUntil do
+            local dt = RunService.RenderStepped:Wait()
+            if not needle.Parent or not CFG.skill.enabled then break end
+            local rot = needle.Rotation
+            local speed = angDiff(rot, prevRot) / math.max(dt, 1e-3) -- deg/detik (bertanda)
+            prevRot = rot
+
+            local half = CFG.skill.zoneHalf
+            local predicted = rot + speed * CFG.skill.lead
+            if math.abs(angDiff(predicted, zone.Rotation)) <= half and math.abs(speed) > 1 then
+                press(key, 0.02)
+                break
+            end
+        end
+        Skill.active = false
+    end)
+end
+
+local function hookSkillRemote(folderName)
+    local ok, ev = pcall(function()
+        return RS.Remotes:WaitForChild(folderName, 10):WaitForChild("SkillCheckEvent", 10)
+    end)
+    if not ok or not ev then return end
+    ev.OnClientEvent:Connect(function(...)
+        if CFG.skill.verbose then print("[DP] SkillCheckEvent", folderName, ...) end
+        runSkillCheck()
+    end)
+end
+task.spawn(hookSkillRemote, "Generator")
+task.spawn(hookSkillRemote, "Healing")
+
+------------------------------------------------------------------ HOTKEYS
+UIS.InputBegan:Connect(function(i, gp)
+    if gp or i.UserInputType ~= Enum.UserInputType.Keyboard then return end
+    local k = i.KeyCode
+    if k == CFG.keys.parry then
+        CFG.parry.enabled = not CFG.parry.enabled
+        notify("Auto Parry: " .. (CFG.parry.enabled and "ON" or "OFF"))
+    elseif k == CFG.keys.gun then
+        CFG.gun.enabled = not CFG.gun.enabled
+        notify("Auto Aim/Fire: " .. (CFG.gun.enabled and "ON" or "OFF"))
+    elseif k == CFG.keys.skillcheck then
+        CFG.skill.enabled = not CFG.skill.enabled
+        notify("Auto Skill Check: " .. (CFG.skill.enabled and "ON" or "OFF"))
+    elseif k == CFG.keys.dump then
+        dumpSkillGui()
+    end
+end)
+
+LP.CharacterAdded:Connect(function() Camera = workspace.CurrentCamera end)
+notify("Loaded. F1 parry | F2 gun | F3 skill check | F4 dump GUI")
