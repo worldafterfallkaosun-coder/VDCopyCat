@@ -1,5 +1,5 @@
 --[[
-    Distrik Pembantai (PlaceId 93978595733734) - Delta script
+    Distrik Pembantai (PlaceId 93978595733734) - Delta script  [v2: remote-based, mobile-friendly, ada tombol layar]
     Fitur : Auto Parry (Parrying Dagger) | Auto Aim + Auto Fire (Twist of Fate) | Auto Skill Check
     Executor: Delta (Luau)
 
@@ -44,20 +44,22 @@ local CFG = {
         jitter      = 0.03,   -- acak biar ga robotik
         cooldown    = 0.6,    -- jangan spam parry
         autoEquip   = true,   -- auto equip Parrying Dagger kalau ada di Backpack
-        useRemote   = false,  -- true = FireServer langsung (skip input). default simulasi tombol asli
+        useRemote   = true,   -- FireServer langsung (ga butuh input, jalan di mobile/emulator)
         minPriority = Enum.AnimationPriority.Action, -- animasi killer >= ini dianggap serangan
     },
 
     gun = {
-        enabled     = true,
-        fov         = 220,    -- px dari tengah layar, target di luar ini diabaikan
-        maxDist     = 140,    -- stud
-        aimPart     = "UpperTorso", -- fallback: Torso / HumanoidRootPart
-        smooth      = 0.35,   -- 0..1 (1 = snap instan). rendah = halus
-        needLOS     = true,   -- cek garis pandang (ga ketutup tembok)
-        autoFire    = true,   -- tembak otomatis kalau target pas di crosshair
-        fullCharge  = 3.0,    -- detik nahan aim sebelum nembak (3.0 casual / 2.0 ranked -> no jam)
-        fireTol     = 0.04,   -- toleransi sudut (radian) buat auto fire
+        enabled      = true,
+        maxDist      = 140,   -- stud
+        aimPart      = "UpperTorso", -- fallback: Torso / HumanoidRootPart
+        needLOS      = true,  -- cek garis pandang (ga ketutup tembok)
+        fullCharge   = 3.0,   -- detik charge sebelum nembak (3.0 casual / 2.0 ranked -> step 3 = ga jam)
+        step         = 3,     -- indeks step yang dikirim ke server (1..3)
+        lead         = 0.08,  -- detik prediksi gerak killer
+        fireCooldown = 0.7,
+        lockCamera   = false, -- true = kamera ikut nempel ke killer
+        autoEquip    = false,
+        verbose      = true,  -- print hasil tembakan ke console
     },
 
     skill = {
@@ -244,7 +246,15 @@ task.spawn(function()
 end)
 
 ------------------------------------------------------------------ 2) AUTO AIM + AUTO FIRE (Twist of Fate)
-local Gun = { aimStart = nil, lastFire = 0 }
+-- Mode remote: ga butuh klik/tahan tombol sama sekali (aman buat mobile/emulator).
+-- Urutan sama kayak client asli: AimHold(tool,true) + Aim(tool,true) -> tunggu charge -> Fire(tool, arah, step)
+local Gun = { busy = false, lastFire = 0 }
+
+local function gunRemotes()
+    local ok, f = pcall(function() return RS.Remotes.Items["Twist of Fate"] end)
+    if not ok or not f then return end
+    return f.Fire, f.Aim, f.AimHold
+end
 
 local function equippedGun()
     local c = myChar()
@@ -260,73 +270,92 @@ end
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
-local function visible(part, char)
+local function visible(part, char, from)
     if not CFG.gun.needLOS then return true end
-    local me = myChar()
-    rayParams.FilterDescendantsInstances = { me, char }
-    local origin = Camera.CFrame.Position
-    local hit = workspace:Raycast(origin, part.Position - origin, rayParams)
+    rayParams.FilterDescendantsInstances = { myChar(), char }
+    local hit = workspace:Raycast(from, part.Position - from, rayParams)
     return hit == nil
 end
 
 local function bestTarget()
-    local center = Camera.ViewportSize / 2
+    local root = myRoot()
+    if not root then return end
     local best, bestD = nil, math.huge
     for _, k in ipairs(killers()) do
         local part = pickAimPart(k.char)
         if part then
-            local dist3 = (part.Position - Camera.CFrame.Position).Magnitude
-            if dist3 <= CFG.gun.maxDist then
-                local sp, onScreen = Camera:WorldToViewportPoint(part.Position)
-                if onScreen then
-                    local d = (Vector2.new(sp.X, sp.Y) - center).Magnitude
-                    if d <= CFG.gun.fov and d < bestD and visible(part, k.char) then
-                        best, bestD = part, d
-                    end
-                end
+            local d = (part.Position - root.Position).Magnitude
+            if d <= CFG.gun.maxDist and d < bestD and visible(part, k.char, root.Position + Vector3.new(0, 1.4, 0)) then
+                best, bestD = part, d
             end
         end
     end
     return best
 end
 
-local aiming = false
-UIS.InputBegan:Connect(function(i, gp)
-    if gp then return end
-    local raw = getBind("kb_item", "MouseButton2")
-    local match = (raw == "MouseButton2" and i.UserInputType == Enum.UserInputType.MouseButton2)
-        or (raw == "MouseButton1" and i.UserInputType == Enum.UserInputType.MouseButton1)
-        or (i.UserInputType == Enum.UserInputType.Keyboard and i.KeyCode.Name == raw)
-    if match and equippedGun() then
-        aiming = true
-        Gun.aimStart = os.clock()
+local function muzzlePos(root)
+    -- sama persis kayak TwistoffateEffects.aimDirection: HRP * CFrame.new(0.7, 1.373, -2.5)
+    return (root.CFrame * CFrame.new(0.7, 1.373, -2.5)).Position
+end
+
+local function shootSequence(tool, part)
+    if Gun.busy then return end
+    Gun.busy = true
+    local fire, aim, aimHold = gunRemotes()
+    if not (fire and aim and aimHold) then Gun.busy = false return end
+
+    pcall(function() aimHold:FireServer(tool, true) end)
+    pcall(function() aim:FireServer(tool, true) end)
+
+    local t0 = os.clock()
+    while os.clock() - t0 < CFG.gun.fullCharge do
+        task.wait(0.05)
+        if not CFG.gun.enabled or not equippedGun() or not part.Parent then
+            pcall(function() aimHold:FireServer(tool, false) end)
+            pcall(function() aim:FireServer(tool, false) end)
+            Gun.busy = false
+            return
+        end
     end
-end)
-UIS.InputEnded:Connect(function(i)
-    local raw = getBind("kb_item", "MouseButton2")
-    local match = (raw == "MouseButton2" and i.UserInputType == Enum.UserInputType.MouseButton2)
-        or (raw == "MouseButton1" and i.UserInputType == Enum.UserInputType.MouseButton1)
-        or (i.UserInputType == Enum.UserInputType.Keyboard and i.KeyCode.Name == raw)
-    if match then aiming = false; Gun.aimStart = nil end
-end)
 
-RunService:BindToRenderStep("DP_AutoAim", Enum.RenderPriority.Camera.Value + 2, function()
-    if not CFG.gun.enabled or not aiming or not equippedGun() then return end
-    local part = bestTarget()
-    if not part then return end
+    local root = myRoot()
+    if root and part.Parent then
+        -- prediksi gerak kasar (peluru butuh waktu)
+        local vel = part.AssemblyLinearVelocity or Vector3.zero
+        local target = part.Position + vel * CFG.gun.lead
+        local dir = (target - muzzlePos(root))
+        if dir.Magnitude > 0.01 then
+            local ok = pcall(function() fire:FireServer(tool, dir.Unit, CFG.gun.step) end)
+            if CFG.gun.verbose then print("[DP] Fire ok=", ok, dir.Unit) end
+        end
+    end
+    pcall(function() aimHold:FireServer(tool, false) end)
+    pcall(function() aim:FireServer(tool, false) end)
+    Gun.lastFire = os.clock()
+    task.wait(CFG.gun.fireCooldown)
+    Gun.busy = false
+end
 
-    local cam = Camera.CFrame
-    local want = CFrame.lookAt(cam.Position, part.Position)
-    Camera.CFrame = cam:Lerp(want, math.clamp(CFG.gun.smooth, 0.01, 1))
-
-    if CFG.gun.autoFire and Gun.aimStart
-        and (os.clock() - Gun.aimStart) >= CFG.gun.fullCharge
-        and (os.clock() - Gun.lastFire) > 0.8 then
-        local dir = (part.Position - Camera.CFrame.Position).Unit
-        local ang = math.acos(math.clamp(Camera.CFrame.LookVector:Dot(dir), -1, 1))
-        if ang <= CFG.gun.fireTol then
-            Gun.lastFire = os.clock()
-            task.spawn(press, getBind("kb_itemtrigger", "MouseButton1"))
+task.spawn(function()
+    while true do
+        task.wait(0.1)
+        if CFG.gun.enabled and not Gun.busy and iAmSurvivor() then
+            local tool = equippedGun()
+            if tool then
+                local part = bestTarget()
+                if part and tool:GetAttribute("tofState") ~= "cooldown" then
+                    -- kamera ikut ngunci (visual), tembakan tetap dihitung dari remote
+                    if CFG.gun.lockCamera then
+                        Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, part.Position)
+                    end
+                    task.spawn(shootSequence, tool, part)
+                end
+            elseif CFG.gun.autoEquip then
+                local bp = LP:FindFirstChildOfClass("Backpack")
+                local t = bp and bp:FindFirstChild("Twist of Fate")
+                local hum = myHum()
+                if t and hum and bestTarget() then hum:EquipTool(t) end
+            end
         end
     end
 end)
@@ -355,13 +384,21 @@ local function dumpTree(root, indent, out)
     return out
 end
 
-local function dumpSkillGui()
+local function dumpSkillGui(silent)
     local g = skillGui()
     if not g then notify("SkillCheckPromptGui belum ada (masuk match dulu)") return end
-    print("=========== SKILLCHECK GUI DUMP ===========")
-    print(table.concat(dumpTree(g), "\n"))
-    print("===========================================")
-    notify("GUI skill check di-dump ke console (F9)")
+    local txt = table.concat(dumpTree(g), "\n")
+    print("=========== SKILLCHECK GUI DUMP ===========\n" .. txt)
+    -- semua descendant PlayerGui yang keliatan, buat jaga-jaga skill check ada di GUI lain
+    local vis = {}
+    for _, d in ipairs(LP.PlayerGui:GetDescendants()) do
+        if d:IsA("GuiObject") and d.Visible and d.Name:lower():find("check") then
+            table.insert(vis, d:GetFullName())
+        end
+    end
+    txt = txt .. "\n--- visible *check* ---\n" .. table.concat(vis, "\n")
+    if writefile then pcall(writefile, "dp_skillcheck_dump.txt", txt) end
+    if not silent then notify("Dump tersimpan: console + workspace/dp_skillcheck_dump.txt") end
 end
 
 local NEEDLE_PAT = { "needle", "pointer", "hand", "arrow", "indicator", "marker", "line", "cursor" }
@@ -446,7 +483,13 @@ local function hookSkillRemote(folderName)
     end)
     if not ok or not ev then return end
     ev.OnClientEvent:Connect(function(...)
-        if CFG.skill.verbose then print("[DP] SkillCheckEvent", folderName, ...) end
+        print("[DP] SkillCheckEvent", folderName, ...)
+        task.delay(0.25, function()
+            if not Skill.dumped then
+                Skill.dumped = true
+                pcall(dumpSkillGui, true)
+            end
+        end)
         runSkillCheck()
     end)
 end
@@ -472,4 +515,30 @@ UIS.InputBegan:Connect(function(i, gp)
 end)
 
 LP.CharacterAdded:Connect(function() Camera = workspace.CurrentCamera end)
+
+------------------------------------------------------------------ TOMBOL LAYAR (mobile/emulator)
+pcall(function()
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "DP_Panel"; gui.ResetOnSpawn = false; gui.DisplayOrder = 999
+    gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
+    local function btn(i, label, get, set)
+        local b = Instance.new("TextButton")
+        b.Size = UDim2.fromOffset(110, 30)
+        b.Position = UDim2.new(0, 8, 0.25, (i - 1) * 34)
+        b.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+        b.TextColor3 = Color3.new(1, 1, 1); b.TextSize = 13
+        b.Parent = gui
+        local function r() b.Text = label .. ": " .. (get() and "ON" or "OFF") end
+        b.MouseButton1Click:Connect(function() set(not get()); r() end)
+        r()
+    end
+    btn(1, "Parry", function() return CFG.parry.enabled end, function(v) CFG.parry.enabled = v end)
+    btn(2, "Gun", function() return CFG.gun.enabled end, function(v) CFG.gun.enabled = v end)
+    btn(3, "SkillChk", function() return CFG.skill.enabled end, function(v) CFG.skill.enabled = v end)
+    local d = Instance.new("TextButton")
+    d.Size = UDim2.fromOffset(110, 30); d.Position = UDim2.new(0, 8, 0.25, 3 * 34)
+    d.BackgroundColor3 = Color3.fromRGB(60, 30, 30); d.TextColor3 = Color3.new(1, 1, 1)
+    d.TextSize = 13; d.Text = "Dump GUI"; d.Parent = gui
+    d.MouseButton1Click:Connect(function() dumpSkillGui(false) end)
+end)
 notify("Loaded. F1 parry | F2 gun | F3 skill check | F4 dump GUI")
