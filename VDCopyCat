@@ -1,15 +1,24 @@
 --[[
-    Distrik Pembantai v7  (PlaceId 93978595733734)  -  Delta / Luau
+    Distrik Pembantai v8  (PlaceId 93978595733734)  -  Delta / Luau
 
     Fitur
       1. Auto Parry        : Parrying Dagger, delay dipelajari otomatis (sama kayak v6)
-      2. Gun Manual Trigger: KAMU yang bidik (tahan aim sendiri). Pas crosshair udah di badan killer dan
-                             charge penuh, script nembak otomatis lewat jalur tembak asli game, dan arah peluru
-                             dikunci ke badan killer -> pasti kena. Kalau belum pas, ga nembak.
+      2. Gun Aim Lock + Auto Fire: pas kamu tahan aim, kamera otomatis nempel ke badan killer terdekat
+                             (harus keliatan, ga ketutup tembok). Pas udah nempel dan charge cukup, script nembak
+                             otomatis. Tembakan apapun selama lock aktif (manual juga) arahnya dikunci ke badan killer.
       3. Gun Snap          : tembakan manual kamu yang udah deket killer (<= snapFov) dibelokkan pas ke badan
       4. Auto Skill Check  : jarum + zona dari GUI, tekan di tengah zona, ada verifikasi + auto-unstick UI
 
     Kontrol : tombol bulat "DP" (geser bebas)  |  F1 parry  F2 snap  F3 skill  F4 panel  F5 trigger
+
+    v8 (perbaikan dari v7)
+      - Gun: AIM LOCK balik (kamera nempel ke killer, cuma aktif selama kamu tahan aim, lepas langsung pas aim dilepas)
+        + AUTO FIRE ga perlu bidik manual lagi. Step "auto": nembak di step tercepat yang aman dari macet.
+      - Gun: tier "remote" (tembak lewat remote game langsung) kalau input palsu ga masuk, formatnya dipelajari
+        dari tembakan asli pertama kamu.
+      - Skill check: pas Auto Skill Check ON, UI jarum/zona/tombol disembunyiin (transparan). Logika game dan
+        tracker ga disentuh, jadi tetep jalan normal. Toggle: panel "Hide UI" / F7.
+      - Hotkey baru: F6 aim lock, F7 hide skill UI.
 
     v7 (perbaikan dari v6)
       - AKAR "stuck/ngebug": v6 nembak input palsu ke SEMUA handler UserInputService (Space = skill check +
@@ -32,6 +41,8 @@ local CFG = {
         skill = Enum.KeyCode.F3,
         panel = Enum.KeyCode.F4,
         trig  = Enum.KeyCode.F5,
+        lock  = Enum.KeyCode.F6,
+        hide  = Enum.KeyCode.F7,
     },
 
     parry = {
@@ -49,7 +60,11 @@ local CFG = {
     gun = {
         snap         = true,      -- tembakan manual yang deket killer dibelokkan pas ke badan
         trigger      = true,      -- nembak otomatis pas crosshair kamu di badan killer (kamu yang bidik)
-        fireStep     = 3,         -- 3 = charge penuh (ga pernah macet). 1/2 = lebih cepet, cuma kalau tofRoll aman
+        aimLock      = true,      -- kamera otomatis nempel ke killer pas kamu tahan aim
+        lockFov      = 60,        -- derajat dari arah kamera: killer di luar sudut ini ga di-lock (180 = semua arah)
+        lockSmooth   = 0.6,       -- 1 = keras (langsung nempel), makin kecil makin halus
+        fireTol      = 5,         -- derajat: kamera harus segini dekat ke target baru auto-fire
+        fireStep     = 0,         -- 0 = auto (step tercepat yang aman dari macet). 3 = selalu charge penuh. 1/2 = paksa step itu
         hitRadius    = 2.2,       -- stud: jarak peluru-ke-badan yang dianggap "aim pas" (makin gede makin longgar)
         snapFov      = 8,         -- derajat: batas belok buat tembakan manual (snap)
         maxDist      = 180,
@@ -70,6 +85,7 @@ local CFG = {
         latency = 0.015,          -- detik, awal tekan sebelum jarum sampai tengah (di-tune otomatis, boleh negatif)
         learn   = true,
         unstick = true,           -- sembunyiin Check yang nyangkut (jarum diem >1.2s padahal ga ada event)
+        hideUI  = true,           -- sembunyiin UI skill check (jarum, zona, tombol) pas Auto Skill Check ON
     },
 }
 
@@ -106,7 +122,7 @@ end
 
 local function notify(msg)
     pcall(function()
-        StarterGui:SetCore("SendNotification", { Title = "DP v7", Text = msg, Duration = 2.5 })
+        StarterGui:SetCore("SendNotification", { Title = "DP v8", Text = msg, Duration = 2.5 })
     end)
     log("INFO", msg)
 end
@@ -313,6 +329,7 @@ local Gun = {
     pending = nil, pendingAt = 0, holdoff = 0, firing = false,
     tierIdx = 1, tierGood = {}, failStreak = 0, cycles = 0, pauseUntil = 0,
     lockUntil = 0, status = "-", lastWhy = 0, lastWhyText = "",
+    lockTarget = nil, lockAng = 180, template = nil, templateN = 0, selfFire = false,
 }
 local SkillHook = { judged = function() end }   -- diisi di bagian skill check
 
@@ -388,6 +405,16 @@ local function snapDir(orig)
         end
     end
 
+    -- 1b) aim lock aktif: tembakan apapun (manual atau trigger) diarahkan ke badan target kunci
+    local lt = Gun.lockTarget
+    if CFG.gun.aimLock and lt and lt.Parent then
+        local nd = dirTo(origin, lt)
+        if nd then
+            log("HIT", string.format("lock -> %s (%.0f stud)", lt.Parent.Name, (lt.Position - origin).Magnitude))
+            return nd
+        end
+    end
+
     -- 2) tembakan manual: belok kalau killer deket arah bidikan
     if not CFG.gun.snap or orig.Magnitude < 0.01 then return nil end
     local o = orig.Unit
@@ -415,6 +442,20 @@ local function onGunFire(args)
     local now = os.clock()
     Gun.fireCount = Gun.fireCount + 1
     Gun.fireSeen = now
+    if not Gun.selfFire then   -- simpen format argumen tembakan asli (dipakai tier "remote")
+        local t, hi = {}, 0
+        for i = 1, 8 do
+            if args[i] ~= nil then t[i], hi = args[i], i end
+        end
+        if hi >= 2 and typeof(t[2]) == "Vector3" then
+            if not Gun.template then
+                local ty = {}
+                for i = 1, hi do ty[i] = typeof(t[i]) end
+                log("GUN", "format remote ketangkep: " .. table.concat(ty, ", "))
+            end
+            Gun.template, Gun.templateN = t, hi
+        end
+    end
     Gun.chargeStart = now            -- charge mulai ulang dari tembakan (sama kayak game)
     if amSurvivor() and typeof(args[2]) == "Vector3" then
         local nd = snapDir(args[2])
@@ -718,6 +759,7 @@ local function gunTiers()
     if getconnections then t[#t + 1] = "owner" end
     if VIM then t[#t + 1] = "vim" end
     if getconnections then t[#t + 1] = "all" end
+    if Gun.fire and Gun.template then t[#t + 1] = "remote" end   -- baru ada setelah 1 tembakan asli kamu ketangkep
     return t
 end
 
@@ -738,6 +780,27 @@ local function gunEscalate(why)
     log("TRIG", string.format("tier %s gagal (%s) -> pindah ke %s", cur, why, list[Gun.tierIdx] or "?"))
 end
 
+-- tier terakhir: kirim remote tembak langsung pakai format tembakan asli yang udah ketangkep, arah = ke target
+local function fireRemote(tool, part)
+    if not (Gun.fire and Gun.template) then return false, "format remote belum ketangkep (tembak manual sekali)" end
+    local origin = muzzleOrigin()
+    local nd = origin and dirTo(origin, part)
+    if not nd then return false, "arah ga valid" end
+    local n, args = Gun.templateN, {}
+    for i = 1, n do
+        local v = Gun.template[i]
+        if typeof(v) == "Instance" and v:IsA("Tool") then v = tool end
+        args[i] = v
+    end
+    if typeof(args[1]) == "Vector3" then args[1] = origin end
+    args[2] = nd
+    Gun.selfFire = true
+    local ok, err = pcall(function() Gun.fire:FireServer(table.unpack(args, 1, n)) end)
+    Gun.selfFire = false
+    if not ok then return false, tostring(err) end
+    return true, "remote langsung"
+end
+
 local function fireTrigger(tool, part)
     local list = gunTiers()
     if #list == 0 then
@@ -751,7 +814,12 @@ local function fireTrigger(tool, part)
 
     Gun.firing = true
     Gun.pending, Gun.pendingAt = part, os.clock()
-    local ok, how = press(trigRaw, 0.05, tier, gunFilter)
+    local ok, how
+    if tier == "remote" then
+        ok, how = fireRemote(tool, part)
+    else
+        ok, how = press(trigRaw, 0.05, tier, gunFilter)
+    end
     log("TRIG", string.format("tembak via %s (%s)", tier, tostring(how)))
 
     if not ok then
@@ -788,20 +856,30 @@ local function gunStep()
     Gun.wasAiming = aiming
 
     if not tool then Gun.status = "gun ga dipegang"; return end
-    if not aiming then Gun.status = "tahan aim, bidik killer"; return end
-    if not CFG.gun.trigger then Gun.status = "trigger OFF (snap manual aja)"; return end
+    if not aiming then Gun.status = "tahan aim, kamera lock ke killer sendiri"; return end
+    if not CFG.gun.trigger then Gun.status = "auto fire OFF (lock/snap aja)"; return end
     if not amSurvivor() then Gun.status = "bukan survivor"; return end
 
     local now = os.clock()
     if now < Gun.holdoff then return end
 
-    local at, jam, empty = stepInfo(CFG.gun.fireStep)
-    local need = at + CFG.gun.chargeMargin
+    -- step: auto (0) = step tertinggi yang waktu charge-nya udah kecapai
     local charged = now - Gun.chargeStart
-    if charged < need then
-        Gun.status = string.format("charge %.1f/%.1fs", charged, need)
+    local margin = CFG.gun.chargeMargin
+    local r
+    if CFG.gun.fireStep == 0 then
+        for n = 1, 3 do
+            if charged >= (stepInfo(n)) + margin then r = n end
+        end
+    elseif charged >= (stepInfo(CFG.gun.fireStep)) + margin then
+        r = CFG.gun.fireStep
+    end
+    if not r then
+        local first = (stepInfo(CFG.gun.fireStep == 0 and 1 or CFG.gun.fireStep))
+        Gun.status = string.format("charge %.1f/%.1fs", charged, first + margin)
         return
     end
+    local _, jam, empty = stepInfo(r)
 
     local why = whyNoShoot(tool, jam, empty)
     if why then
@@ -813,12 +891,19 @@ local function gunStep()
         return
     end
 
-    local part, miss = findTarget()
+    -- target: kalau kamera udah nempel ke target lock -> tembak. kalau belum, cek crosshair manual
+    local part, miss
+    local lt = Gun.lockTarget
+    if CFG.gun.aimLock and lt and lt.Parent and Gun.lockAng <= CFG.gun.fireTol then
+        part, miss = lt, 0
+    else
+        part, miss = findTarget()
+    end
     if not part then
-        Gun.status = "siap - arahkan crosshair ke killer"
+        Gun.status = CFG.gun.aimLock and "siap - nunggu killer masuk jangkauan lock" or "siap - arahkan crosshair ke killer"
         return
     end
-    Gun.status = string.format("KENA CROSSHAIR (%.1f stud) -> tembak", miss or 0)
+    Gun.status = string.format("step %d | target kena -> tembak", r)
     fireTrigger(tool, part)
 end
 
@@ -835,6 +920,88 @@ task.spawn(function()
                 log("GUN", "error: " .. tostring(err))
             end
         end
+    end
+end)
+
+------------------------------------------------------------------ 2b) AIM LOCK (kamera nempel ke killer, cuma pas aim)
+local function blockedByAction(c)
+    local ci = c:FindFirstChild("CheckInterractable")
+    if ci then
+        for _, a in ipairs(NO_AIM_FLAGS) do
+            if ci:GetAttribute(a) then return true end
+        end
+    end
+    for _, a in ipairs({ "Trapped", "IsCarried", "IsHooked" }) do
+        if c:GetAttribute(a) then return true end
+    end
+    return false
+end
+
+local function pickLockTarget(origin, camCF)
+    local look, cur = camCF.LookVector, Gun.lockTarget
+    local best, bestScore, bestAng
+    for _, k in ipairs(killers()) do
+        local part = pickPart(k.char)
+        if part then
+            local to = part.Position - camCF.Position
+            local dist = to.Magnitude
+            if dist <= CFG.gun.maxDist and dist > 1 then
+                local ang = math.deg(math.acos(math.clamp(look:Dot(to.Unit), -1, 1)))
+                local isCur = (part == cur)
+                local score = ang - (isCur and 8 or 0)          -- target lama dikasih bonus biar ga loncat-loncat
+                if ang <= CFG.gun.lockFov * (isCur and 1.4 or 1) and (not bestScore or score < bestScore)
+                    and ((not CFG.gun.needLOS) or visibleFrom(origin, part)) then
+                    best, bestScore, bestAng = part, score, ang
+                end
+            end
+        end
+    end
+    return best, bestAng
+end
+
+local lockErrAt, lockNameSeen = 0, nil
+local function aimLockStep(dt)
+    if not alive() then
+        pcall(function() RunService:UnbindFromRenderStep("DP3_AimLock") end)
+        return
+    end
+    local c, hum = myChar(), myHum()
+    local tool = c and equippedGun()
+    if not (CFG.gun.aimLock and tool and aimingNow() and amSurvivor())
+        or not hum or hum.Health <= 0 or blockedByAction(c) then
+        Gun.lockTarget, Gun.lockAng, lockNameSeen = nil, 180, nil     -- ga aim = lepas total, kamera 100% balik ke kamu
+        return
+    end
+    local cam = workspace.CurrentCamera
+    local origin = muzzleOrigin()
+    if not (cam and origin) then return end
+
+    local cf = cam.CFrame
+    local part, ang = pickLockTarget(origin, cf)
+    Gun.lockTarget = part
+    if not part then
+        Gun.lockAng, lockNameSeen = 180, nil
+        return
+    end
+    Gun.lockAng = ang
+    if lockNameSeen ~= part.Parent then
+        lockNameSeen = part.Parent
+        log("LOCK", string.format("nempel ke %s (%.0f deg)", part.Parent.Name, ang))
+    end
+
+    local goal = (part.Position - cf.Position).Unit
+    local a = 1 - (1 - math.clamp(CFG.gun.lockSmooth, 0.02, 1)) ^ (math.clamp(dt, 0, 0.1) * 60)
+    local nl = cf.LookVector:Lerp(goal, a)
+    if nl.Magnitude < 0.01 then nl = goal end
+    cam.CFrame = CFrame.lookAt(cf.Position, cf.Position + nl.Unit)
+end
+
+pcall(function() RunService:UnbindFromRenderStep("DP3_AimLock") end)
+RunService:BindToRenderStep("DP3_AimLock", Enum.RenderPriority.Camera.Value + 1, function(dt)
+    local ok, err = pcall(aimLockStep, dt)
+    if not ok and os.clock() - lockErrAt > 4 then
+        lockErrAt = os.clock()
+        log("LOCK", "error: " .. tostring(err))
     end
 end)
 
@@ -920,7 +1087,7 @@ local function shown(o)
     if o:IsA("UIGradient") then
         if not o.Enabled then return false end
         p = o.Parent
-    elseif (o:IsA("ImageLabel") or o:IsA("ImageButton")) and o.ImageTransparency >= 0.99 then
+    elseif not (CFG.skill.enabled and CFG.skill.hideUI) and (o:IsA("ImageLabel") or o:IsA("ImageButton")) and o.ImageTransparency >= 0.99 then
         return false
     end
     while p and not p:IsA("LayerCollector") do
@@ -1337,10 +1504,84 @@ task.spawn(function()
     end
 end)
 
+------------------------------------------------------------------ 4) SEMBUNYIIN UI SKILL CHECK
+-- pas Auto Skill Check ON: jarum, zona, tombol Space, dll di SkillCheckPromptGui dibikin transparan tiap frame.
+-- Visible / Enabled / rotasi sengaja ga disentuh, jadi game dan tracker skill check tetep jalan normal.
+local hideOrig = setmetatable({}, { __mode = "k" })   -- [objek] = { prop = nilai asli }
+local hideWasOn, hideErrAt = false, 0
+
+local function forceT(d, prop)
+    local cur = d[prop]
+    if cur ~= 1 then
+        local o = hideOrig[d]
+        if not o then
+            o = {}
+            hideOrig[d] = o
+        end
+        if o[prop] == nil then o[prop] = cur end
+        d[prop] = 1
+    end
+end
+
+local function hideObj(d)
+    if d:IsA("GuiObject") then
+        forceT(d, "BackgroundTransparency")
+        if d:IsA("ImageLabel") or d:IsA("ImageButton") then forceT(d, "ImageTransparency") end
+        if d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox") then
+            forceT(d, "TextTransparency")
+            forceT(d, "TextStrokeTransparency")
+        end
+    elseif d:IsA("UIStroke") then
+        forceT(d, "Transparency")
+    end
+end
+
+local function restoreHidden()
+    for d, o in pairs(hideOrig) do
+        if d.Parent then
+            for prop, v in pairs(o) do pcall(function() d[prop] = v end) end
+        end
+        hideOrig[d] = nil
+    end
+end
+
+local function hideStep()
+    if not alive() then
+        pcall(function() RunService:UnbindFromRenderStep("DP3_HideSkillUI") end)
+        return
+    end
+    if not (CFG.skill.enabled and CFG.skill.hideUI) then
+        if hideWasOn then
+            hideWasOn = false
+            restoreHidden()
+        end
+        return
+    end
+    hideWasOn = true
+    local pg = LP:FindFirstChildOfClass("PlayerGui")
+    if not pg then return end
+    for _, n in ipairs({ "SkillCheckPromptGui", "SkillCheckPromptGui-con" }) do
+        local g = pg:FindFirstChild(n)
+        if g then
+            for _, d in ipairs(g:GetDescendants()) do hideObj(d) end
+        end
+    end
+end
+
+pcall(function() RunService:UnbindFromRenderStep("DP3_HideSkillUI") end)
+RunService:BindToRenderStep("DP3_HideSkillUI", Enum.RenderPriority.Last.Value, function()
+    local ok, err = pcall(hideStep)
+    if not ok and os.clock() - hideErrAt > 5 then
+        hideErrAt = os.clock()
+        log("HIDE", "error: " .. tostring(err))
+    end
+end)
+
 ------------------------------------------------------------------ RESET
 local function resetAll()
     Gun.pending, Gun.firing, Gun.holdoff, Gun.failStreak, Gun.cycles = nil, false, 0, 0, 0
     Gun.pauseUntil, Gun.lockUntil, Gun.tierIdx, Gun.tierGood = 0, 0, 1, {}
+    Gun.lockTarget, Gun.lockAng = nil, 180
     Skill.tierName, Skill.tierGood, Skill.retried = nil, {}, false
     Skill.gen = Skill.gen + 1
     unhideChecks()
@@ -1430,39 +1671,57 @@ local function buildUI()
         return row
     end
 
-    mkBtn(panel, function() return "Auto Parry: " .. onoff(CFG.parry.enabled), CFG.parry.enabled end,
-        function() CFG.parry.enabled = not CFG.parry.enabled end)
-    mkBtn(panel, function() return "Parry via: " .. CFG.parry.via:upper(), true end,
-        function() CFG.parry.via = (CFG.parry.via == "remote") and "input" or "remote" end)
-    mkBtn(panel, function() return "Gun Auto Trigger: " .. onoff(CFG.gun.trigger), CFG.gun.trigger end,
-        function() CFG.gun.trigger = not CFG.gun.trigger end)
-    mkBtn(panel, function() return "Gun Snap (manual): " .. onoff(CFG.gun.snap), CFG.gun.snap end,
-        function() CFG.gun.snap = not CFG.gun.snap end)
+    local r1 = mkRow()
+    mkBtn(r1, function() return "Parry: " .. onoff(CFG.parry.enabled), CFG.parry.enabled end,
+        function() CFG.parry.enabled = not CFG.parry.enabled end, 0.5)
+    mkBtn(r1, function() return "Via: " .. CFG.parry.via:upper(), true end,
+        function() CFG.parry.via = (CFG.parry.via == "remote") and "input" or "remote" end, 0.5)
 
-    local rowG = mkRow()
-    mkBtn(rowG, function() return "Step: " .. CFG.gun.fireStep, true end,
-        function() CFG.gun.fireStep = cycle({ 3, 2, 1 }, CFG.gun.fireStep) end, 0.5)
-    mkBtn(rowG, function() return "Radius: " .. CFG.gun.hitRadius, true end,
+    local r2 = mkRow()
+    mkBtn(r2, function() return "Auto Fire: " .. onoff(CFG.gun.trigger), CFG.gun.trigger end,
+        function() CFG.gun.trigger = not CFG.gun.trigger end, 0.5)
+    mkBtn(r2, function() return "Snap: " .. onoff(CFG.gun.snap), CFG.gun.snap end,
+        function() CFG.gun.snap = not CFG.gun.snap end, 0.5)
+
+    local r3 = mkRow()
+    mkBtn(r3, function() return "Aim Lock: " .. onoff(CFG.gun.aimLock), CFG.gun.aimLock end,
+        function()
+            CFG.gun.aimLock = not CFG.gun.aimLock
+            if not CFG.gun.aimLock then Gun.lockTarget = nil end
+        end, 0.5)
+    mkBtn(r3, function() return "Hide UI: " .. onoff(CFG.skill.hideUI), CFG.skill.hideUI end,
+        function() CFG.skill.hideUI = not CFG.skill.hideUI end, 0.5)
+
+    local r4 = mkRow()
+    mkBtn(r4, function() return "Step: " .. (CFG.gun.fireStep == 0 and "auto" or CFG.gun.fireStep), true end,
+        function() CFG.gun.fireStep = cycle({ 0, 3, 2, 1 }, CFG.gun.fireStep) end, 0.5)
+    mkBtn(r4, function() return "Radius: " .. CFG.gun.hitRadius, true end,
         function() CFG.gun.hitRadius = cycle({ 1.6, 2.2, 3.0, 4.0 }, CFG.gun.hitRadius) end, 0.5)
 
-    mkBtn(panel, function() return "Skill Check: " .. onoff(CFG.skill.enabled), CFG.skill.enabled end,
-        function() CFG.skill.enabled = not CFG.skill.enabled end)
+    local r5 = mkRow()
+    mkBtn(r5, function() return "Lock FOV: " .. CFG.gun.lockFov, true end,
+        function() CFG.gun.lockFov = cycle({ 30, 60, 90, 180 }, CFG.gun.lockFov) end, 0.5)
+    mkBtn(r5, function() return "Smooth: " .. CFG.gun.lockSmooth, true end,
+        function() CFG.gun.lockSmooth = cycle({ 0.25, 0.6, 1 }, CFG.gun.lockSmooth) end, 0.5)
 
-    local row1 = mkRow()
-    mkBtn(row1, function() return string.format("Zona -2 (%d)", CFG.skill.offset), true end,
+    local r6 = mkRow()
+    mkBtn(r6, function() return "Skill: " .. onoff(CFG.skill.enabled), CFG.skill.enabled end,
+        function() CFG.skill.enabled = not CFG.skill.enabled end, 0.5)
+    mkBtn(r6, function() return "Reset", true end, resetAll, 0.5)
+
+    local r7 = mkRow()
+    mkBtn(r7, function() return string.format("Zona -2 (%d)", CFG.skill.offset), true end,
         function() CFG.skill.offset = CFG.skill.offset - 2 end, 0.5)
-    mkBtn(row1, function() return string.format("Zona +2 (%d)", CFG.skill.offset), true end,
+    mkBtn(r7, function() return string.format("Zona +2 (%d)", CFG.skill.offset), true end,
         function() CFG.skill.offset = CFG.skill.offset + 2 end, 0.5)
 
-    local row2 = mkRow()
-    mkBtn(row2, function() return "Copy Log", true end, function()
+    local r8 = mkRow()
+    mkBtn(r8, function() return "Copy Log", true end, function()
         notify(copy(table.concat(LOG, "\n")) and "Log disalin" or "setclipboard ga ada")
     end, 0.5)
-    mkBtn(row2, function() return "Copy Dump", true end, function()
+    mkBtn(r8, function() return "Copy Dump", true end, function()
         notify(copy(Skill.lastDump) and "Dump disalin" or "setclipboard ga ada")
     end, 0.5)
-
-    mkBtn(panel, function() return "Reset (kalau nyangkut)", true end, resetAll)
 
     statusLabel = Instance.new("TextLabel")
     statusLabel.Size = UDim2.new(1, 0, 0, 30)
@@ -1477,7 +1736,7 @@ local function buildUI()
     corner(statusLabel, 6)
 
     logLabel = Instance.new("TextLabel")
-    logLabel.Size = UDim2.new(1, 0, 0, 110)
+    logLabel.Size = UDim2.new(1, 0, 0, 60)
     logLabel.BackgroundColor3 = Color3.new(0, 0, 0)
     logLabel.BackgroundTransparency = 0.35
     logLabel.TextColor3 = Color3.fromRGB(120, 255, 120)
@@ -1540,9 +1799,16 @@ UIS.InputBegan:Connect(function(i, gp)
     elseif k == CFG.keys.skill then
         CFG.skill.enabled = not CFG.skill.enabled
         notify("Auto Skill Check: " .. (CFG.skill.enabled and "ON" or "OFF"))
+    elseif k == CFG.keys.lock then
+        CFG.gun.aimLock = not CFG.gun.aimLock
+        if not CFG.gun.aimLock then Gun.lockTarget = nil end
+        notify("Aim Lock: " .. (CFG.gun.aimLock and "ON" or "OFF"))
+    elseif k == CFG.keys.hide then
+        CFG.skill.hideUI = not CFG.skill.hideUI
+        notify("Hide Skill UI: " .. (CFG.skill.hideUI and "ON" or "OFF"))
     elseif k == CFG.keys.panel and panel then
         panel.Visible = not panel.Visible
     end
 end)
 
-notify("v7 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap tombol DP buat panel")
+notify("v8 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap tombol DP buat panel")
