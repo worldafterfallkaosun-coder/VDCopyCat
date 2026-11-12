@@ -1,5 +1,5 @@
 --[[
-    Distrik Pembantai v8.2  (PlaceId 93978595733734)  -  Delta / Luau
+    Distrik Pembantai v8.3  (PlaceId 93978595733734)  -  Delta / Luau
 
     Fitur
       1. Auto Parry        : Parrying Dagger, delay dipelajari otomatis (sama kayak v6)
@@ -10,6 +10,20 @@
       4. Auto Skill Check  : jarum + zona dari GUI, tekan di tengah zona, ada verifikasi + auto-unstick UI
 
     Kontrol : tombol bulat "DP" (geser bebas)  |  F1 parry  F2 snap  F3 skill  F4 panel  F5 trigger
+
+    v8.3
+      - SKILL CHECK, akar masalah: di HP (touch, tanpa keyboard) Space ga dipakai. Skill check dipencet lewat tombol aksi
+        Survivor-mob.Controls.action. Input Space (VIM) dan getconnections (0 handler di Delta) ga pernah masuk, jadi
+        tiap check fail -10. Sekarang ada tier baru "tap" (sentuh asli lewat VIM di tengah tombol aksi) dan "click"
+        (klik mouse di titik yang sama). Di HP tier ini dicoba duluan.
+      - SKILL CHECK: deteksi "tekanan masuk" diperbaiki. Dulu hasil apa pun setelah tekan dianggap masuk (padahal itu fail
+        karena timeout). Sekarang masuk = ada hasil <= 0.3s setelah tekan. Kalau ga masuk, tier diganti buat check berikutnya
+        (retry di tengah check percuma, jarum udah lewat). Tier yang masuk dikunci.
+      - SKILL CHECK: log "input manual" kalau kamu tap sendiri pas check (nunjukin objek GUI yang kena), buat diagnosa.
+      - PARRY: delay dipelajari per animasi dari damage yang beneran kena (waktu animasi mulai -> kena, dikurangi aimLead).
+        Parry meleset (success=true tapi ga landing) ditebak karena delay fix 0.12s ga cocok sama semua animasi.
+      - PARRY: cooldown server dihormati lagi (parry meleset = cd 60s, nembak pas cd cuma buang), HP < 50% dilog,
+        killer yang lagi lunge diprediksi (kecepatan), nunggu sampai ngancam (polling) bukan sekali cek, 1 animasi = 1 parry.
 
     v8.2
       - Parry disamain sama script lama yang parry-nya jalan: delay tetap 0.12s (bukan belajar dari 0.04s),
@@ -61,12 +75,17 @@ local CFG = {
         via         = "remote",   -- "remote" | "input"
         range       = 13,
         frontDot    = 0.35,
-        delay       = 0.12,       -- jeda tetap setelah animasi serang mulai (detik), sama kayak script lama
-        jitter      = 0.03,
-        spacing     = 0.6,
+        delay       = 0.12,       -- delay awal kalau animasi ini belum pernah bikin kamu kena (detik)
+        jitter      = 0.02,
+        spacing     = 0.5,
         autoEquip   = true,
-        learn       = false,      -- true = delay dipelajari (mulai dari 0.04s, bisa kecepetan). default OFF
-        useServerCd = false,      -- true = nahan parry selama cooldown dari parryResult server
+        learn       = true,       -- true = delay per animasi dipelajari dari damage yang beneran kena
+        aimLead     = 0.10,       -- detik: parry ditembak segini SEBELUM waktu kena yang dipelajari
+        minDelay    = 0.02,
+        maxDelay    = 0.7,
+        pollWindow  = 0.35,       -- detik: setelah delay, tunggu killer masuk jangkauan selama segini
+        lead        = 0.08,       -- detik: prediksi gerak killer (lunge) buat cek jarak
+        useServerCd = true,       -- true = nahan parry selama cooldown dari parryResult server (meleset = cd 60s)
         minPriority = Enum.AnimationPriority.Action,
     },
 
@@ -136,7 +155,7 @@ end
 
 local function notify(msg)
     pcall(function()
-        StarterGui:SetCore("SendNotification", { Title = "DP v8.2", Text = msg, Duration = 2.5 })
+        StarterGui:SetCore("SendNotification", { Title = "DP v8.3", Text = msg, Duration = 2.5 })
     end)
     log("INFO", msg)
 end
@@ -552,24 +571,20 @@ task.spawn(function()
 end)
 
 ------------------------------------------------------------------ 1) AUTO PARRY
-local Parry = { watched = setmetatable({}, { __mode = "k" }), last = 0, cdUntil = 0, stats = {}, remote = nil }
-local BUCKETS = { 0.04, 0.08, 0.12, 0.17, 0.23, 0.30 }
-local parrySeenAt, parryWhyAt = 0, 0
+-- v8.3: delay dipelajari PER ANIMASI dari damage yang beneran kena. Waktu "animasi mulai -> kamu kena" dicatat,
+-- parry berikutnya ditembak aimLead detik sebelum itu. Sebelum ada data, pakai CFG.parry.delay.
+local Parry = {
+    watched = setmetatable({}, { __mode = "k" }), last = 0, cdUntil = 0, remote = nil,
+    delay = {}, hitT = {}, recent = {}, hpHum = nil,
+}
+local parrySeenAt, parryWhyAt, parryCdAt, parryHpAt = 0, 0, 0, 0
 
-local function pickBucket(key)
-    local st = Parry.stats[key]
-    if not st then
-        st = {}
-        for i = 1, #BUCKETS do st[i] = { n = 0, s = 0 } end
-        Parry.stats[key] = st
-    end
-    if not CFG.parry.learn or math.random() < 0.2 then return math.random(1, #BUCKETS) end
-    local best, bi = -1, 1
-    for i = 1, #BUCKETS do
-        local sc = (st[i].s + 1) / (st[i].n + 2)
-        if sc > best then best, bi = sc, i end
-    end
-    return bi
+local function delayFor(key)
+    return Parry.delay[key] or CFG.parry.delay
+end
+
+local function shortKey(key)
+    return tostring(key):match("%d+") or tostring(key)
 end
 
 local function findDagger()
@@ -582,14 +597,27 @@ local function findDagger()
     return t, false
 end
 
-local function parryNow(key, bi, base)
-    if not CFG.parry.enabled then return end
+-- true kalau parry terkirim
+local function parryNow(entry, base)
+    if not CFG.parry.enabled then return false end
     local now = os.clock()
-    if now - Parry.last < CFG.parry.spacing then return end
-    if CFG.parry.useServerCd and now < Parry.cdUntil then return end
+    if now - Parry.last < CFG.parry.spacing then return false end
+    if CFG.parry.useServerCd and now < Parry.cdUntil then
+        if now - parryCdAt > 2 then
+            parryCdAt = now
+            log("PARRY", string.format("parry masih cooldown %.1fs lagi, ga dikirim", Parry.cdUntil - now))
+        end
+        return false
+    end
     local hum, char = myHum(), myChar()
-    if not hum or hum.Health <= 0 or not char then return end
-    if hum.Health < hum.MaxHealth * 0.5 then return end   -- client game nolak parry kalau HP < 50%
+    if not hum or hum.Health <= 0 or not char then return false end
+    if hum.Health < hum.MaxHealth * 0.5 then   -- client game nolak parry kalau HP < 50%
+        if now - parryHpAt > 3 then
+            parryHpAt = now
+            log("PARRY", "HP < 50%: game nolak parry (ParryClient._isLowHealth)")
+        end
+        return false
+    end
 
     local tool, equipped = findDagger()
     if not tool then
@@ -597,15 +625,16 @@ local function parryNow(key, bi, base)
             parryWhyAt = now
             log("PARRY", "Parrying Dagger ga ada di tangan / backpack")
         end
-        return
+        return false
     end
     if not equipped then
-        if not CFG.parry.autoEquip then return end
+        if not CFG.parry.autoEquip then return false end
         hum:EquipTool(tool)
         task.wait(0.08)
     end
 
     Parry.last = os.clock()
+    entry.fired = Parry.last
     local before = char:GetAttribute("ParryLands") or 0
 
     if CFG.parry.via == "input" then
@@ -623,29 +652,32 @@ local function parryNow(key, bi, base)
         end
         if not ev then
             log("PARRY", "remote parry ga ketemu")
-            return
+            return false
         end
         ev:FireServer(char)
     end
-    log("PARRY", string.format("kirim parry (delay %.2f)", base or 0))
+    log("PARRY", string.format("kirim parry [%s] delay %.2f (%.0f ms setelah animasi mulai)",
+        shortKey(entry.key), base or 0, (Parry.last - entry.t0) * 1000))
 
     task.delay(0.9, function()
         if not alive() then return end
         local after = (myChar() == char) and (char:GetAttribute("ParryLands") or 0) or before
         local ok = after > before
-        local st = bi and Parry.stats[key]
-        if st and st[bi] then
-            st[bi].n = st[bi].n + 1
-            if ok then st[bi].s = st[bi].s + 1 end
-        end
-        log("PARRY", string.format("delay=%.2f %s", base or 0, ok and "SUKSES" or "meleset"))
+        entry.landed = ok
+        if ok then Parry.delay[entry.key] = base end   -- delay ini terbukti landing, kunci
+        log("PARRY", string.format("[%s] delay=%.2f %s", shortKey(entry.key), base or 0, ok and "SUKSES" or "meleset"))
     end)
+    return true
 end
 
-local function threatens(k)
+-- killer ngancam kita? lead = prediksi gerak (lunge)
+local function threatens(k, lead)
     local me = myRoot()
     if not me or not k.root.Parent then return false end
-    local to = me.Position - k.root.Position
+    local vel = Vector3.new(0, 0, 0)
+    pcall(function() vel = k.root.AssemblyLinearVelocity end)
+    local pos = k.root.Position + vel * (lead or 0)
+    local to = me.Position - pos
     local dist = to.Magnitude
     if dist > CFG.parry.range then return false end
     if dist < 0.01 then return true end
@@ -661,23 +693,62 @@ local function watchKiller(k)
         if track.Looped then return end
         if track.Priority.Value < CFG.parry.minPriority.Value then return end
         local key = (track.Animation and track.Animation.AnimationId) or track.Name
-        local bi, base
-        if CFG.parry.learn then
-            bi = pickBucket(key)
-            base = BUCKETS[bi]
-        else
-            base = CFG.parry.delay
-        end
-        local delay = base + (math.random() * 2 - 1) * CFG.parry.jitter
-        task.delay(math.max(0, delay), function()
-            if not track.IsPlaying then return end
-            if threatens(k) then
-                parryNow(key, bi, base)
-            elseif os.clock() - parrySeenAt > 2 then
+        local t0 = os.clock()
+        local entry = { key = key, t0 = t0 }
+        local rec = Parry.recent
+        rec[#rec + 1] = entry
+        while #rec > 8 or (rec[1] and t0 - rec[1].t0 > 3) do table.remove(rec, 1) end
+
+        task.spawn(function()
+            local base = delayFor(key)
+            local jit = (math.random() * 2 - 1) * CFG.parry.jitter
+            local fireAt = t0 + math.max(CFG.parry.minDelay, base + jit)
+            local untilT = fireAt + CFG.parry.pollWindow
+            local sent, seen = false, false
+            while alive() and CFG.parry.enabled and track.IsPlaying and os.clock() < untilT do
+                if os.clock() >= fireAt and threatens(k, CFG.parry.lead) then
+                    seen = true
+                    sent = parryNow(entry, base)
+                    break
+                end
+                RunService.Heartbeat:Wait()
+            end
+            if not sent and not seen and os.clock() - parrySeenAt > 2 then
                 parrySeenAt = os.clock()
                 log("PARRY", "animasi serang kebaca tapi killer ga ngancam (jarak/arah)")
             end
         end)
+    end)
+end
+
+-- belajar dari damage: kapan sebenernya kita kena setelah animasi mulai
+local function hookHealth()
+    local hum = myHum()
+    if not hum or Parry.hpHum == hum then return end
+    Parry.hpHum = hum
+    local last = hum.Health
+    hum.HealthChanged:Connect(function(h)
+        local drop = last - h
+        last = h
+        if drop <= 0.5 or not alive() or not CFG.parry.learn then return end
+        local now = os.clock()
+        local best
+        for i = #Parry.recent, 1, -1 do
+            local e = Parry.recent[i]
+            local age = now - e.t0
+            if age > 1.5 then break end
+            if age >= 0.05 and not e.landed and not e.hit then best = e break end
+        end
+        if not best then return end
+        best.hit = now
+        local tHit = now - best.t0
+        local old = Parry.hitT[best.key]
+        local new = old and (old * 0.5 + tHit * 0.5) or tHit
+        Parry.hitT[best.key] = new
+        local d = math.clamp(new - CFG.parry.aimLead, CFG.parry.minDelay, CFG.parry.maxDelay)
+        Parry.delay[best.key] = d
+        log("PARRY", string.format("[%s] kena damage %.0f ms setelah animasi mulai -> delay jadi %.2f",
+            shortKey(best.key), tHit * 1000, d))
     end)
 end
 
@@ -686,13 +757,17 @@ task.spawn(function()
         local pd = RS:WaitForChild("Remotes", 20):WaitForChild("Items", 20):WaitForChild("Parrying Dagger", 20)
         Parry.remote = pd:WaitForChild("parry", 10)
         -- sengaja ga didaftarin ke Spy: parry ga boleh lewat hook, biar sama persis kayak script lama
-        pd:WaitForChild("parryResult", 10).OnClientEvent:Connect(function(success, cooldown)
+        -- args asli game: (success, cooldown, permanent, chained, character)
+        pd:WaitForChild("parryResult", 10).OnClientEvent:Connect(function(success, cooldown, permanent, chained)
             local cd = tonumber(cooldown)
             if cd and cd > 0 then Parry.cdUntil = os.clock() + cd end
-            log("PARRY", "result success=" .. tostring(success) .. " cd=" .. tostring(cooldown))
+            if chained == true then Parry.cdUntil = 0 end   -- parry nyambung: game ngehapus cooldown
+            log("PARRY", "result success=" .. tostring(success) .. " cd=" .. tostring(cooldown)
+                .. (permanent and " permanent" or "") .. (chained == true and " chained" or ""))
         end)
     end)
     while alive() do
+        pcall(hookHealth)
         if CFG.parry.enabled then
             for _, k in ipairs(killers()) do watchKiller(k) end
         end
@@ -1097,14 +1172,23 @@ end
 
 local function skillFilter(name) return Skill.owners[name] == true end
 
+local GuiService = game:GetService("GuiService")
+local function isMobile() return UIS.TouchEnabled and not UIS.KeyboardEnabled end
+
 local function skillTiers()
     local t = {}
     if getconnections then
         refreshOwners()
         if next(Skill.owners) then t[#t + 1] = "owner" end
     end
+    if isMobile() and VIM then
+        -- HP: skill check dipencet lewat tombol aksi (Survivor-mob.Controls.action), bukan Space
+        table.insert(t, 1, "click")
+        table.insert(t, 1, "tap")
+    end
     if VIM then t[#t + 1] = "vim" end
     if getconnections then t[#t + 1] = "all" end
+    if not isMobile() and VIM then t[#t + 1] = "tap"; t[#t + 1] = "click" end
     return t
 end
 
@@ -1202,7 +1286,55 @@ local function skillPairs()
     return out
 end
 
--- tekan tombol skill check lewat tier yang kerja (owner -> vim -> all). return tier yang dipakai
+-- titik tekan buat tier "tap"/"click": tengah tombol aksi mobile, atau tengah layar kalau ga ada
+local function tapTarget()
+    local pg = LP:FindFirstChildOfClass("PlayerGui")
+    local obj
+    if pg then
+        for _, gn in ipairs({ "Survivor-mob", "Survivor", "Survivor-con" }) do
+            local g = pg:FindFirstChild(gn)
+            local ctl = g and g:FindFirstChild("Controls")
+            local act = ctl and ctl:FindFirstChild("action")
+            if act and act:IsA("GuiObject") and act.AbsoluteSize.X > 0 then obj = act break end
+        end
+    end
+    if obj then
+        local g = obj:FindFirstAncestorOfClass("ScreenGui")
+        local inset = (g and g.IgnoreGuiInset) and 0 or GuiService:GetGuiInset().Y
+        local p, s = obj.AbsolutePosition, obj.AbsoluteSize
+        return p.X + s.X / 2, p.Y + s.Y / 2 + inset, obj
+    end
+    local cx, cy = viewCenter()
+    return cx, cy, nil
+end
+
+local touchN = 0
+local function tapAt(x, y, hold, mode)
+    if not VIM then return false, "VIM ga ada" end
+    if mode == "touch" then
+        touchN = (touchN + 1) % 6
+        local id = 200 + touchN
+        local ok = pcall(function() VIM:SendTouchEvent(id, 0, x, y) end)
+        if not ok then return false, "SendTouchEvent error" end
+        task.delay(hold, function() pcall(function() VIM:SendTouchEvent(id, 2, x, y) end) end)
+        return true, "touch"
+    end
+    local ok = pcall(function() VIM:SendMouseButtonEvent(x, y, 0, true, game, 0) end)
+    if not ok then return false, "VIM mouse error" end
+    task.delay(hold, function() pcall(function() VIM:SendMouseButtonEvent(x, y, 0, false, game, 0) end) end)
+    return true, "mouse"
+end
+
+local function sendTier(tier, raw)
+    if tier == "tap" or tier == "click" then
+        local x, y, obj = tapTarget()
+        local ok, how = tapAt(x, y, 0.06, tier == "tap" and "touch" or "mouse")
+        return ok, string.format("%s @%.0f,%.0f %s", how, x, y, obj and obj:GetFullName():match("[^%.]+%.[^%.]+$") or "tengah layar")
+    end
+    return press(raw, 0.06, tier, skillFilter)
+end
+
+-- tekan tombol skill check lewat tier yang kerja. return tier yang dipakai
 local function pressSkill()
     local raw = getBind("kb_skillcheck", "Space")
     local list = skillTiers()
@@ -1210,41 +1342,67 @@ local function pressSkill()
     local tier = Skill.tierName
     if not tier or not indexOf(list, tier) then tier = list[1] end
     Skill.pressClock = os.clock()
-    local ok, how = press(raw, 0.06, tier, skillFilter)
+    local ok, how = sendTier(tier, raw)
     if not ok then
-        -- tier ini mati total (0 handler): lompat ke tier berikut langsung
+        -- tier ini mati total (0 handler / VIM error): lompat ke tier berikut langsung
         local nxt = list[(indexOf(list, tier) % #list) + 1]
         log("SKILL", string.format("tier %s ga bisa (%s) -> %s", tier, tostring(how), nxt))
         tier = nxt
         Skill.tierName = tier
-        ok, how = press(raw, 0.06, tier, skillFilter)
+        ok, how = sendTier(tier, raw)
     end
     log("SKILL", string.format("input via %s (%s)", tier, tostring(how)))
     return tier
 end
 
--- cek tekanan masuk; kalau game diem aja dan Check masih tampil -> ganti tier + retry sekali
+-- cek tekanan masuk: masuk = ada hasil (Result/Fail) <= 0.3s setelah tekan. Hasil telat = timeout, BUKAN tekanan kita.
+-- Kalau ga masuk, tier diganti buat check BERIKUTNYA (retry sekarang percuma, jarum udah lewat).
 local function verifyPress(p, tierUsed, myClock)
-    task.delay(0.4, function()
+    task.delay(0.3, function()
         if not alive() or Skill.pressClock ~= myClock then return end
-        if Skill.lastResult >= myClock then
-            Skill.tierGood[tierUsed or "?"] = true
+        tierUsed = tierUsed or "?"
+        if Skill.lastResult >= myClock and Skill.lastResult - myClock <= 0.3 then
+            Skill.tierGood[tierUsed] = true
             Skill.tierName = tierUsed
             return
         end
-        if p.chk.Parent and p.chk.Visible and not Skill.retried and not Skill.tierGood[tierUsed or "?"] then
-            Skill.retried = true
-            local list = skillTiers()
-            local i = indexOf(list, tierUsed or "")
-            if #list > 1 then
-                Skill.tierName = list[((i or 0) % #list) + 1]
-                log("SKILL", "tekanan ga diterima (" .. tostring(tierUsed) .. ") -> coba " .. Skill.tierName)
-                local t = pressSkill()
-                if t then verifyPress(p, t, Skill.pressClock) end
-            end
+        if Skill.tierGood[tierUsed] then return end   -- tier ini pernah masuk, mungkin cuma check yang aneh
+        Skill.tierBad = Skill.tierBad or {}
+        Skill.tierBad[tierUsed] = true
+        local list = skillTiers()
+        local i = indexOf(list, tierUsed) or 0
+        local nxt
+        for step = 1, #list do
+            local cand = list[((i + step - 1) % #list) + 1]
+            if not Skill.tierBad[cand] then nxt = cand break end
         end
+        if not nxt then Skill.tierBad = {}; nxt = list[(i % #list) + 1] end
+        Skill.tierName = nxt
+        log("SKILL", "tekanan ga masuk (" .. tierUsed .. ") -> check berikutnya pakai " .. tostring(nxt))
     end)
 end
+
+-- diagnosa: kalau kamu tap/klik sendiri pas ada skill check, catat objek GUI yang kena (nunjukin tombol aslinya)
+UIS.InputBegan:Connect(function(i, gp)
+    if not alive() then return end
+    if os.clock() - Skill.lastEvent > 4 then return end
+    if os.clock() - Skill.pressClock < 0.4 then return end   -- ini kemungkinan input kita sendiri
+    local ut = i.UserInputType
+    if ut ~= Enum.UserInputType.Touch and ut ~= Enum.UserInputType.MouseButton1 and ut ~= Enum.UserInputType.Keyboard then return end
+    local names = {}
+    if ut ~= Enum.UserInputType.Keyboard then
+        local pg = LP:FindFirstChildOfClass("PlayerGui")
+        local ok, list = pcall(function() return pg:GetGuiObjectsAtPosition(i.Position.X, i.Position.Y) end)
+        if ok and list then
+            for n = 1, math.min(#list, 3) do names[#names + 1] = list[n]:GetFullName():match("[^%.]+%.[^%.]+$") or list[n].Name end
+        end
+    end
+    log("SKILL", string.format("input manual: %s %s pos=(%.0f,%.0f) gp=%s obj={%s}", tostring(ut.Name),
+        ut == Enum.UserInputType.Keyboard and tostring(i.KeyCode.Name) or "", i.Position.X, i.Position.Y,
+        tostring(gp), table.concat(names, ", ")))
+end)
+log("SKILL", string.format("env: mobile=%s VIM=%s getconnections=%s tiers=%s", tostring(isMobile()), tostring(VIM ~= nil),
+    tostring(getconnections ~= nil), table.concat(skillTiers(), ">")))
 
 -- regresi linear: kecepatan sudut (deg/s) dari sample (waktu, sudut kontinu)
 local function slope(samples)
@@ -1364,7 +1522,7 @@ SkillHook.judged = function(args, name)
     local dir = (w >= 0) and 1 or -1
     local err = angDiff(c.line.AbsoluteRotation, c.goal.AbsoluteRotation + CFG.skill.offset) * dir
     local errT = (math.abs(w) > 1) and (err / math.abs(w)) or 0
-    local mine = since >= 0 and since < 0.8
+    local mine = since >= 0 and since < 0.3
     log("SKILL", string.format("HASIL %s %s %s | err=%+.1f deg (%+.0f ms %s) | tekan->hasil %.0f ms | %s",
         tostring(name), tostring(args[1]), tostring(args[2]), err, errT * 1000, errT > 0 and "telat" or "kecepatan",
         since * 1000, mine and "tekanan skrip" or "BUKAN dari tekanan skrip"))
@@ -1647,7 +1805,7 @@ local function resetAll()
     Gun.pending, Gun.firing, Gun.holdoff, Gun.failStreak, Gun.cycles = nil, false, 0, 0, 0
     Gun.pauseUntil, Gun.lockUntil, Gun.tierIdx, Gun.tierGood = 0, 0, 1, {}
     Gun.lockTarget, Gun.lockAng = nil, 180
-    Skill.tierName, Skill.tierGood, Skill.retried = nil, {}, false
+    Skill.tierName, Skill.tierGood, Skill.retried, Skill.tierBad = nil, {}, false, {}
     Skill.gen = Skill.gen + 1
     unhideChecks()
     pcall(function() RunService:UnbindFromRenderStep("DP3_CamLock") end)
@@ -1882,4 +2040,4 @@ UIS.InputBegan:Connect(function(i, gp)
     end
 end)
 
-notify("v8.2 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap tombol DP buat panel")
+notify("v8.3 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap tombol DP buat panel")
