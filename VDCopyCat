@@ -89,6 +89,16 @@ local function notify(msg)
     print("[DP] " .. msg)
 end
 
+-- panel debug di layar (buat mobile, tinggal screenshot)
+local dbgLines, dbgLabel = {}, nil
+local function dbg(msg)
+    msg = string.format("[%.1f] %s", os.clock() % 1000, msg)
+    table.insert(dbgLines, msg)
+    if #dbgLines > 14 then table.remove(dbgLines, 1) end
+    if dbgLabel then dbgLabel.Text = table.concat(dbgLines, "\n") end
+    print("[DP] " .. msg)
+end
+
 ------------------------------------------------------------------ INPUT HELPERS
 local function parseBind(raw)
     -- raw: "MouseButton1" / "MouseButton2" / "Space" / "F" / dst
@@ -199,6 +209,7 @@ local function parryNow()
     end
 
     Parry.lastParry = os.clock()
+    dbg("PARRY fired (remote=" .. tostring(CFG.parry.useRemote) .. ")")
 
     if CFG.parry.useRemote then
         local ok, ev = pcall(function()
@@ -228,6 +239,7 @@ local function watchKiller(k)
         if not CFG.parry.enabled or not iAmSurvivor() then return end
         if track.Priority.Value < CFG.parry.minPriority.Value then return end
         if track.Looped then return end -- idle/walk/run biasanya looped
+        dbg("killer anim: " .. tostring(track.Name) .. " prio=" .. track.Priority.Name)
         task.spawn(function()
             task.wait(math.max(0, CFG.parry.delay + (math.random() * 2 - 1) * CFG.parry.jitter))
             if track.IsPlaying and killerThreatens(k) then parryNow() end
@@ -258,7 +270,15 @@ end
 
 local function equippedGun()
     local c = myChar()
-    return c and c:FindFirstChild("Twist of Fate")
+    if not c then return nil end
+    local t = c:FindFirstChild("Twist of Fate")
+    if t then return t end
+    for _, v in ipairs(c:GetChildren()) do
+        if v:IsA("Tool") and (v:GetAttribute("tofState") ~= nil or v:GetAttribute("shots") ~= nil
+            or v:GetAttribute("tofRoll") ~= nil or v.Name:lower():find("twist")) then
+            return v
+        end
+    end
 end
 
 local function pickAimPart(char)
@@ -326,7 +346,7 @@ local function shootSequence(tool, part)
         local dir = (target - muzzlePos(root))
         if dir.Magnitude > 0.01 then
             local ok = pcall(function() fire:FireServer(tool, dir.Unit, CFG.gun.step) end)
-            if CFG.gun.verbose then print("[DP] Fire ok=", ok, dir.Unit) end
+            dbg("FIRE sent ok=" .. tostring(ok))
         end
     end
     pcall(function() aimHold:FireServer(tool, false) end)
@@ -337,8 +357,16 @@ local function shootSequence(tool, part)
 end
 
 task.spawn(function()
+    local lastStatus = 0
     while true do
         task.wait(0.1)
+        if os.clock() - lastStatus > 3 then
+            lastStatus = os.clock()
+            local tool = equippedGun()
+            local ks = #killers()
+            dbg(string.format("GUN team=%s tool=%s killers=%d target=%s", tostring(LP.Team and LP.Team.Name),
+                tool and tool.Name or "NONE", ks, tostring(bestTarget() ~= nil)))
+        end
         if CFG.gun.enabled and not Gun.busy and iAmSurvivor() then
             local tool = equippedGun()
             if tool then
@@ -451,7 +479,7 @@ local function runSkillCheck()
         end
 
         if not (needle and zone) then
-            warn("[DP] needle/zone skill check ga ketemu. Tekan F4 pas skill check muncul & kirim output console.")
+            dbg("needle/zone GA KETEMU - tap Dump GUI")
             Skill.active = false
             return
         end
@@ -482,8 +510,10 @@ local function hookSkillRemote(folderName)
         return RS.Remotes:WaitForChild(folderName, 10):WaitForChild("SkillCheckEvent", 10)
     end)
     if not ok or not ev then return end
+    dbg("hooked " .. folderName .. ".SkillCheckEvent")
     ev.OnClientEvent:Connect(function(...)
-        print("[DP] SkillCheckEvent", folderName, ...)
+        dbg("SkillCheckEvent " .. folderName .. " args=" .. select("#", ...))
+        for i, v in ipairs({ ... }) do dbg("  arg" .. i .. "=" .. tostring(v) .. " (" .. typeof(v) .. ")") end
         task.delay(0.25, function()
             if not Skill.dumped then
                 Skill.dumped = true
@@ -535,6 +565,12 @@ pcall(function()
     btn(1, "Parry", function() return CFG.parry.enabled end, function(v) CFG.parry.enabled = v end)
     btn(2, "Gun", function() return CFG.gun.enabled end, function(v) CFG.gun.enabled = v end)
     btn(3, "SkillChk", function() return CFG.skill.enabled end, function(v) CFG.skill.enabled = v end)
+    dbgLabel = Instance.new("TextLabel")
+    dbgLabel.Size = UDim2.new(0.6, 0, 0, 190); dbgLabel.Position = UDim2.new(0, 130, 1, -200)
+    dbgLabel.BackgroundColor3 = Color3.new(0, 0, 0); dbgLabel.BackgroundTransparency = 0.45
+    dbgLabel.TextColor3 = Color3.fromRGB(120, 255, 120); dbgLabel.TextSize = 11
+    dbgLabel.TextXAlignment = Enum.TextXAlignment.Left; dbgLabel.TextYAlignment = Enum.TextYAlignment.Bottom
+    dbgLabel.Font = Enum.Font.Code; dbgLabel.Text = "debug..."; dbgLabel.Parent = gui
     local d = Instance.new("TextButton")
     d.Size = UDim2.fromOffset(110, 30); d.Position = UDim2.new(0, 8, 0.25, 3 * 34)
     d.BackgroundColor3 = Color3.fromRGB(60, 30, 30); d.TextColor3 = Color3.new(1, 1, 1)
