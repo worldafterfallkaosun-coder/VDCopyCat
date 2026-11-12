@@ -1,5 +1,5 @@
 --[[
-    Distrik Pembantai v8  (PlaceId 93978595733734)  -  Delta / Luau
+    Distrik Pembantai v8.1  (PlaceId 93978595733734)  -  Delta / Luau
 
     Fitur
       1. Auto Parry        : Parrying Dagger, delay dipelajari otomatis (sama kayak v6)
@@ -10,6 +10,12 @@
       4. Auto Skill Check  : jarum + zona dari GUI, tekan di tengah zona, ada verifikasi + auto-unstick UI
 
     Kontrol : tombol bulat "DP" (geser bebas)  |  F1 parry  F2 snap  F3 skill  F4 panel  F5 trigger
+
+    v8.1
+      - AKAR "ga ada peluru": log() ke label GUI dipanggil dari dalam hook FireServer (thread game) -> thread game
+        mati sebelum remote kekirim. Efeknya tembakan ga pernah nyampe server, skill result juga ga nyampe (UI nyangkut).
+        Sekarang log() cuma nyimpen teks, label di-update dari loop executor.
+      - Balasan server dari remote Twist of Fate dicatat ("SERVER ...") buat diagnosa.
 
     v8 (perbaikan dari v7)
       - Gun: AIM LOCK balik (kamera nempel ke killer, cuma aktif selama kamu tahan aim, lepas langsung pas aim dilepas)
@@ -109,20 +115,21 @@ local function alive() return ENV.DP3_TOKEN == TOKEN end
 pcall(function() RunService:UnbindFromRenderStep("DP3_CamLock") end)   -- sisa v6 (kunci kamera)
 
 ------------------------------------------------------------------ LOG
-local LOG, logLabel = {}, nil
+local LOG, logLabel, logDirty, inHook = {}, nil, false, false
+-- PENTING: log() dipanggil juga dari dalam hook FireServer, yang jalan di thread GAME. Thread itu ga boleh nyentuh
+-- GUI executor (label di CoreGui/gethui) -> thread game mati dan tembakan/skill result ga pernah nyampe server.
+-- Jadi log() cuma nyimpen teks; label di-update dari loop executor (lihat buildUI).
 local function log(tag, msg)
     local line = string.format("[%.1f] %s %s", os.clock() % 1000, tag, tostring(msg))
     LOG[#LOG + 1] = line
     if #LOG > 120 then table.remove(LOG, 1) end
-    if logLabel then
-        logLabel.Text = table.concat(LOG, "\n", math.max(1, #LOG - 8), #LOG)
-    end
-    print("[DP3] " .. line)
+    logDirty = true
+    if not inHook then print("[DP3] " .. line) end
 end
 
 local function notify(msg)
     pcall(function()
-        StarterGui:SetCore("SendNotification", { Title = "DP v8", Text = msg, Duration = 2.5 })
+        StarterGui:SetCore("SendNotification", { Title = "DP v8.1", Text = msg, Duration = 2.5 })
     end)
     log("INFO", msg)
 end
@@ -472,12 +479,14 @@ local function hookBody(self, ...)
         if name and alive() then
             local n = select("#", ...)
             local args = { ... }
+            inHook = true
             if name == "gun.Fire" then pcall(onGunFire, args) end
             if name == "Generator.Result" or name == "Healing.Result"
                 or name == "Generator.Fail" or name == "Healing.Fail" then
                 pcall(SkillHook.judged, args, name)
             end
             pcall(logSpy, name, args, n)
+            inHook = false
             setnamecallmethod(method)
             return oldNC(self, table.unpack(args, 1, n))
         end
@@ -506,6 +515,21 @@ task.spawn(function()
         local tof = items:WaitForChild("Twist of Fate", 20)
         Gun.fire = tof:WaitForChild("Fire", 10)
         Spy[Gun.fire] = "gun.Fire"
+        local seen = 0
+        for _, ch in ipairs(tof:GetChildren()) do
+            if ch:IsA("RemoteEvent") then
+                ch.OnClientEvent:Connect(function(...)
+                    seen = seen + 1
+                    if seen > 60 then return end
+                    local parts = {}
+                    for i = 1, math.min(select("#", ...), 4) do
+                        local v = (select(i, ...))
+                        parts[#parts + 1] = typeof(v) .. "=" .. tostring(v)
+                    end
+                    log("SERVER " .. ch.Name, table.concat(parts, ", "))
+                end)
+            end
+        end
         local jm = tof:FindFirstChild("Jammed")
         if jm then
             jm.OnClientEvent:Connect(function(tool)
@@ -1776,7 +1800,13 @@ local function buildUI()
     task.spawn(function()
         while alive() and gui.Parent do
             task.wait(0.25)
-            if panel.Visible and statusLabel then statusLabel.Text = "gun: " .. tostring(Gun.status) end
+            if panel.Visible then
+                if statusLabel then statusLabel.Text = "gun: " .. tostring(Gun.status) end
+                if logDirty and logLabel then
+                    logDirty = false
+                    logLabel.Text = table.concat(LOG, "\n", math.max(1, #LOG - 8), #LOG)
+                end
+            end
         end
     end)
 end
@@ -1811,4 +1841,4 @@ UIS.InputBegan:Connect(function(i, gp)
     end
 end)
 
-notify("v8 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap tombol DP buat panel")
+notify("v8.1 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap tombol DP buat panel")
