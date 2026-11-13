@@ -1,5 +1,5 @@
 --[[
-    Distrik Pembantai v10.0  (PlaceId 93978595733734)  -  Delta / Luau
+    Distrik Pembantai v10.1  (PlaceId 93978595733734)  -  Delta / Luau
 
     Fitur
       1. Auto Parry        : Parrying Dagger, delay dipelajari otomatis (sama kayak v6)
@@ -11,6 +11,13 @@
       5. ESP               : outline badan + outline objek, bar progress/HP, teks bisa full/mini/off (F8, F10 = mode teks)
 
     Kontrol : tombol bulat "DP" (geser bebas)  |  F1 parry  F2 snap  F3 skill  F4 panel  F5 trigger  F8 esp
+
+    v10.1  (gun: charge lebih cepet + log buat diagnosa peluru 0.5)
+      - GUN: chargeMargin 0.12 -> 0.04. Game sendiri ngitung step pakai waktu persis tanpa margin, jadi tembakan
+        keluar ~0.08s lebih awal di tiap step. Kalau jadi sering macet / server nolak, naikin ke 0.08.
+      - GUN: log baru "aim mulai" (shots / tofHalf / tofRoll / tofState pas mulai bidik) dan detail yang sama pas tembakan keluar.
+        Buat ngecek: peluru 0.5 itu shots = 0 -> pakai tabel macet "habis" (80% / 65% / 50%), dan roll-nya kapan berubah.
+      - Yang ga berubah: auto fire tetap nahan kalau tofRoll bakal bikin macet (itu yang ngejaga gun ga ke-lock).
 
     v10.0  (audit penuh v9.1: bug, kebocoran, performa, akurasi skill check, belajar tersimpan)
       - KEBOCORAN: tiap reload, koneksi lama (Heartbeat, input, remote, animasi) cuma berhenti sendiri tapi tetap nyambung, dan hook
@@ -284,7 +291,7 @@ local CFG = {
         lead         = 0,         -- 0 = hitscan. 1 = tambah prediksi buat travel time peluru (jarak / bulletSpeed)
         bulletSpeed  = 800,
         needLOS      = true,      -- trigger cuma nembak kalau killer ga ketutup tembok
-        chargeMargin = 0.12,      -- detik, tambahan di atas waktu charge step (biar server ga nolak)
+        chargeMargin = 0.04,      -- detik, tambahan di atas waktu charge step (v10.1: 0.12 -> 0.04; naikin kalau sering macet)
         shotGap      = 0.6,       -- detik, jeda minimum antar tembakan trigger
         confirmWait  = 0.7,       -- detik, nunggu bukti tembakan kekirim
         originLag    = 0.035,     -- v9.1: detik, posisi kamu di server ketinggalan segini -> origin tembakan digeser mundur (belajar otomatis)
@@ -447,7 +454,7 @@ end
 
 local function notify(msg)
     pcall(function()
-        StarterGui:SetCore("SendNotification", { Title = "DP v10.0", Text = msg, Duration = 2.5 })
+        StarterGui:SetCore("SendNotification", { Title = "DP v10.1", Text = msg, Duration = 2.5 })
     end)
     log("INFO", msg)
 end
@@ -1809,6 +1816,9 @@ local function fireTrigger(tool, part)
             Gun.cycles = 0
             Gun.holdoff = os.clock() + CFG.gun.shotGap
             log("TRIG", "tembakan keluar (tier " .. tier .. ")")
+            log("GUN", string.format("setelah tembak | shots=%s half=%s roll=%s state=%s",
+                tostring(tool:GetAttribute("shots")), tostring(tool:GetAttribute("tofHalf")),
+                tostring(tool:GetAttribute("tofRoll")), tostring(tool:GetAttribute("tofState"))))
         else
             Gun.pending = nil
             Gun.holdoff = os.clock() + 0.7
@@ -1830,7 +1840,14 @@ end
 local function gunStep()
     local tool = equippedGun()
     local aiming = tool ~= nil and aimingNow()
-    if aiming and not Gun.wasAiming then Gun.chargeStart = os.clock() end
+    if aiming and not Gun.wasAiming then
+        Gun.chargeStart = os.clock()
+        if tool then
+            log("GUN", string.format("aim mulai | shots=%s half=%s roll=%s state=%s",
+                tostring(tool:GetAttribute("shots")), tostring(tool:GetAttribute("tofHalf")),
+                tostring(tool:GetAttribute("tofRoll")), tostring(tool:GetAttribute("tofState"))))
+        end
+    end
     Gun.wasAiming = aiming
 
     if not tool then Gun.status = "gun ga dipegang"; return end
