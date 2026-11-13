@@ -1,5 +1,5 @@
 --[[
-    Distrik Pembantai v9.0  (PlaceId 93978595733734)  -  Delta / Luau
+    Distrik Pembantai v9.1  (PlaceId 93978595733734)  -  Delta / Luau
 
     Fitur
       1. Auto Parry        : Parrying Dagger, delay dipelajari otomatis (sama kayak v6)
@@ -11,6 +11,27 @@
       5. ESP               : outline badan + outline objek, bar progress/HP, teks bisa full/mini/off (F8, F10 = mode teks)
 
     Kontrol : tombol bulat "DP" (geser bebas)  |  F1 parry  F2 snap  F3 skill  F4 panel  F5 trigger  F8 esp
+
+    v9.1  (perbaikan dari v9.0: cincin + garis jangkauan killer, tanpa dagger, gun belajar dari tembakannya sendiri)
+      - CINCIN + GARIS HIT KILLER (sesuai gambar referensi): lingkaran di tanah ngelilingin kamu = jangkauan kamu kena hit = jangkauan
+        parry (satu angka: CFG.parry.range). Dari tiap killer keluar DUA garis putih ke depan (tepi kerucut serang, CFG.ring.coneDeg)
+        sepanjang jangkauan itu, plus garis tipis killer -> kamu kalau udah deket. Kamu masuk kerucut + jangkauan = garis jadi merah.
+        Cincin dan garis muncul TANPA harus pegang dagger (v9.0 nyembunyiin cincin kalau ga punya dagger). Tombol Ring / Cone / Range.
+        Jangkauan belajar sendiri: tiap kamu kena hit, jarak killer terdekat dicatat, range naik kalau killer ternyata kena dari lebih jauh.
+      - GUN, akar tembakan meleset (dari kode game): game cuma ngirim ARAH + tool ke server (Fire: tool, arah, step), server yang nentuin
+        titik tembak dan casting-nya (Blockcast 0.5 stud, nembus survivor / part transparan). Jadi meleset datang dari 4 hal:
+          1) toleransi auto-fire v9.0 kelonggaran (sampai 4 derajat = 2-3 stud di jarak 40). Sekarang dalam STUD (fireStuds 0.6).
+          2) titik tembak server ga sama sama titik tembak kamu pas KAMU lagi gerak (posisi kamu di server ketinggalan). Sekarang
+             origin dikoreksi pakai kecepatan kamu (originLag 0.035s) dan dipelajari otomatis dari balasan server.
+          3) cek halangan pakai Raycast tipis, sedangkan game pakai Blockcast 0.5 -> tembakan kena sudut tembok. Sekarang cek pakai
+             Blockcast yang sama + nembus part transparan kayak game.
+          4) killer gerak: prediksi pakai kecepatan yang berubah-ubah. Sekarang auto-fire nunggu killer \"lurus\" (arah + kecepatan stabil
+             0.4s terakhir, nunggu maksimal steadyWait 0.9s), titik bidik pindah ke HumanoidRootPart (+0.3), dan lead dipelajari.
+      - GUN BELAJAR: server nyiarin garis peluru (VisualizeBullet: origin, titik akhir). Dari situ script tahu tembakannya kena atau
+        meleset berapa stud (kanan / atas), lalu: killer gerak -> lead dikoreksi (leadAdj), killer diem tapi meleset -> bias arah
+        dikoreksi, kamu gerak -> originLag dikoreksi. Tiap tembakan nyatet baris \"TEMBAK ... hit X/Y\" di log, ada hit rate di panel.
+        Kalau server ga nyiarin ke penembak, baris itu ga akan muncul (aman, cuma belajarnya yang mati). Tombol Learn / Steady.
+      - Config: range 16 -> 12 (default, naik sendiri kalau kena hit dari lebih jauh), fireTol 4 -> 2.5, leadMax 0.5 -> 0.7.
 
     v9.0  (perbaikan dari v8.9: generator ESP masih ga keliatan + parry/gun dimaksimalin + cincin kayak di video)
       - ESP GENERATOR, akar: v8.9 cuma nyari di SATU tempat (Workspace.Map.newGenerators, harus Model). Kalau di map yang lagi
@@ -197,7 +218,7 @@ local CFG = {
     parry = {
         enabled      = true,
         via          = "game",     -- "game" (manggil ParryClient asli: animasi + cooldown UI ikut) | "input" | "remote" (tanpa animasi)
-        range        = 16,
+        range        = 12,
         frontDot     = 0.15,
         hitGuess     = 0.16,       -- detik: tebakan "animasi mulai -> kena" buat animasi yang belum pernah kena kamu
         arriveLead   = 0.16,       -- detik: parry harus nyampe server segini SEBELUM kena (ping & fps dihitung otomatis)
@@ -224,22 +245,31 @@ local CFG = {
         aimLock      = true,      -- kamera otomatis nempel ke killer pas kamu tahan aim
         lockFov      = 90,        -- derajat dari arah kamera: killer di luar sudut ini ga di-lock (180 = semua arah)
         lockSmooth   = 0.85,      -- 1 = keras (langsung nempel), makin kecil makin halus
-        fireTol      = 4,         -- derajat MAKS: kamera harus segini dekat ke target baru auto-fire (ngecil sendiri kalau killer jauh)
+        fireStuds    = 0.6,       -- v9.1: toleransi auto-fire dalam STUD (dijadiin sudut sesuai jarak). v9.0 pakai sudut doang = kelonggaran
+        fireTol      = 2.5,       -- derajat MAKS: kamera harus segini dekat ke target baru auto-fire (ngecil sendiri kalau killer jauh)
         leadPing     = 1.0,       -- x ping: tembak ke posisi killer di depan (kompensasi lag). 0 = mati. 1 = ping penuh (RTT)
         leadBase     = 0.1,       -- detik: tambahan tetap di atas leadPing (interpolasi pemain lain ~0.1s)
-        leadMax      = 0.5,       -- detik: batas atas total waktu prediksi
+        leadMax      = 0.7,       -- detik: batas atas total waktu prediksi
         autoTravel   = true,      -- true = kalau di tuning game ada kecepatan peluru, dipakai buat waktu tempuh (lead = 1)
         fireStep     = 0,         -- 0 = auto (step tercepat yang aman dari macet). 3 = selalu charge penuh. 1/2 = paksa step itu
         hitRadius    = 2.8,       -- stud: jarak peluru-ke-badan yang dianggap "aim pas" (makin gede makin longgar)
         snapFov      = 8,         -- derajat: batas belok buat tembakan manual (snap)
         maxDist      = 220,
-        aimPart      = "UpperTorso",
+        aimPart      = "HumanoidRootPart",   -- v9.1: titik paling stabil (posisi yang direplikasi server)
+        aimYOffset   = 0.3,       -- v9.1: stud di atas HumanoidRootPart (pusat badan)
         lead         = 0,         -- 0 = hitscan. 1 = tambah prediksi buat travel time peluru (jarak / bulletSpeed)
         bulletSpeed  = 800,
         needLOS      = true,      -- trigger cuma nembak kalau killer ga ketutup tembok
         chargeMargin = 0.12,      -- detik, tambahan di atas waktu charge step (biar server ga nolak)
         shotGap      = 0.6,       -- detik, jeda minimum antar tembakan trigger
         confirmWait  = 0.7,       -- detik, nunggu bukti tembakan kekirim
+        originLag    = 0.035,     -- v9.1: detik, posisi kamu di server ketinggalan segini -> origin tembakan digeser mundur (belajar otomatis)
+        steady       = true,      -- v9.1: auto-fire nunggu killer lurus (arah + kecepatan stabil) sebelum nembak
+        steadyAng    = 25,        -- derajat: perubahan arah gerak killer 0.4s terakhir yang masih dianggap lurus
+        steadyAcc    = 0.35,      -- perubahan kecepatan (fraksi) yang masih dianggap stabil
+        steadyWait   = 0.9,       -- detik: maksimal nunggu killer lurus, habis itu tembak aja
+        learn        = true,      -- v9.1: koreksi lead / bias arah / originLag dari balasan server (VisualizeBullet)
+        evalDelay    = 0.1,       -- detik: nunggu interpolasi sebelum posisi killer dibandingin sama garis peluru
     },
 
     skill = {
@@ -293,14 +323,18 @@ local CFG = {
         genBodyScan = true,       -- v9.0: false = matiin jalur cadangan GeneratorBody
     },
 
-    ring = {                      -- v9.0: cincin jangkauan parry di tanah (kayak video referensi)
+    ring = {                      -- v9.1: cincin jangkauan hit/parry + garis jangkauan hit killer
         enabled   = true,
+        cone      = true,         -- garis putih tepi kerucut serang dari tiap killer
+        coneDeg   = 40,           -- derajat: setengah lebar kerucut serang killer (cuma visual; parry pakai frontDot)
+        learnRange = true,        -- range naik sendiri kalau kamu kena hit dari killer yang lebih jauh dari range
         thickness = 0.45,         -- stud, tebal cincin
-        onTop     = false,        -- true = cincin tembus tembok / objek
-        ready     = Color3.fromRGB(70, 235, 235),    -- teal: parry siap
-        cooldown  = Color3.fromRGB(120, 135, 145),   -- abu: cooldown / lagi nahan
+        onTop     = false,        -- true = cincin / garis tembus tembok & objek
+        ready     = Color3.fromRGB(70, 235, 235),    -- teal: parry siap / ga ada dagger
+        cooldown  = Color3.fromRGB(120, 135, 145),   -- abu: parry cooldown / lagi nahan
         inRange   = Color3.fromRGB(235, 255, 255),   -- putih: killer di dalam cincin, parry siap
-        danger    = Color3.fromRGB(255, 150, 50),    -- oranye: killer di dalam cincin, parry belum siap
+        danger    = Color3.fromRGB(255, 80, 60),     -- merah: killer di dalam cincin & parry belum siap / kamu di dalam kerucut
+        coneCol   = Color3.fromRGB(255, 255, 255),   -- warna garis killer
     },
 }
 
@@ -365,7 +399,7 @@ end
 
 local function notify(msg)
     pcall(function()
-        StarterGui:SetCore("SendNotification", { Title = "DP v9.0", Text = msg, Duration = 2.5 })
+        StarterGui:SetCore("SendNotification", { Title = "DP v9.1", Text = msg, Duration = 2.5 })
     end)
     log("INFO", msg)
 end
@@ -576,6 +610,7 @@ local Gun = {
     tierIdx = 1, tierGood = {}, failStreak = 0, cycles = 0, pauseUntil = 0,
     lockUntil = 0, status = "-", lastWhy = 0, lastWhyText = "",
     lockTarget = nil, lockAng = 180, template = nil, templateN = 0, selfFire = false,
+    leadAdj = 0, biasR = 0, biasU = 0, steadyAt = 0, shots = 0, hits = 0, last = nil,   -- v9.1
 }
 local SkillHook = { judged = function() end }   -- diisi di bagian skill check
 
@@ -608,8 +643,19 @@ local function muzzleOrigin()
     local ok, res = pcall(function()
         return workspace:Blockcast(CFrame.new(a, b), Vector3.new(0.5, 0.5, 0.5), d, rayP)
     end)
-    if ok and res then return res.Position - d.Unit * 0.5 end
-    return b
+    local pos = b
+    if ok and res then pos = res.Position - d.Unit * 0.5 end
+    -- v9.1: posisi kamu di SERVER ketinggalan dari posisi di layar kamu (replikasi). Kalau lagi gerak, titik tembak server
+    -- ada di belakang titik tembak lokal -> geser origin mundur sejauh kecepatan x originLag (dipelajari dari VisualizeBullet).
+    local lag = CFG.gun.originLag
+    if lag and lag > 0 then
+        local v = Vector3.new(0, 0, 0)
+        pcall(function() v = root.AssemblyLinearVelocity end)
+        v = Vector3.new(v.X, 0, v.Z)
+        if v.Magnitude > 60 then v = v.Unit * 60 end
+        pos = pos - v * lag
+    end
+    return pos
 end
 
 -- survivor lain ditembus peluru (lihat aimPoint/survivorOf di game), jadi ga dianggap penghalang
@@ -620,8 +666,31 @@ local function visibleFrom(origin, part)
             ign[#ign + 1] = p.Character
         end
     end
-    rayP.FilterDescendantsInstances = ign
-    return workspace:Raycast(origin, part.Position - origin, rayP) == nil
+    -- v9.1: sama kayak piercingBlockcast game (Blockcast 0.5 stud, nembus part transparan selain HumanoidRootPart + aksesori).
+    -- Raycast tipis v9.0 bilang "keliatan" padahal Blockcast game nyangkut di sudut tembok -> peluru kena tembok.
+    local o, dir = origin, part.Position - origin
+    local left = dir.Magnitude
+    if left < 0.5 then return true end
+    for _ = 1, 8 do
+        rayP.FilterDescendantsInstances = ign
+        local okc, res = pcall(function()
+            return workspace:Blockcast(CFrame.new(o, o + dir), Vector3.new(0.5, 0.5, 0.5), dir, rayP)
+        end)
+        if not okc then res = workspace:Raycast(o, dir, rayP) end
+        if not res then return true end
+        local inst = res.Instance
+        local pierce = (inst.Transparency > 0.01 and inst.Name ~= "HumanoidRootPart")
+            or inst:FindFirstAncestorWhichIsA("Accessory") ~= nil
+        if not pierce then return false end
+        ign[#ign + 1] = inst
+        local adv = (res.Distance or 0) + 0.05
+        left = left - adv
+        if left <= 0.3 then return true end
+        local u = dir.Unit
+        o = o + u * adv
+        dir = u * left
+    end
+    return false
 end
 
 -- v8.8: PREDIKSI GERAK. Kecepatan killer dihitung sendiri dari perpindahan posisi per frame (EMA, tahan lag spike).
@@ -647,6 +716,13 @@ RunService.Heartbeat:Connect(function()
                 end
                 tr.pos, tr.t = pos, now
                 tr.grounded = k.hum.FloorMaterial ~= Enum.Material.Air
+                local h = tr.hist
+                if not h then
+                    h = {}
+                    tr.hist = h
+                end
+                h[#h + 1] = { t = now, v = tr.vel }
+                while #h > 0 and now - h[1].t > 0.4 do table.remove(h, 1) end
             end
         end
     end
@@ -655,20 +731,35 @@ RunService.Heartbeat:Connect(function()
     end
 end)
 
+-- v9.1: killer lagi lurus? (arah + kecepatan gerak stabil dalam ~0.4s terakhir). Prediksi cuma bisa akurat kalau iya.
+function Gun.steady(char)
+    local tr = Track[char]
+    if not tr or not tr.hist or #tr.hist < 4 then return true end
+    local old, cur = tr.hist[1].v, tr.vel
+    local a, b = Vector3.new(old.X, 0, old.Z), Vector3.new(cur.X, 0, cur.Z)
+    local sa, sb = a.Magnitude, b.Magnitude
+    if sa < 2 and sb < 2 then return true end
+    if math.abs(sa - sb) > CFG.gun.steadyAcc * math.max(sa, sb, 6) then return false end
+    if sa < 2 or sb < 2 then return false end
+    local ang = math.deg(math.acos(math.clamp(a.Unit:Dot(b.Unit), -1, 1)))
+    return ang <= CFG.gun.steadyAng
+end
+
 local function leadTime(dist)
     local G = CFG.gun
     local t = 0
-    if G.leadPing > 0 then t = t + Net.rtt * G.leadPing + G.leadBase end
+    if G.leadPing > 0 then t = t + Net.rtt * G.leadPing + G.leadBase + Gun.leadAdj end
     if G.lead > 0 and G.bulletSpeed > 0 then t = t + (dist / G.bulletSpeed) * G.lead end
     return math.clamp(t, 0, G.leadMax)
 end
 
 local function predictPos(part, origin)
     local pos = part.Position
+    if part.Name == "HumanoidRootPart" then pos = pos + Vector3.new(0, CFG.gun.aimYOffset or 0, 0) end   -- v9.1: pusat badan
     local tr = Track[part.Parent]
     if not tr then return pos end
     local G = CFG.gun
-    local base = (G.leadPing > 0) and (Net.rtt * G.leadPing + G.leadBase) or 0
+    local base = (G.leadPing > 0) and (Net.rtt * G.leadPing + G.leadBase + Gun.leadAdj) or 0
     if base <= 0 and G.lead <= 0 then return pos end
     local v = tr.vel
     if tr.grounded then v = Vector3.new(v.X, 0, v.Z) end      -- lagi napak tanah: ga usah nebak naik/turun
@@ -694,7 +785,17 @@ local function dirTo(origin, part)
     local pos = predictPos(part, origin)
     local d = pos - origin
     if d.Magnitude < 0.01 then return nil end
-    return d.Unit
+    local u = d.Unit
+    -- v9.1: bias arah yang dipelajari dari tembakan diam yang lewat di sebelah killer
+    local bR, bU = Gun.biasR or 0, Gun.biasU or 0
+    if (bR ~= 0 or bU ~= 0) and CFG.gun.learn then
+        local r = u:Cross(Vector3.yAxis)
+        if r.Magnitude > 1e-3 then
+            r = r.Unit
+            u = (u + r * bR + r:Cross(u) * bU).Unit
+        end
+    end
+    return u
 end
 
 -- dipanggil dari hook pas game ngirim gun.Fire. orig = arah bidikan asli game
@@ -710,6 +811,7 @@ local function snapDir(orig, originArg)
         local nd = dirTo(origin, p)
         if nd then
             log("HIT", string.format("kunci ke %s (%.0f stud) %s", p.Parent.Name, (p.Position - origin).Magnitude, leadInfo(p, origin)))
+            if Gun.rec then Gun.rec(p, origin, nd) end
             return nd
         end
     end
@@ -720,6 +822,7 @@ local function snapDir(orig, originArg)
         local nd = dirTo(origin, lt)
         if nd then
             log("HIT", string.format("lock -> %s (%.0f stud) %s", lt.Parent.Name, (lt.Position - origin).Magnitude, leadInfo(lt, origin)))
+            if Gun.rec then Gun.rec(lt, origin, nd) end
             return nd
         end
     end
@@ -744,6 +847,7 @@ local function snapDir(orig, originArg)
     if not best then return nil end
     local nd = dirTo(origin, best)
     if nd then log("HIT", string.format("snap %.1f deg -> %s (%.0f stud) %s", bestAng, best.Parent.Name, bestDist, leadInfo(best, origin))) end
+    if nd and Gun.rec then Gun.rec(best, origin, nd) end
     return nd
 end
 
@@ -1604,7 +1708,7 @@ local function fireTolFor(part)
     local cam = workspace.CurrentCamera
     local dist = cam and (part.Position - cam.CFrame.Position).Magnitude or 0
     if dist < 1 then return CFG.gun.fireTol end
-    return math.clamp(math.deg(math.atan(CFG.gun.hitRadius / dist)), 1, CFG.gun.fireTol)
+    return math.clamp(math.deg(math.atan(CFG.gun.fireStuds / dist)), 0.4, CFG.gun.fireTol)
 end
 
 local function gunStep()
@@ -1661,6 +1765,19 @@ local function gunStep()
         Gun.status = CFG.gun.aimLock and "siap - nunggu killer masuk jangkauan lock" or "siap - arahkan crosshair ke killer"
         return
     end
+    -- v9.1: nunggu killer lurus (arah + kecepatan stabil) biar prediksi lead akurat; maksimal steadyWait detik
+    if CFG.gun.steady and part.Parent then
+        if Gun.steady(part.Parent) then
+            Gun.steadyAt = 0
+        else
+            if Gun.steadyAt == 0 then Gun.steadyAt = now end
+            if now - Gun.steadyAt < CFG.gun.steadyWait then
+                Gun.status = "nunggu gerak killer lurus"
+                return
+            end
+        end
+    end
+    Gun.steadyAt = 0
     Gun.status = string.format("step %d | target kena -> tembak", r)
     fireTrigger(tool, part)
 end
@@ -1680,6 +1797,107 @@ task.spawn(function()
         end
     end
 end)
+
+------------------------------------------------------------------ 2a) GUN BELAJAR (v9.1)
+-- Server nyiarin garis peluru lewat Remotes.Items["Twist of Fate"].VisualizeBullet(origin, titikAkhir, speed, nama, tool).
+-- Dari origin + titik akhir itu script tahu tembakannya kena atau meleset berapa stud, lalu mengoreksi sendiri:
+--   killer gerak       -> leadAdj (lead tambahan / kurangan, detik)
+--   killer diem, lewat -> biasR / biasU (koreksi arah kecil)
+--   kamu gerak         -> originLag (posisi kamu di server ketinggalan berapa detik)
+-- Kalau server ga ngirim ke penembak, listener ini diem (aman). Bungkus do...end biar ga nambah local di chunk utama.
+do
+    local function flat(v) return Vector3.new(v.X, 0, v.Z) end
+
+    function Gun.rec(part, origin, nd)
+        local tr = Track[part.Parent]
+        local my = Vector3.new(0, 0, 0)
+        local r = myRoot()
+        if r then pcall(function() my = r.AssemblyLinearVelocity end) end
+        Gun.last = {
+            t = os.clock(), part = part, origin = origin, dir = nd, pred = predictPos(part, origin),
+            vel = tr and flat(tr.vel) or Vector3.new(0, 0, 0), my = flat(my), done = false,
+        }
+    end
+
+    local function evalShot(s, o, e)
+        local part = s.part
+        if not (part and part.Parent) then return end
+        local actual = part.Position
+        if part.Name == "HumanoidRootPart" then actual = actual + Vector3.new(0, CFG.gun.aimYOffset or 0, 0) end
+        local d = e - o
+        local len = d.Magnitude
+        if len < 1 then return end
+        local u = d.Unit
+        local t = (actual - o):Dot(u)
+        local closest = o + u * math.clamp(t, 0, len)
+        local m = actual - closest
+        local dist = (actual - o).Magnitude
+        local hit = (e - actual).Magnitude <= 3.0
+        Gun.shots = Gun.shots + 1
+        if hit then Gun.hits = Gun.hits + 1 end
+
+        local r = u:Cross(Vector3.yAxis)
+        local mr, mu = 0, 0
+        if r.Magnitude > 1e-3 then
+            r = r.Unit
+            mr, mu = m:Dot(r), m:Dot(r:Cross(u))
+        end
+        local spd, mySpd = s.vel.Magnitude, s.my.Magnitude
+        local note = ""
+
+        if CFG.gun.learn then
+            if spd >= 5 then
+                local resid = Vector3.new(actual.X - s.pred.X, 0, actual.Z - s.pred.Z)
+                local along = resid:Dot(s.vel.Unit)
+                if math.abs(along) <= 8 then
+                    Gun.leadAdj = math.clamp(Gun.leadAdj + 0.3 * (along / spd), -0.12, 0.3)
+                    note = string.format(" | lead %+.0f ms", Gun.leadAdj * 1000)
+                end
+            elseif spd < 1.5 and not hit and mySpd < 3 and dist >= 8
+                and len >= t - 0.5 and m.Magnitude >= 0.7 and m.Magnitude <= 4 and r.Magnitude > 0.5 then
+                Gun.biasR = math.clamp(Gun.biasR + 0.35 * (mr / dist), -0.06, 0.06)
+                Gun.biasU = math.clamp(Gun.biasU + 0.35 * (mu / dist), -0.06, 0.06)
+                note = string.format(" | bias %+.3f %+.3f", Gun.biasR, Gun.biasU)
+            end
+            -- origin server vs origin lokal (kita udah geser pakai originLag): selisih sepanjang arah gerak kamu = sisa lag
+            if mySpd >= 6 then
+                local diff = flat(s.origin - s.origin) -- placeholder biar tipe jelas
+                diff = flat(s.origin - o)
+                local along = diff:Dot(s.my.Unit)
+                if math.abs(along) <= 3 then
+                    CFG.gun.originLag = math.clamp((CFG.gun.originLag or 0) + 0.3 * (along / mySpd), 0, 0.15)
+                    note = note .. string.format(" | originLag %.0f ms", CFG.gun.originLag * 1000)
+                end
+            end
+        end
+
+        log("TEMBAK", string.format("%s | %.0f stud | killer %.0f st/s | meleset %.1f (kanan %+.1f atas %+.1f)%s | hit %d/%d",
+            hit and "KENA" or "MELESET", dist, spd, m.Magnitude, mr, mu, note, Gun.hits, Gun.shots))
+    end
+
+    task.spawn(function()
+        local ev
+        pcall(function()
+            ev = RS:WaitForChild("Remotes", 30):WaitForChild("Items", 30)
+                :WaitForChild("Twist of Fate", 30):WaitForChild("VisualizeBullet", 30)
+        end)
+        if not ev or not alive() then return end
+        ev.OnClientEvent:Connect(function(o, e, _, _, tool)
+            if not alive() then return end
+            local c = myChar()
+            if not (c and typeof(tool) == "Instance" and (tool:IsDescendantOf(c) or tool:IsDescendantOf(LP))) then return end
+            if typeof(o) ~= "Vector3" or typeof(e) ~= "Vector3" then return end
+            local s = Gun.last
+            if not s or s.done or os.clock() - s.t > 2.5 then return end
+            s.done = true
+            task.delay(CFG.gun.evalDelay or 0.1, function()
+                if not alive() then return end
+                local ok, err = pcall(evalShot, s, o, e)
+                if not ok then log("TEMBAK", "error: " .. tostring(err)) end
+            end)
+        end)
+    end)
+end
 
 ------------------------------------------------------------------ 2b) AIM LOCK (kamera nempel ke killer, cuma pas aim)
 local function blockedByAction(c)
@@ -3275,36 +3493,43 @@ task.spawn(function()
     espClear()
 end)
 
------------------------------------------------------------------- 5) CINCIN PARRY (v9.0)
--- Cincin di tanah ngelilingin kamu = jangkauan auto parry (CFG.parry.range). Murni visual client:
--- CylinderHandleAdornment di folder gethui/CoreGui, ga ada objek game yang disentuh dan ga ada remote.
+------------------------------------------------------------------ 5) CINCIN + GARIS HIT KILLER (v9.1)
+-- Cincin di tanah ngelilingin kamu = jangkauan kamu kena hit = jangkauan parry (CFG.parry.range, satu angka).
+-- Dari tiap killer keluar dua garis putih ke depan (tepi kerucut serang) sepanjang jangkauan itu, plus garis killer -> kamu kalau deket.
+-- Kamu masuk kerucut + jangkauan = garis jadi merah. Muncul tanpa harus pegang dagger.
+-- Murni visual client (CylinderHandleAdornment / BoxHandleAdornment di folder gethui/CoreGui), ga ada objek game yang disentuh.
 -- Dibungkus do...end biar ga nambah variabel local di chunk utama.
 do
-    local R = { adorn = nil, folder = nil }
+    local R = { folder = nil, ring = nil, killers = {}, lastHum = nil, lastHp = 0, readyAt = -10, ready = true }
+    local FLAT = 0.06
 
-    local function ringDrop()
-        if R.adorn then pcall(function() R.adorn:Destroy() end) end
+    local function dropAll()
         if R.folder then pcall(function() R.folder:Destroy() end) end
-        R.adorn, R.folder = nil, nil
+        R.folder, R.ring, R.killers = nil, nil, {}
         ENV.DP3_RINGFOLDER = nil
     end
 
-    local function ringMake()
+    local function ensureFolder()
+        if R.folder and R.folder.Parent then return R.folder end
+        dropAll()
         local parent
         pcall(function() parent = (gethui and gethui()) or game:GetService("CoreGui") end)
         if not parent then parent = LP:FindFirstChildOfClass("PlayerGui") end
-        if not parent then return false end
+        if not parent then return nil end
         local f = Instance.new("Folder")
         f.Name = "DP3_RING"
         f.Parent = parent
-        local a = Instance.new("CylinderHandleAdornment")
-        a.Name = "parry_ring"
-        a.Height = 0.06
-        a.ZIndex = 1
-        a.Parent = f
-        R.folder, R.adorn = f, a
+        R.folder = f
         ENV.DP3_RINGFOLDER = f
-        return true
+        return f
+    end
+
+    local function newBox(f)
+        local bx = Instance.new("BoxHandleAdornment")
+        bx.Name = "ln"
+        bx.ZIndex = 1
+        bx.Parent = f
+        return bx
     end
 
     do   -- sisa instance sebelumnya (reload)
@@ -3315,53 +3540,134 @@ do
     task.spawn(function()
         local errAt = 0
         while alive() do
-            task.wait(0.1)
+            RunService.RenderStepped:Wait()
             local ok, err = pcall(function()
                 local C = CFG.ring
                 local me, hum = myRoot(), myHum()
-                local dagger = (C.enabled and CFG.parry.enabled) and findDagger() or nil
-                if not (C.enabled and dagger and me and hum and hum.Health > 0 and amSurvivor()) then
-                    if R.adorn then ringDrop() end
+                if not (C.enabled and me and hum and hum.Health > 0 and amSurvivor()) then
+                    if R.folder then dropAll() end
+                    R.lastHum = nil
                     return
                 end
-                if not (R.adorn and R.adorn.Parent) then
-                    if R.adorn or R.folder then ringDrop() end
-                    if not ringMake() then return end
-                end
-                local a = R.adorn
+                local f = ensureFolder()
+                if not f then return end
                 local now = os.clock()
-                local range = CFG.parry.range
 
-                local near = false
-                for _, k in ipairs(killers()) do
-                    if (k.root.Position - me.Position).Magnitude <= range then
-                        near = true
-                        break
+                -- belajar jangkauan: kena hit -> jarak killer terdekat (<= 20 stud) dicatat, range naik kalau perlu
+                if R.lastHum ~= hum then R.lastHum, R.lastHp = hum, hum.Health end
+                if C.learnRange and hum.Health < R.lastHp - 0.9 then
+                    local best
+                    for _, k in ipairs(killers()) do
+                        local d = (k.root.Position - me.Position).Magnitude
+                        if not best or d < best then best = d end
+                    end
+                    if best and best <= 20 and best + 1.5 > CFG.parry.range then
+                        CFG.parry.range = math.clamp(best + 1.5, 8, 22)
+                        log("RING", string.format("kena hit dari %.1f stud -> range %.1f", best, CFG.parry.range))
                     end
                 end
-                local okR, ready = pcall(parryReady, now)
-                ready = okR and ready == true
+                R.lastHp = hum.Health
 
-                local col
-                if near then col = ready and C.inRange or C.danger
-                else col = ready and C.ready or C.cooldown end
-                local pulse = 0.5 + 0.5 * math.sin(now * (near and 8 or 3))
-
+                local range = CFG.parry.range
                 local drop = (hum.HipHeight > 0 and hum.HipHeight or 2) + me.Size.Y / 2 - 0.08
-                a.Adornee = me
-                a.Radius = range
-                a.InnerRadius = math.clamp(range - C.thickness, 0.1, range - 0.05)
-                a.CFrame = CFrame.new(0, -drop, 0) * CFrame.Angles(math.rad(90), 0, 0)
-                a.Color3 = col
-                a.AlwaysOnTop = C.onTop == true
-                a.Transparency = near and (0.1 + 0.15 * pulse) or (0.38 + 0.12 * pulse)
+                local onTop = C.onTop == true
+
+                -- killer: dua garis tepi kerucut + garis penghubung
+                local near = false
+                local seen = {}
+                for _, k in ipairs(killers()) do
+                    local dist = (k.root.Position - me.Position).Magnitude
+                    local rel = k.root.CFrame:PointToObjectSpace(me.Position)
+                    local fwd, lat = -rel.Z, rel.X
+                    local inRange = dist <= range
+                    local inCone = inRange and fwd > 0 and math.deg(math.atan2(math.abs(lat), fwd)) <= C.coneDeg
+                    if inRange then near = true end
+                    if C.cone and dist <= range * 3 then
+                        seen[k.char] = true
+                        local set = R.killers[k.char]
+                        if not set then
+                            set = { newBox(f), newBox(f), newBox(f) }
+                            R.killers[k.char] = set
+                        end
+                        local kdrop = (k.hum.HipHeight > 0 and k.hum.HipHeight or 2) + k.root.Size.Y / 2 - 0.08
+                        local col = inCone and C.danger or C.coneCol
+                        local tr = inCone and 0.05 or 0.25
+                        local th = inCone and 0.5 or 0.32
+                        local ang = math.rad(C.coneDeg)
+                        for i = 1, 2 do
+                            local sgn = (i == 1) and -1 or 1
+                            local d = Vector3.new(sgn * math.sin(ang), 0, -math.cos(ang))
+                            local c = d * (range / 2) + Vector3.new(0, -kdrop, 0)
+                            local bx = set[i]
+                            bx.Adornee = k.root
+                            bx.Size = Vector3.new(th, FLAT, range)
+                            bx.CFrame = CFrame.lookAt(c, c + d)
+                            bx.Color3, bx.Transparency, bx.AlwaysOnTop = col, tr, onTop
+                            bx.Visible = true
+                        end
+                        local lk = set[3]
+                        if dist <= range * 1.8 then
+                            local p1 = k.root.Position - Vector3.new(0, kdrop, 0)
+                            local p2 = me.Position - Vector3.new(0, drop, 0)
+                            local len = (p2 - p1).Magnitude
+                            if len > 0.5 then
+                                lk.Adornee = me
+                                lk.Size = Vector3.new(0.2, FLAT, len)
+                                lk.CFrame = me.CFrame:ToObjectSpace(CFrame.lookAt((p1 + p2) / 2, p2))
+                                lk.Color3, lk.Transparency, lk.AlwaysOnTop = col, inCone and 0.1 or 0.4, onTop
+                                lk.Visible = true
+                            else
+                                lk.Visible = false
+                            end
+                        else
+                            lk.Visible = false
+                        end
+                    end
+                end
+                for ch, set in pairs(R.killers) do
+                    if not seen[ch] then
+                        for _, bx in ipairs(set) do pcall(function() bx:Destroy() end) end
+                        R.killers[ch] = nil
+                    end
+                end
+
+                -- cincin kamu: siap / cooldown dibaca 10x per detik (ga perlu tiap frame)
+                if now - R.readyAt >= 0.1 then
+                    R.readyAt = now
+                    if findDagger() ~= nil then
+                        local okR, rd = pcall(parryReady, now)
+                        R.ready = okR and rd == true
+                    else
+                        R.ready = true   -- ga punya dagger: cincin tetap tampil (teal)
+                    end
+                end
+                local ring = R.ring
+                if not (ring and ring.Parent) then
+                    ring = Instance.new("CylinderHandleAdornment")
+                    ring.Name = "ring"
+                    ring.Height = FLAT
+                    ring.ZIndex = 1
+                    ring.Parent = f
+                    R.ring = ring
+                end
+                local col
+                if near then col = R.ready and C.inRange or C.danger
+                else col = R.ready and C.ready or C.cooldown end
+                local pulse = 0.5 + 0.5 * math.sin(now * (near and 8 or 3))
+                ring.Adornee = me
+                ring.Radius = range
+                ring.InnerRadius = math.clamp(range - C.thickness, 0.1, range - 0.05)
+                ring.CFrame = CFrame.new(0, -drop, 0) * CFrame.Angles(math.rad(90), 0, 0)
+                ring.Color3 = col
+                ring.AlwaysOnTop = onTop
+                ring.Transparency = near and (0.1 + 0.15 * pulse) or (0.38 + 0.12 * pulse)
             end)
             if not ok and os.clock() - errAt > 5 then
                 errAt = os.clock()
                 log("RING", "error: " .. tostring(err))
             end
         end
-        ringDrop()
+        dropAll()
     end)
 end
 
@@ -3396,7 +3702,7 @@ local function buildUI()
     panel = Instance.new("Frame")
     panel.Size = UDim2.fromOffset(238, 0)
     panel.AutomaticSize = Enum.AutomaticSize.Y
-    panel.Position = UDim2.new(0, 60, 0.5, -280)
+    panel.Position = UDim2.new(0, 60, 0.5, -300)
     panel.BackgroundColor3 = Color3.fromRGB(16, 16, 20)
     panel.BackgroundTransparency = 0.08
     panel.Visible = false
@@ -3528,9 +3834,20 @@ local function buildUI()
 
     local r13 = mkRow()
     mkBtn(r13, function() return "Ring: " .. onoff(CFG.ring.enabled), CFG.ring.enabled end,
-        function() CFG.ring.enabled = not CFG.ring.enabled end, 0.5)
-    mkBtn(r13, function() return "Range: " .. CFG.parry.range, true end,
-        function() CFG.parry.range = cycle({ 10, 13, 16, 20 }, CFG.parry.range) end, 0.5)
+        function() CFG.ring.enabled = not CFG.ring.enabled end, 0.32)
+    mkBtn(r13, function() return "Cone: " .. onoff(CFG.ring.cone), CFG.ring.cone end,
+        function() CFG.ring.cone = not CFG.ring.cone end, 0.32)
+    mkBtn(r13, function() return string.format("Range: %.0f", CFG.parry.range), true end,
+        function() CFG.parry.range = cycle({ 8, 10, 12, 14, 16, 20 }, math.floor(CFG.parry.range + 0.5)) end, 0.32)
+
+    local r14 = mkRow()
+    mkBtn(r14, function() return "Learn: " .. onoff(CFG.gun.learn), CFG.gun.learn end,
+        function()
+            CFG.gun.learn = not CFG.gun.learn
+            if not CFG.gun.learn then Gun.leadAdj, Gun.biasR, Gun.biasU = 0, 0, 0 end
+        end, 0.5)
+    mkBtn(r14, function() return "Steady: " .. onoff(CFG.gun.steady), CFG.gun.steady end,
+        function() CFG.gun.steady = not CFG.gun.steady end, 0.5)
 
     local r8 = mkRow()
     mkBtn(r8, function() return "Copy Log", true end, function()
@@ -3595,8 +3912,8 @@ local function buildUI()
             task.wait(0.25)
             if panel.Visible then
                 if statusLabel then
-                    statusLabel.Text = string.format("gun: %s\nping %.0f ms | fps %.0f | lead %.0f ms | rung %s", tostring(Gun.status),
-                        Net.rtt * 1000, 1 / Net.frameDt, leadTime(50) * 1000, tostring(Skill.tierName or "-"))
+                    statusLabel.Text = string.format("gun: %s\nping %.0f ms | fps %.0f | lead %.0f ms | rung %s | hit %d/%d", tostring(Gun.status),
+                        Net.rtt * 1000, 1 / Net.frameDt, leadTime(50) * 1000, tostring(Skill.tierName or "-"), Gun.hits, Gun.shots)
                 end
                 if logDirty and logLabel then
                     logDirty = false
@@ -3644,4 +3961,4 @@ UIS.InputBegan:Connect(function(i, gp)
     end
 end)
 
-notify("v9.0 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap tombol DP buat panel")
+notify("v9.1 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap tombol DP buat panel")
