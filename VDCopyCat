@@ -1,5 +1,5 @@
 --[[
-    Distrik Pembantai v8.6  (PlaceId 93978595733734)  -  Delta / Luau
+    Distrik Pembantai v8.7  (PlaceId 93978595733734)  -  Delta / Luau
 
     Fitur
       1. Auto Parry        : Parrying Dagger, delay dipelajari otomatis (sama kayak v6)
@@ -8,8 +8,19 @@
                              otomatis. Tembakan apapun selama lock aktif (manual juga) arahnya dikunci ke badan killer.
       3. Gun Snap          : tembakan manual kamu yang udah deket killer (<= snapFov) dibelokkan pas ke badan
       4. Auto Skill Check  : jarum + zona dari GUI, tekan di tengah zona, ada verifikasi + auto-unstick UI
+      5. ESP               : outline + nama + jarak killer/survivor, progress generator, pallet, hook (F8)
 
-    Kontrol : tombol bulat "DP" (geser bebas)  |  F1 parry  F2 snap  F3 skill  F4 panel  F5 trigger
+    Kontrol : tombol bulat "DP" (geser bebas)  |  F1 parry  F2 snap  F3 skill  F4 panel  F5 trigger  F8 esp
+
+    v8.7  (fitur baru: ESP)
+      - ESP murni sisi client: Highlight (outline badan) + BillboardGui (teks) di folder gethui/CoreGui. Server dan pemain
+        lain ga bisa liat, ga ada remote yang ditembak, ga nyentuh objek game.
+      - Pemain: killer (merah) dan survivor (biru) dengan nama, sisa HP %, jarak. Survivor yang lagi digantung / digendong /
+        kena trap berubah oranye + label statusnya (dibaca dari attribute karakter IsHooked / IsCarried / Trapped).
+      - Objek: generator (progress dari attribute RepairProgress, merah -> hijau, yang udah 100% disembunyiin), pallet
+        (berdiri / patah dari model Intact / Broken), hook dan exit/lever (dicari lewat nama di Workspace.Map; daftar
+        namanya bisa diedit di CFG.esp.hookNames / exitNames).
+      - Kontrol: F8, tombol ESP / ESP Obj / Outline / Jarak di panel. Reload script otomatis bersihin ESP lama.
 
     v8.6  (perbaikan dari v8.5, dicocokin ke ParryClient di dump game 20261113)
       - PARRY, akar animasi + cooldown UI: v8.5 nembak remote "parry" langsung. Itu ngelewatin objek ParryClient milik game,
@@ -120,6 +131,7 @@ local CFG = {
         trig  = Enum.KeyCode.F5,
         lock  = Enum.KeyCode.F6,
         hide  = Enum.KeyCode.F7,
+        esp   = Enum.KeyCode.F8,
     },
 
     parry = {
@@ -180,6 +192,29 @@ local CFG = {
         verifySync = 0.07,        -- detik: nunggu hasil dari game setelah input langsung (btn/owner/all) sebelum cara berikutnya
         verifyVim  = 0.11,        -- detik: sama, buat input VIM (tap/click/vim) yang diproses di frame berikutnya
         allowAll   = true,        -- tier "all" (semua handler input) jadi cara terakhir
+    },
+
+    esp = {
+        enabled   = true,
+        killer    = true,         -- tampilkan killer
+        survivors = true,         -- tampilkan survivor lain
+        outline   = true,         -- Highlight (outline + isi tipis) di badan pemain. Batas Roblox ~31 Highlight sekaligus
+        names     = true,         -- nama pemain / nama objek
+        dist      = true,         -- jarak (stud)
+        hp        = true,         -- sisa HP % survivor
+        objects   = true,         -- generator / pallet / hook / exit
+        gens      = true,
+        pallets   = true,
+        hooks     = true,
+        exits     = true,
+        hideDoneGens = true,      -- generator 100% disembunyiin
+        showBroken   = false,     -- pallet yang udah patah ikut ditampilkan (abu-abu)
+        maxDist   = 0,            -- stud, 0 = tanpa batas
+        hookNames = { "hook" },                      -- nama objek di Workspace.Map yang dianggap hook
+        exitNames = { "lever", "exit", "hatch" },    -- ... dianggap exit / lever
+        scanPlayers = 0.5,        -- detik antar scan pemain
+        scanObjects = 1.5,        -- detik antar scan generator / pallet
+        scanMap     = 5,          -- detik antar scan nama hook / exit (GetDescendants Map)
     },
 }
 
@@ -244,7 +279,7 @@ end
 
 local function notify(msg)
     pcall(function()
-        StarterGui:SetCore("SendNotification", { Title = "DP v8.6", Text = msg, Duration = 2.5 })
+        StarterGui:SetCore("SendNotification", { Title = "DP v8.7", Text = msg, Duration = 2.5 })
     end)
     log("INFO", msg)
 end
@@ -2485,6 +2520,318 @@ local function resetAll()
     notify("Reset: state gun/skill dibersihin")
 end
 
+------------------------------------------------------------------ 4) ESP (v8.7)
+-- Murni sisi client. Highlight + BillboardGui ditaruh di folder gethui/CoreGui (ga bisa dibaca script game, ga kereplikasi).
+-- Ga ada remote yang ditembak dan ga ada objek game yang diubah.
+local ESP = { entries = {}, folder = nil, errAt = 0, tPlayers = 0, tObjs = 0, tMap = 0, nameHits = {} }
+
+local function espFolder()
+    if ESP.folder and ESP.folder.Parent then return ESP.folder end
+    local parent
+    pcall(function() parent = (gethui and gethui()) or game:GetService("CoreGui") end)
+    if not parent then parent = LP:FindFirstChildOfClass("PlayerGui") end
+    if not parent then return nil end
+    local old = parent:FindFirstChild("DP3_ESP")
+    if old then old:Destroy() end
+    local f = Instance.new("Folder")
+    f.Name = "DP3_ESP"
+    f.Parent = parent
+    ESP.folder = f
+    return f
+end
+
+local function espDrop(key)
+    local e = ESP.entries[key]
+    if not e then return end
+    ESP.entries[key] = nil
+    pcall(function()
+        e.bb:Destroy()
+        if e.hl then e.hl:Destroy() end
+    end)
+end
+
+local function espClear()
+    for key in pairs(ESP.entries) do espDrop(key) end
+    if ESP.folder then
+        pcall(function() ESP.folder:Destroy() end)
+        ESP.folder = nil
+    end
+end
+
+-- kind: "player" | "gen" | "pallet" | "hook" | "exit"
+local function espMake(key, adornee, kind, hlTarget)
+    local f = espFolder()
+    if not f then return nil end
+    local bb = Instance.new("BillboardGui")
+    bb.Name = "esp"
+    bb.Adornee = adornee
+    bb.AlwaysOnTop = true
+    bb.LightInfluence = 0
+    bb.ResetOnSpawn = false
+    bb.Size = UDim2.fromOffset(170, 34)
+    bb.StudsOffsetWorldSpace = Vector3.new(0, kind == "player" and 3.4 or 2.2, 0)
+    bb.Parent = f
+    local l = Instance.new("TextLabel")
+    l.BackgroundTransparency = 1
+    l.Size = UDim2.fromScale(1, 1)
+    l.Font = Enum.Font.GothamBold
+    l.TextSize = 13
+    l.TextStrokeTransparency = 0.35
+    l.TextColor3 = Color3.new(1, 1, 1)
+    l.Text = ""
+    l.Parent = bb
+    local e = { kind = kind, adornee = adornee, bb = bb, lbl = l }
+    if hlTarget and CFG.esp.outline then
+        local h = Instance.new("Highlight")
+        h.Name = "esp_hl"
+        h.Adornee = hlTarget
+        h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        h.FillTransparency = 0.8
+        h.OutlineTransparency = 0
+        h.Parent = f
+        e.hl = h
+    end
+    ESP.entries[key] = e
+    return e
+end
+
+local function espAdornee(m)
+    if m:IsA("BasePart") then return m end
+    return m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart", true)
+end
+
+local function espVisible(m)
+    if not m then return false end
+    for _, d in ipairs(m:GetDescendants()) do
+        if d:IsA("BasePart") and d.Transparency < 0.95 then return true end
+    end
+    return false
+end
+
+local function espSweep(kinds, seen)
+    for key, e in pairs(ESP.entries) do
+        if kinds[e.kind] and not seen[key] then espDrop(key) end
+    end
+end
+
+local ESP_PLAYER = { player = true }
+local ESP_OBJ = { gen = true, pallet = true, hook = true, exit = true }
+
+local function espScanPlayers()
+    local C = CFG.esp
+    local seen = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        local ch = p.Character
+        if p ~= LP and ch then
+            local tn = p.Team and p.Team.Name:lower() or ""
+            local isK = tn:find("killer", 1, true) ~= nil
+            local isS = tn:find("surviv", 1, true) ~= nil
+            if (isK and C.killer) or (isS and C.survivors) then
+                local hum = ch:FindFirstChildOfClass("Humanoid")
+                local root = ch:FindFirstChild("HumanoidRootPart")
+                if hum and root and hum.Health > 0 then
+                    local e = ESP.entries[ch] or espMake(ch, root, "player", ch)
+                    if e then
+                        e.p, e.hum, e.root, e.isK, e.adornee = p, hum, root, isK, root
+                        seen[ch] = true
+                    end
+                end
+            end
+        end
+    end
+    espSweep(ESP_PLAYER, seen)
+end
+
+local function espScanObjects()
+    local C = CFG.esp
+    local seen = {}
+    local map = workspace:FindFirstChild("Map")
+    if map and C.objects then
+        local gens = map:FindFirstChild("newGenerators")
+        if gens and C.gens then
+            for _, m in ipairs(gens:GetChildren()) do
+                if m:IsA("Model") then
+                    local ad = m:FindFirstChild("HitBox") or espAdornee(m)
+                    if ad then
+                        local e = ESP.entries[m] or espMake(m, ad, "gen", nil)
+                        if e then
+                            e.model, e.adornee = m, ad
+                            seen[m] = true
+                        end
+                    end
+                end
+            end
+        end
+        local pals = map:FindFirstChild("Pallets")
+        if pals and C.pallets then
+            for _, m in ipairs(pals:GetChildren()) do
+                if m:IsA("Model") then
+                    local intact, broken = m:FindFirstChild("Intact"), m:FindFirstChild("Broken")
+                    local state
+                    if intact and espVisible(intact) then state = "ok"
+                    elseif broken and espVisible(broken) then state = "broken" end
+                    local ad = espAdornee(intact or broken or m)
+                    if ad and state then
+                        local e = ESP.entries[m] or espMake(m, ad, "pallet", nil)
+                        if e then
+                            e.model, e.adornee, e.state = m, ad, state
+                            seen[m] = true
+                        end
+                    end
+                end
+            end
+        end
+    end
+    -- hook / exit: dicari lewat nama (jarang berubah, jadi discan lebih jarang)
+    if map and C.objects and (C.hooks or C.exits) and os.clock() - ESP.tMap >= C.scanMap then
+        ESP.tMap = os.clock()
+        local gens, pals = map:FindFirstChild("newGenerators"), map:FindFirstChild("Pallets")
+        local hits, matched = {}, {}
+        for _, d in ipairs(map:GetDescendants()) do
+            if d:IsA("Model") or d:IsA("BasePart") then
+                local up, skip = d.Parent, false
+                for _ = 1, 4 do
+                    if not up or up == map then break end
+                    if matched[up] then
+                        skip = true
+                        break
+                    end
+                    up = up.Parent
+                end
+                if not skip and not (gens and d:IsDescendantOf(gens)) and not (pals and d:IsDescendantOf(pals)) then
+                    local ln = d.Name:lower()
+                    local kind
+                    if C.hooks and nameHas(ln, C.hookNames) then kind = "hook"
+                    elseif C.exits and nameHas(ln, C.exitNames) then kind = "exit" end
+                    if kind then
+                        matched[d] = true
+                        hits[d] = kind
+                    end
+                end
+            end
+        end
+        ESP.nameHits = hits
+    end
+    for d, kind in pairs(ESP.nameHits) do
+        local isOn = (kind == "hook" and C.hooks) or (kind == "exit" and C.exits)
+        if d.Parent and isOn and C.objects then
+            local ad = espAdornee(d)
+            if ad then
+                local e = ESP.entries[d] or espMake(d, ad, kind, nil)
+                if e then
+                    e.model, e.adornee = d, ad
+                    seen[d] = true
+                end
+            end
+        end
+    end
+    espSweep(ESP_OBJ, seen)
+end
+
+local ESP_COL = {
+    killer = Color3.fromRGB(255, 60, 60), survivor = Color3.fromRGB(90, 200, 255),
+    bad = Color3.fromRGB(255, 150, 40), pallet = Color3.fromRGB(255, 220, 90),
+    broken = Color3.fromRGB(150, 150, 150), hook = Color3.fromRGB(255, 140, 0),
+    exit = Color3.fromRGB(140, 255, 140),
+    genLo = Color3.fromRGB(255, 70, 70), genHi = Color3.fromRGB(80, 255, 120),
+}
+
+local function espUpdate()
+    local C = CFG.esp
+    local cam = workspace.CurrentCamera
+    local me = myRoot()
+    local from = (me and me.Position) or (cam and cam.CFrame.Position)
+    for key, e in pairs(ESP.entries) do
+        local ad = e.adornee
+        if not (ad and ad.Parent) or (e.hum and e.hum.Health <= 0) then
+            espDrop(key)
+        else
+            local dist = from and (ad.Position - from).Magnitude or 0
+            local show = (C.maxDist <= 0) or dist <= C.maxDist
+            local title, sub, col = "", nil, Color3.new(1, 1, 1)
+            if e.kind == "player" then
+                local ch = e.hum.Parent
+                col = e.isK and ESP_COL.killer or ESP_COL.survivor
+                local state
+                if ch then
+                    if ch:GetAttribute("IsHooked") then state = "HOOK"
+                    elseif ch:GetAttribute("IsCarried") then state = "DIGENDONG"
+                    elseif ch:GetAttribute("Trapped") then state = "TRAP" end
+                end
+                if state and not e.isK then col = ESP_COL.bad end
+                title = (e.isK and "KILLER " or "") .. (C.names and e.p.DisplayName or "")
+                if state then title = title .. " [" .. state .. "]" end
+                if C.hp and not e.isK and e.hum.MaxHealth > 0 then
+                    sub = string.format("%d%%", math.floor(e.hum.Health / e.hum.MaxHealth * 100 + 0.5))
+                end
+            elseif e.kind == "gen" then
+                local prog = tonumber(e.model:GetAttribute("RepairProgress")) or 0
+                if C.hideDoneGens and prog >= 99.9 then show = false end
+                col = ESP_COL.genLo:Lerp(ESP_COL.genHi, math.clamp(prog / 100, 0, 1))
+                title = string.format("GEN %d%%", math.floor(prog + 0.5))
+                local n = tonumber(e.model:GetAttribute("PlayersRepairingCount")) or 0
+                if n > 0 then title = title .. " x" .. n end
+                if e.model:GetAttribute("ProgressPaused") then title = title .. " (pause)" end
+            elseif e.kind == "pallet" then
+                if e.state == "broken" then
+                    if not C.showBroken then show = false end
+                    col, title = ESP_COL.broken, "PALLET patah"
+                else
+                    col, title = ESP_COL.pallet, "PALLET"
+                end
+            elseif e.kind == "hook" then
+                col, title = ESP_COL.hook, "HOOK"
+            else
+                col, title = ESP_COL.exit, (e.model and e.model.Name or "EXIT"):upper()
+            end
+            local text = title
+            if sub then text = text .. "  " .. sub end
+            if C.dist then text = text .. "\n" .. math.floor(dist + 0.5) .. "m" end
+            e.bb.Enabled = show
+            e.lbl.Text = text
+            e.lbl.TextColor3 = col
+            if e.hl then
+                e.hl.Enabled = show
+                e.hl.OutlineColor = col
+                e.hl.FillColor = col
+            end
+        end
+    end
+end
+
+local function espStep()
+    local C = CFG.esp
+    local now = os.clock()
+    if now - ESP.tPlayers >= C.scanPlayers then
+        ESP.tPlayers = now
+        espScanPlayers()
+    end
+    if now - ESP.tObjs >= C.scanObjects then
+        ESP.tObjs = now
+        espScanObjects()
+    end
+    espUpdate()
+end
+
+task.spawn(function()
+    local old = ENV.DP3_ESPFOLDER   -- sisa instance sebelumnya (reload)
+    if old then pcall(function() old:Destroy() end) end
+    while alive() do
+        task.wait(0.1)
+        if CFG.esp.enabled then
+            local ok, err = pcall(espStep)
+            if not ok and os.clock() - ESP.errAt > 5 then
+                ESP.errAt = os.clock()
+                log("ESP", "error: " .. tostring(err))
+            end
+            ENV.DP3_ESPFOLDER = ESP.folder
+        elseif next(ESP.entries) or ESP.folder then
+            espClear()
+        end
+    end
+    espClear()
+end)
+
 ------------------------------------------------------------------ UI
 local panel, statusLabel
 local function buildUI()
@@ -2516,7 +2863,7 @@ local function buildUI()
     panel = Instance.new("Frame")
     panel.Size = UDim2.fromOffset(238, 0)
     panel.AutomaticSize = Enum.AutomaticSize.Y
-    panel.Position = UDim2.new(0, 60, 0.5, -190)
+    panel.Position = UDim2.new(0, 60, 0.5, -226)
     panel.BackgroundColor3 = Color3.fromRGB(16, 16, 20)
     panel.BackgroundTransparency = 0.08
     panel.Visible = false
@@ -2619,6 +2966,24 @@ local function buildUI()
     mkBtn(r7, function() return string.format("Zona +2 (%d)", CFG.skill.offset), true end,
         function() CFG.skill.offset = CFG.skill.offset + 2 end, 0.5)
 
+    local r9 = mkRow()
+    mkBtn(r9, function() return "ESP: " .. onoff(CFG.esp.enabled), CFG.esp.enabled end,
+        function()
+            CFG.esp.enabled = not CFG.esp.enabled
+            if not CFG.esp.enabled then espClear() end
+        end, 0.5)
+    mkBtn(r9, function() return "ESP Obj: " .. onoff(CFG.esp.objects), CFG.esp.objects end,
+        function() CFG.esp.objects = not CFG.esp.objects end, 0.5)
+
+    local r10 = mkRow()
+    mkBtn(r10, function() return "Outline: " .. onoff(CFG.esp.outline), CFG.esp.outline end,
+        function()
+            CFG.esp.outline = not CFG.esp.outline
+            espClear()   -- dibikin ulang di scan berikutnya
+        end, 0.5)
+    mkBtn(r10, function() return CFG.esp.maxDist <= 0 and "Jarak: inf" or ("Jarak: " .. CFG.esp.maxDist), true end,
+        function() CFG.esp.maxDist = cycle({ 150, 300, 600, 0 }, CFG.esp.maxDist) end, 0.5)
+
     local r8 = mkRow()
     mkBtn(r8, function() return "Copy Log", true end, function()
         notify(copy(table.concat(LOG, "\n")) and "Log disalin" or "setclipboard ga ada")
@@ -2664,7 +3029,7 @@ local function buildUI()
             if d.Magnitude > 8 then moved = true end
             if moved then
                 fab.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
-                panel.Position = UDim2.new(fab.Position.X.Scale, fab.Position.X.Offset + 50, fab.Position.Y.Scale, fab.Position.Y.Offset - 168)
+                panel.Position = UDim2.new(fab.Position.X.Scale, fab.Position.X.Offset + 50, fab.Position.Y.Scale, fab.Position.Y.Offset - 204)
             end
         end
     end)
@@ -2719,9 +3084,13 @@ UIS.InputBegan:Connect(function(i, gp)
     elseif k == CFG.keys.hide then
         CFG.skill.hideUI = not CFG.skill.hideUI
         notify("Hide Skill UI: " .. (CFG.skill.hideUI and "ON" or "OFF"))
+    elseif k == CFG.keys.esp then
+        CFG.esp.enabled = not CFG.esp.enabled
+        if not CFG.esp.enabled then espClear() end
+        notify("ESP: " .. (CFG.esp.enabled and "ON" or "OFF"))
     elseif k == CFG.keys.panel and panel then
         panel.Visible = not panel.Visible
     end
 end)
 
-notify("v8.6 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap tombol DP buat panel")
+notify("v8.7 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap tombol DP buat panel")
