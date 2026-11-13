@@ -1,5 +1,5 @@
 --[[
-    Distrik Pembantai v8.8  (PlaceId 93978595733734)  -  Delta / Luau
+    Distrik Pembantai v8.9  (PlaceId 93978595733734)  -  Delta / Luau
 
     Fitur
       1. Auto Parry        : Parrying Dagger, delay dipelajari otomatis (sama kayak v6)
@@ -11,6 +11,21 @@
       5. ESP               : outline badan + outline objek, bar progress/HP, teks bisa full/mini/off (F8, F10 = mode teks)
 
     Kontrol : tombol bulat "DP" (geser bebas)  |  F1 parry  F2 snap  F3 skill  F4 panel  F5 trigger  F8 esp
+
+    v8.9  (perbaikan dari v8.8: generator ESP ilang + aim masih meleset)
+      - ESP generator ilang: teks cuma muncul dalam 70 stud (generator biasanya jauh) dan bar-nya nyaris item di map gelap.
+        Sekarang generator / exit / pemain SELALU ada teks (batas jarak cuma buat pallet & hook), bar lebih gede + ada
+        garis tepi putih, jatah Highlight 28 -> 20 (Highlight bawaan game ikut ngitung ke batas Roblox ~31) dan generator
+        satu kelas prioritas sama pemain. Tiap entry ESP di-update pakai pcall: kalau satu error, yang lain tetap jalan,
+        dan errornya masuk log ("ESP update gen error: ...").
+      - AIM masih meleset: prediksi v8.8 cuma setengah dari yang dibutuhin. Server nembak pakai posisi killer SEKARANG,
+        sedangkan yang kamu liat tertinggal ~ ping + interpolasi (~0.1s). Default sekarang leadPing 1.0 + leadBase 0.1
+        (v8.8: 0.5 + 0.03), batas 0.5s. Tombol Lead: 0 / 0.5 / 1 / 1.5.
+      - AIM: arah tembakan dihitung dari ORIGIN yang beneran dikirim game (args[1]) kalau dia Vector3 dekat moncong,
+        bukan dari tebakan moncong sendiri. Prediksi juga ngitung waktu tempuh peluru kalau ketemu.
+      - AIM: tuning gun dari game (TwistoffateTuning) dibaca dan dicatat ke log ("TUNE ..."), nama remote gun ("GUN remote ..."),
+        dan tiap tembakan nyatet speed killer + lead + ping ("HIT lock -> ... spd .. lead .."). Kalau di tuning ada
+        kecepatan peluru, otomatis dipakai (CFG.gun.autoTravel). Kalau masih meleset: tembak ~10x, Copy Log, kirim ke aku.
 
     v8.8  (ESP lebih rapi + aim lebih akurat)
       - ESP OBJEK: generator / pallet / hook / exit sekarang punya OUTLINE juga (cuma garis, isinya transparan penuh),
@@ -188,9 +203,10 @@ local CFG = {
         lockFov      = 60,        -- derajat dari arah kamera: killer di luar sudut ini ga di-lock (180 = semua arah)
         lockSmooth   = 0.85,      -- 1 = keras (langsung nempel), makin kecil makin halus
         fireTol      = 3,         -- derajat MAKS: kamera harus segini dekat ke target baru auto-fire (ngecil sendiri kalau killer jauh)
-        leadPing     = 0.5,       -- x ping: tembak ke posisi killer di depan (kompensasi lag). 0 = mati. 0.5/0.75/1 = makin jauh ke depan
-        leadBase     = 0.03,      -- detik: tambahan tetap di atas leadPing (interpolasi pemain lain)
-        leadMax      = 0.3,       -- detik: batas atas total waktu prediksi
+        leadPing     = 1.0,       -- x ping: tembak ke posisi killer di depan (kompensasi lag). 0 = mati. 1 = ping penuh (RTT)
+        leadBase     = 0.1,       -- detik: tambahan tetap di atas leadPing (interpolasi pemain lain ~0.1s)
+        leadMax      = 0.5,       -- detik: batas atas total waktu prediksi
+        autoTravel   = true,      -- true = kalau di tuning game ada kecepatan peluru, dipakai buat waktu tempuh (lead = 1)
         fireStep     = 0,         -- 0 = auto (step tercepat yang aman dari macet). 3 = selalu charge penuh. 1/2 = paksa step itu
         hitRadius    = 2.2,       -- stud: jarak peluru-ke-badan yang dianggap "aim pas" (makin gede makin longgar)
         snapFov      = 8,         -- derajat: batas belok buat tembakan manual (snap)
@@ -233,9 +249,9 @@ local CFG = {
         objOutline = true,        -- outline buat generator / pallet / hook / exit juga
         fillPlayers = 0.78,       -- transparansi isi outline pemain (1 = cuma garis)
         fillObjs    = 1,          -- transparansi isi outline objek (1 = cuma garis)
-        textDistObjs    = 70,     -- teks objek cuma muncul kalau lebih deket dari ini (stud). 0 = selalu. Outline + bar tetap
+        textDistObjs    = 70,     -- teks PALLET / HOOK cuma muncul kalau lebih deket dari ini (stud). 0 = selalu. Generator/exit/pemain selalu
         textDistPlayers = 0,      -- sama buat pemain. 0 = selalu
-        maxHighlights   = 28,     -- batas Highlight bareng (Roblox ~31). Sisanya yang paling jauh / paling ga penting ga digambar
+        maxHighlights   = 20,     -- batas Highlight bareng (Roblox ~31 TERMASUK punya game). Sisanya yang paling jauh / ga penting ga digambar
         objects   = true,         -- generator / pallet / hook / exit
         gens      = true,
         pallets   = true,
@@ -313,7 +329,7 @@ end
 
 local function notify(msg)
     pcall(function()
-        StarterGui:SetCore("SendNotification", { Title = "DP v8.8", Text = msg, Duration = 2.5 })
+        StarterGui:SetCore("SendNotification", { Title = "DP v8.9", Text = msg, Duration = 2.5 })
     end)
     log("INFO", msg)
 end
@@ -615,12 +631,27 @@ local function predictPos(part, origin)
     local pos = part.Position
     local tr = Track[part.Parent]
     if not tr then return pos end
-    local t = leadTime((pos - origin).Magnitude)
-    if t <= 0 then return pos end
+    local G = CFG.gun
+    local base = (G.leadPing > 0) and (Net.rtt * G.leadPing + G.leadBase) or 0
+    if base <= 0 and G.lead <= 0 then return pos end
     local v = tr.vel
     if tr.grounded then v = Vector3.new(v.X, 0, v.Z) end      -- lagi napak tanah: ga usah nebak naik/turun
     if v.Magnitude > 70 then v = v.Unit * 70 end              -- batas kecepatan masuk akal (dash), glitch ga bikin tembakan nyasar
-    return pos + v * t
+    local t = base
+    if G.lead > 0 and G.bulletSpeed > 0 then                  -- waktu tempuh peluru (kalau ada): diselesaikan iteratif
+        for _ = 1, 3 do
+            local p = pos + v * t
+            t = base + ((p - origin).Magnitude / G.bulletSpeed) * G.lead
+        end
+    end
+    return pos + v * math.clamp(t, 0, G.leadMax)
+end
+
+-- ringkasan buat log tembakan (diagnosa aim)
+local function leadInfo(part, origin)
+    local tr = Track[part.Parent]
+    local spd = tr and Vector3.new(tr.vel.X, 0, tr.vel.Z).Magnitude or 0
+    return string.format("spd %.0f lead %.0fms ping %.0fms", spd, leadTime((part.Position - origin).Magnitude) * 1000, Net.rtt * 1000)
 end
 
 local function dirTo(origin, part)
@@ -631,8 +662,10 @@ local function dirTo(origin, part)
 end
 
 -- dipanggil dari hook pas game ngirim gun.Fire. orig = arah bidikan asli game
-local function snapDir(orig)
+local function snapDir(orig, originArg)
     local origin = muzzleOrigin()
+    -- v8.9: kalau game ngirim origin tembakan (Vector3 dekat moncong), pakai itu: server nembak dari titik itu
+    if typeof(originArg) == "Vector3" and origin and (originArg - origin).Magnitude < 6 then origin = originArg end
     if not origin then return nil end
 
     -- 1) tembakan dari auto-trigger: target udah dipilih, arah dihitung ULANG pas ini (posisi paling baru)
@@ -640,7 +673,7 @@ local function snapDir(orig)
     if p and p.Parent and os.clock() - Gun.pendingAt < 0.8 then
         local nd = dirTo(origin, p)
         if nd then
-            log("HIT", string.format("kunci ke %s (%.0f stud)", p.Parent.Name, (p.Position - origin).Magnitude))
+            log("HIT", string.format("kunci ke %s (%.0f stud) %s", p.Parent.Name, (p.Position - origin).Magnitude, leadInfo(p, origin)))
             return nd
         end
     end
@@ -650,7 +683,7 @@ local function snapDir(orig)
     if CFG.gun.aimLock and lt and lt.Parent then
         local nd = dirTo(origin, lt)
         if nd then
-            log("HIT", string.format("lock -> %s (%.0f stud)", lt.Parent.Name, (lt.Position - origin).Magnitude))
+            log("HIT", string.format("lock -> %s (%.0f stud) %s", lt.Parent.Name, (lt.Position - origin).Magnitude, leadInfo(lt, origin)))
             return nd
         end
     end
@@ -674,7 +707,7 @@ local function snapDir(orig)
     end
     if not best then return nil end
     local nd = dirTo(origin, best)
-    if nd then log("HIT", string.format("snap %.1f deg -> %s (%.0f stud)", bestAng, best.Parent.Name, bestDist)) end
+    if nd then log("HIT", string.format("snap %.1f deg -> %s (%.0f stud) %s", bestAng, best.Parent.Name, bestDist, leadInfo(best, origin))) end
     return nd
 end
 
@@ -698,7 +731,7 @@ local function onGunFire(args)
     end
     Gun.chargeStart = now            -- charge mulai ulang dari tembakan (sama kayak game)
     if amSurvivor() and typeof(args[2]) == "Vector3" then
-        local nd = snapDir(args[2])
+        local nd = snapDir(args[2], args[1])
         if nd then args[2] = nd end
     end
     Gun.pending = nil
@@ -748,6 +781,9 @@ task.spawn(function()
         local tof = items:WaitForChild("Twist of Fate", 20)
         Gun.fire = tof:WaitForChild("Fire", 10)
         Spy[Gun.fire] = "gun.Fire"
+        local names = {}
+        for _, ch in ipairs(tof:GetChildren()) do names[#names + 1] = ch.Name .. "(" .. ch.ClassName .. ")" end
+        log("GUN", "remote: " .. table.concat(names, ", "))
         local seen = 0
         for _, ch in ipairs(tof:GetChildren()) do
             if ch:IsA("RemoteEvent") then
@@ -1289,6 +1325,60 @@ local function tuning()
     end
     return TuningMod or nil
 end
+
+-- v8.9: catat tuning gun dari game ke log (diagnosa aim). Kalau ada kecepatan peluru -> dipakai buat prediksi waktu tempuh.
+local function dumpTune()
+    local T = tuning()
+    if not T then
+        log("TUNE", "TwistoffateTuning ga kebaca")
+        return
+    end
+    local parts, speed, speedKey = {}, nil, nil
+    for k, v in pairs(T) do
+        local tv = type(v)
+        if tv == "number" or tv == "boolean" or tv == "string" then
+            parts[#parts + 1] = tostring(k) .. "=" .. tostring(v)
+            if tv == "number" and type(k) == "string" then
+                local lk = k:lower()
+                if (lk:find("bullet") or lk:find("projectile") or lk:find("shot")) and (lk:find("speed") or lk:find("vel")) and v > 20 then
+                    speed, speedKey = v, k
+                end
+            end
+        elseif tv == "table" then
+            local sub = {}
+            for k2, v2 in pairs(v) do
+                if type(v2) == "number" or type(v2) == "boolean" then sub[#sub + 1] = tostring(k2) .. "=" .. tostring(v2) end
+                if #sub >= 6 then break end
+            end
+            parts[#parts + 1] = tostring(k) .. "={" .. table.concat(sub, ",") .. "}"
+        end
+    end
+    table.sort(parts)
+    local line = ""
+    for _, p in ipairs(parts) do
+        if #line + #p > 230 then
+            log("TUNE", line)
+            line = ""
+        end
+        line = line .. (line == "" and "" or " | ") .. p
+    end
+    if line ~= "" then log("TUNE", line) end
+    if speed and CFG.gun.autoTravel then
+        CFG.gun.bulletSpeed, CFG.gun.lead = speed, 1
+        log("TUNE", string.format("kecepatan peluru %s = %.0f -> waktu tempuh dipakai di prediksi", tostring(speedKey), speed))
+    end
+    local okE, m = pcall(function() return require(RS.Modules.Items.TwistOfFate.TwistoffateEffects) end)
+    if okE and type(m) == "table" then
+        local ks = {}
+        for k, v in pairs(m) do ks[#ks + 1] = tostring(k) .. (type(v) == "function" and "()" or "") end
+        table.sort(ks)
+        log("TUNE", "Effects: " .. table.concat(ks, ", "))
+    end
+end
+task.spawn(function()
+    task.wait(3)
+    if alive() then pcall(dumpTune) end
+end)
 
 -- (waktu charge, batas jam kalau ada peluru, batas macet kalau peluru habis) buat step n
 local function stepInfo(n)
@@ -2608,7 +2698,7 @@ local function resetAll()
     notify("Reset: state gun/skill dibersihin")
 end
 
------------------------------------------------------------------- 4) ESP (v8.8)
+------------------------------------------------------------------ 4) ESP (v8.9)
 -- Murni sisi client. Highlight + BillboardGui ditaruh di folder gethui/CoreGui (ga bisa dibaca script game, ga kereplikasi).
 -- Ga ada remote yang ditembak dan ga ada objek game yang diubah.
 -- v8.8: outline juga buat objek, mode teks full/mini/off, bar progress/HP, jatah Highlight (batas Roblox ~31).
@@ -2678,10 +2768,11 @@ local function espMake(key, adornee, kind)
     local back = Instance.new("Frame")
     back.AnchorPoint = Vector2.new(0.5, 0)
     back.Position = UDim2.new(0.5, 0, 0, 31)
-    back.Size = UDim2.fromOffset(60, 5)
-    back.BackgroundColor3 = Color3.fromRGB(10, 10, 12)
-    back.BackgroundTransparency = 0.2
-    back.BorderSizePixel = 0
+    back.Size = UDim2.fromOffset(70, 7)
+    back.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+    back.BackgroundTransparency = 0
+    back.BorderColor3 = Color3.fromRGB(255, 255, 255)
+    back.BorderSizePixel = 1
     back.Visible = false
     back.Parent = bb
     local fill = Instance.new("Frame")
@@ -2729,7 +2820,7 @@ end
 
 local ESP_PLAYER = { player = true }
 local ESP_OBJ = { gen = true, pallet = true, hook = true, exit = true }
-local ESP_PRIO = { player = 1, gen = 2, exit = 2, hook = 3, pallet = 3 }   -- jatah Highlight: kecil = duluan
+local ESP_PRIO = { player = 1, gen = 1, exit = 2, hook = 3, pallet = 3 }   -- jatah Highlight: kecil = duluan
 
 local function espScanPlayers()
     local C = CFG.esp
@@ -2860,129 +2951,148 @@ local function espUpdate()
     local lockedChar = Gun.lockTarget and Gun.lockTarget.Parent
     local want = {}   -- kandidat Highlight, dijatah setelah loop
 
-    for key, e in pairs(ESP.entries) do
+    -- v8.9: satu entry error ga boleh bikin entry lain (mis. generator) ga ke-update
+    local function one(key, e)
         local ad = e.adornee
         if not (ad and ad.Parent) or (e.hum and e.hum.Health <= 0) then
             espDrop(key)
-        else
-            local dist = from and (ad.Position - from).Magnitude or 0
-            local show = (C.maxDist <= 0) or dist <= C.maxDist
-            local title, mini, sub, frac = "", "", nil, nil
-            local col = Color3.new(1, 1, 1)
-            local locked = false
+            return
+        end
+        local dist = from and (ad.Position - from).Magnitude or 0
+        local show = (C.maxDist <= 0) or dist <= C.maxDist
+        local title, mini, sub, frac = "", "", nil, nil
+        local col = Color3.new(1, 1, 1)
+        local locked = false
 
-            if e.kind == "player" then
-                local ch = e.hum.Parent
-                col = e.isK and ESP_COL.killer or ESP_COL.survivor
-                local state
-                if ch then
-                    if ch:GetAttribute("IsHooked") then state = "HOOK"
-                    elseif ch:GetAttribute("IsCarried") then state = "DIGENDONG"
-                    elseif ch:GetAttribute("Trapped") then state = "TRAP" end
-                end
-                if state and not e.isK then col = ESP_COL.bad end
-                locked = e.isK and lockedChar ~= nil and lockedChar == ch
-                if locked then col = ESP_COL.lock end
-                title = (e.isK and "KILLER " or "") .. (C.names and e.p.DisplayName or "")
-                if locked then title = "[LOCK] " .. title end
-                if state then title = title .. " [" .. state .. "]" end
-                if C.hp and not e.isK and e.hum.MaxHealth > 0 then
-                    sub = string.format("%d%%", math.floor(e.hum.Health / e.hum.MaxHealth * 100 + 0.5))
-                end
-                if (not e.isK) and e.hum.MaxHealth > 0 then
-                    frac = e.hum.Health / e.hum.MaxHealth
-                end
-                mini = state or (locked and "LOCK") or (e.isK and "KILLER") or ""
-            elseif e.kind == "gen" then
-                local prog = tonumber(e.model:GetAttribute("RepairProgress")) or 0
-                if C.hideDoneGens and prog >= 99.9 then show = false end
-                col = ESP_COL.genLo:Lerp(ESP_COL.genHi, math.clamp(prog / 100, 0, 1))
-                title = string.format("GEN %d%%", math.floor(prog + 0.5))
-                local n = tonumber(e.model:GetAttribute("PlayersRepairingCount")) or 0
-                if n > 0 then title = title .. " x" .. n end
-                if e.model:GetAttribute("ProgressPaused") then title = title .. " (pause)" end
-                frac = math.clamp(prog / 100, 0, 1)
-                mini = string.format("%d%%", math.floor(prog + 0.5))
-            elseif e.kind == "pallet" then
-                if e.state == "broken" then
-                    if not C.showBroken then show = false end
-                    col, title = ESP_COL.broken, "PALLET patah"
-                else
-                    col, title = ESP_COL.pallet, "PALLET"
-                end
-            elseif e.kind == "hook" then
-                col, title = ESP_COL.hook, "HOOK"
+        if e.kind == "player" then
+            local ch = e.hum.Parent
+            col = e.isK and ESP_COL.killer or ESP_COL.survivor
+            local state
+            if ch then
+                if ch:GetAttribute("IsHooked") then state = "HOOK"
+                elseif ch:GetAttribute("IsCarried") then state = "DIGENDONG"
+                elseif ch:GetAttribute("Trapped") then state = "TRAP" end
+            end
+            if state and not e.isK then col = ESP_COL.bad end
+            locked = e.isK and lockedChar ~= nil and lockedChar == ch
+            if locked then col = ESP_COL.lock end
+            title = (e.isK and "KILLER " or "") .. (C.names and e.p.DisplayName or "")
+            if locked then title = "[LOCK] " .. title end
+            if state then title = title .. " [" .. state .. "]" end
+            if C.hp and not e.isK and e.hum.MaxHealth > 0 then
+                sub = string.format("%d%%", math.floor(e.hum.Health / e.hum.MaxHealth * 100 + 0.5))
+            end
+            if (not e.isK) and e.hum.MaxHealth > 0 then
+                frac = e.hum.Health / e.hum.MaxHealth
+            end
+            mini = state or (locked and "LOCK") or (e.isK and "KILLER") or ""
+        elseif e.kind == "gen" then
+            local prog = tonumber(e.model:GetAttribute("RepairProgress")) or 0
+            if C.hideDoneGens and prog >= 99.9 then show = false end
+            col = ESP_COL.genLo:Lerp(ESP_COL.genHi, math.clamp(prog / 100, 0, 1))
+            title = string.format("GEN %d%%", math.floor(prog + 0.5))
+            local n = tonumber(e.model:GetAttribute("PlayersRepairingCount")) or 0
+            if n > 0 then title = title .. " x" .. n end
+            if e.model:GetAttribute("ProgressPaused") then title = title .. " (pause)" end
+            frac = math.clamp(prog / 100, 0, 1)
+            mini = string.format("%d%%", math.floor(prog + 0.5))
+        elseif e.kind == "pallet" then
+            if e.state == "broken" then
+                if not C.showBroken then show = false end
+                col, title = ESP_COL.broken, "PALLET patah"
             else
-                col, title = ESP_COL.exit, (e.model and e.model.Name or "EXIT"):upper()
-                mini = "EXIT"
+                col, title = ESP_COL.pallet, "PALLET"
             end
+        elseif e.kind == "hook" then
+            col, title = ESP_COL.hook, "HOOK"
+        else
+            col, title = ESP_COL.exit, (e.model and e.model.Name or "EXIT"):upper()
+            mini = "EXIT"
+        end
 
-            -- teks: off = kosong, mini = satu baris pendek, full = nama + info + jarak
-            local isPlayer = e.kind == "player"
-            local textOk = mode ~= "off"
-            if textOk and not isPlayer and C.textDistObjs > 0 and dist > C.textDistObjs then textOk = false end
-            if textOk and isPlayer and C.textDistPlayers > 0 and dist > C.textDistPlayers then textOk = false end
-            local distTxt = C.dist and (math.floor(dist + 0.5) .. "m") or nil
-            local text = ""
-            if textOk then
-                if mode == "mini" then
-                    text = mini
-                    if distTxt and isPlayer then text = (text ~= "" and (text .. " ") or "") .. distTxt end
-                else
-                    local parts = {}
-                    if title ~= "" then parts[#parts + 1] = title end
-                    if sub then parts[#parts + 1] = sub end
-                    text = table.concat(parts, "  ")
-                    if distTxt then text = (text ~= "" and (text .. "\n") or "") .. distTxt end
+        -- teks: off = kosong, mini = satu baris pendek, full = nama + info + jarak
+        -- generator, exit, dan pemain TETAP ada teks di jarak berapa pun; cuma pallet / hook yang kena batas textDistObjs
+        local isPlayer = e.kind == "player"
+        local textOk = mode ~= "off"
+        local farOnly = (e.kind == "pallet" or e.kind == "hook")
+        if textOk and farOnly and C.textDistObjs > 0 and dist > C.textDistObjs then textOk = false end
+        if textOk and isPlayer and C.textDistPlayers > 0 and dist > C.textDistPlayers then textOk = false end
+        local distTxt = C.dist and (math.floor(dist + 0.5) .. "m") or nil
+        local text = ""
+        if textOk then
+            if mode == "mini" then
+                text = mini
+                if distTxt and (isPlayer or e.kind == "gen" or e.kind == "exit") then
+                    text = (text ~= "" and (text .. " ") or "") .. distTxt
                 end
+            else
+                local parts = {}
+                if title ~= "" then parts[#parts + 1] = title end
+                if sub then parts[#parts + 1] = sub end
+                text = table.concat(parts, "  ")
+                if distTxt then text = (text ~= "" and (text .. "\n") or "") .. distTxt end
             end
-            local fade = math.clamp((dist - 60) / 240, 0, 0.55)   -- makin jauh makin pudar
+        end
+        local fade = math.clamp((dist - 60) / 240, 0, 0.4)   -- makin jauh makin pudar (maks 40%)
 
-            local showBar = show and C.bars and frac ~= nil
-            e.bb.Enabled = show and (text ~= "" or showBar)
-            e.lbl.Text = text
-            e.lbl.TextColor3 = col
-            e.lbl.TextSize = (mode == "mini") and 11 or 12
-            e.lbl.TextTransparency = fade
-            e.lbl.TextStrokeTransparency = 0.5 + fade * 0.5
-            e.bar.Visible = showBar
-            if showBar then
-                e.barFill.Size = UDim2.fromScale(math.clamp(frac, 0, 1), 1)
-                e.barFill.BackgroundColor3 = col
-            end
+        local showBar = show and C.bars and frac ~= nil
+        e.bb.Enabled = show and (text ~= "" or showBar)
+        e.lbl.Text = text
+        e.lbl.TextColor3 = col
+        e.lbl.TextSize = (mode == "mini") and 11 or 12
+        e.lbl.TextTransparency = fade
+        e.lbl.TextStrokeTransparency = 0.5 + fade * 0.5
+        e.bar.Visible = showBar
+        if showBar then
+            e.barFill.Size = UDim2.fromScale(math.clamp(frac, 0, 1), 1)
+            e.barFill.BackgroundColor3 = col
+        end
 
-            -- outline: kandidat jatah Highlight
-            local hlWanted = show and e.hlTarget and e.hlTarget.Parent
-                and ((isPlayer and C.outline) or ((not isPlayer) and C.objOutline))
-            if hlWanted then
-                want[#want + 1] = { e = e, col = col, dist = dist, locked = locked,
-                    prio = locked and 0 or (ESP_PRIO[e.kind] or 3) }
+        -- outline: kandidat jatah Highlight
+        local hlWanted = show and e.hlTarget and e.hlTarget.Parent
+            and ((isPlayer and C.outline) or ((not isPlayer) and C.objOutline))
+        if hlWanted then
+            want[#want + 1] = { e = e, col = col, dist = dist, locked = locked,
+                prio = locked and 0 or (ESP_PRIO[e.kind] or 3) }
+        elseif e.hl then
+            e.hl.Enabled = false
+        end
+    end
+
+    for key, e in pairs(ESP.entries) do
+        local ok, err = pcall(one, key, e)
+        if not ok and os.clock() - ESP.errAt > 5 then
+            ESP.errAt = os.clock()
+            log("ESP", "update " .. tostring(e.kind) .. " error: " .. tostring(err))
+        end
+    end
+
+    -- jatah Highlight: lock > pemain/generator > exit > hook/pallet, dalam kelompok yang paling deket duluan
+    local okB, errB = pcall(function()
+        table.sort(want, function(a, b)
+            if a.prio ~= b.prio then return a.prio < b.prio end
+            return a.dist < b.dist
+        end)
+        local budget = math.max(1, math.floor(C.maxHighlights))
+        for i, w in ipairs(want) do
+            local e = w.e
+            if i <= budget then
+                local h = espHighlight(e)
+                if h then
+                    if h.Adornee ~= e.hlTarget then h.Adornee = e.hlTarget end
+                    h.Enabled = true
+                    h.OutlineColor = w.col
+                    h.FillColor = w.col
+                    h.FillTransparency = w.locked and 0.55 or (e.kind == "player" and C.fillPlayers or C.fillObjs)
+                end
             elseif e.hl then
                 e.hl.Enabled = false
             end
         end
-    end
-
-    -- jatah Highlight: lock > pemain > generator/exit > hook/pallet, dalam kelompok yang paling deket duluan
-    table.sort(want, function(a, b)
-        if a.prio ~= b.prio then return a.prio < b.prio end
-        return a.dist < b.dist
     end)
-    local budget = math.max(1, math.floor(C.maxHighlights))
-    for i, w in ipairs(want) do
-        local e = w.e
-        if i <= budget then
-            local h = espHighlight(e)
-            if h then
-                if h.Adornee ~= e.hlTarget then h.Adornee = e.hlTarget end
-                h.Enabled = true
-                h.OutlineColor = w.col
-                h.FillColor = w.col
-                h.FillTransparency = w.locked and 0.55 or (e.kind == "player" and C.fillPlayers or C.fillObjs)
-            end
-        elseif e.hl then
-            e.hl.Enabled = false
-        end
+    if not okB and os.clock() - ESP.errAt > 5 then
+        ESP.errAt = os.clock()
+        log("ESP", "outline error: " .. tostring(errB))
     end
 end
 
@@ -3178,7 +3288,7 @@ local function buildUI()
     mkBtn(r12, function() return "Line Obj: " .. onoff(CFG.esp.objOutline), CFG.esp.objOutline end,
         function() CFG.esp.objOutline = not CFG.esp.objOutline end, 0.5)
     mkBtn(r12, function() return "Lead: " .. CFG.gun.leadPing, CFG.gun.leadPing > 0 end,
-        function() CFG.gun.leadPing = cycle({ 0, 0.5, 0.75, 1 }, CFG.gun.leadPing) end, 0.5)
+        function() CFG.gun.leadPing = cycle({ 0, 0.5, 1, 1.5 }, CFG.gun.leadPing) end, 0.5)
 
     local r8 = mkRow()
     mkBtn(r8, function() return "Copy Log", true end, function()
@@ -3292,4 +3402,4 @@ UIS.InputBegan:Connect(function(i, gp)
     end
 end)
 
-notify("v8.8 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap tombol DP buat panel")
+notify("v8.9 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap tombol DP buat panel")
