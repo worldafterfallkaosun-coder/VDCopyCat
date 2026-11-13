@@ -1,5 +1,5 @@
 --[[
-    Distrik Pembantai v8.4  (PlaceId 93978595733734)  -  Delta / Luau
+    Distrik Pembantai v8.5  (PlaceId 93978595733734)  -  Delta / Luau
 
     Fitur
       1. Auto Parry        : Parrying Dagger, delay dipelajari otomatis (sama kayak v6)
@@ -10,6 +10,26 @@
       4. Auto Skill Check  : jarum + zona dari GUI, tekan di tengah zona, ada verifikasi + auto-unstick UI
 
     Kontrol : tombol bulat "DP" (geser bebas)  |  F1 parry  F2 snap  F3 skill  F4 panel  F5 trigger
+
+    v8.5  (perbaikan dari v8.4, dicocokin ke dump game 20261113)
+      - SKILL CHECK, akar #1: zona sukses di game = Line.Rotation antara Goal.Rotation+102 .. +116 (tengah +109),
+        tapi v8.4 nargetin Goal.Rotation itu sendiri -> selalu meleset ~109 derajat (~0.47 detik), jadi tiap check fail.
+        Sekarang target = Goal.Rotation + 109 (CFG.skill.zoneLo / zoneHi), dibaca dari .Rotation (sama kayak game).
+      - SKILL CHECK, akar #2: remote SkillCheckEvent ga ada di lobby (dibuat pas ronde). v8.4 WaitForChild 10 detik lalu
+        nyerah -> listener ga pernah nempel kalau script di-execute di lobby. Sekarang dipantau terus (dan dipasang
+        ulang kalau remote-nya dibuat ulang). Cadangan: tracker juga jalan sendiri pas GUI Check muncul.
+      - SKILL CHECK, cara tekan baru "game": manggil fungsi handleSkillCheck milik game langsung (ketemu lewat getgc),
+        tanpa simulasi sentuhan/input. Cadangan "down": firesignal MouseButton1Down tombol aksi tanpa argumen.
+        Hide UI default OFF (biar keliatan kalau ada yang salah). Jendela tracker 3.5s -> 5s (skillcheckspeed bisa < 1).
+      - PARRY, akar #1: window parry di game 0.8 detik setelah dipakai, bukan timing pas. Dulu animasi yang "dikenal"
+        dianggap ga kekejar kalau hit - RTT < 0, lalu ga dikirim sama sekali. Sekarang telat dikit tetap dikirim
+        langsung, baru dibuang kalau telatnya > CFG.parry.slack (0.15s).
+      - PARRY, akar #2: parry yang SUKSES ga dihitung sebagai "kena" di statistik animasi, jadi makin sering sukses
+        rasio kena/muncul turun lalu animasi serang itu dianggap bukan serangan dan ga di-parry lagi. Sekarang parry
+        sukses dihitung, dan butuh minimal minPlays kemunculan sebelum animasi dibuang.
+      - PARRY: parryResult permanent (parry sukses, item nunggu killer mukul) sekarang ditahan, cooldown direset
+        tiap ganti karakter. Deteksi animasi killer ditambah polling GetPlayingAnimationTracks (cadangan
+        AnimationPlayed), scan killer tiap 0.25s. Kalau killer udah <= 5 stud arah hadap ga dicek.
 
     v8.4
       - PARRY (ping/fps): delay dihitung dari ping + fps. hit (animasi mulai -> kena, dipelajari per animasi) dikurangi
@@ -94,10 +114,11 @@ local CFG = {
         frontDot     = 0.35,
         hitGuess     = 0.16,       -- detik: tebakan "animasi mulai -> kena" buat animasi yang belum pernah kena kamu
         arriveLead   = 0.06,       -- detik: parry harus nyampe server segini SEBELUM kena (ping & fps dihitung otomatis)
-        slack        = 0.04,       -- detik: kalau hitungan udah telat segini, parry ga dikirim (hemat cooldown 60s)
-        skipHopeless = true,       -- true = parry ga dikirim kalau ping bikin mustahil kekejar (cd 60s ga kebuang)
+        slack        = 0.15,       -- detik: telat <= segini tetap dikirim langsung (window parry 0.8s), lebih telat = dibuang
+        skipHopeless = true,       -- true = parry ga dikirim kalau ping bikin bener-bener mustahil kekejar (cd 60s ga kebuang)
         fireUnknown  = true,       -- true = animasi yang belum pernah kena kamu tetap dicoba (pakai hitGuess)
-        minChance    = 0.34,       -- animasi yang udah dikenal: parry cuma kalau (kena / muncul deket) >= ini
+        minChance    = 0.25,       -- animasi yang udah dikenal: parry cuma kalau (kena / muncul deket) >= ini
+        minPlays     = 4,          -- baru boleh dibuang karena rasio rendah setelah muncul segini kali (parry sukses ikut dihitung)
         jitter       = 0.004,
         spacing      = 0.5,
         autoEquip    = true,       -- dagger di-equip pas animasi mulai (bukan pas parry), biar ga makan waktu
@@ -134,11 +155,13 @@ local CFG = {
         enabled = true,
         lead    = 0.02,           -- dipakai metode lama
         offset  = 0,              -- derajat, geser titik tekan (tombol di panel)
+        zoneLo  = 102,            -- dari kode game: sukses kalau Line.Rotation ada di Goal.Rotation + zoneLo .. zoneHi
+        zoneHi  = 116,
         maxWait = 6,
-        latency = 0.015,          -- detik, awal tekan sebelum jarum sampai tengah (di-tune otomatis, boleh negatif)
+        latency = 0.01,           -- detik, awal tekan sebelum jarum sampai tengah (di-tune otomatis, boleh negatif)
         learn   = true,
         unstick = true,           -- sembunyiin Check yang nyangkut (jarum diem >1.2s padahal ga ada event)
-        hideUI  = true,           -- sembunyiin UI skill check (jarum, zona, tombol) pas Auto Skill Check ON
+        hideUI  = false,          -- sembunyiin UI skill check (jarum, zona, tombol) pas Auto Skill Check ON
         verifySync = 0.07,        -- detik: nunggu hasil dari game setelah input langsung (btn/owner/all) sebelum cara berikutnya
         verifyVim  = 0.11,        -- detik: sama, buat input VIM (tap/click/vim) yang diproses di frame berikutnya
         allowAll   = true,        -- tier "all" (semua handler input) jadi cara terakhir
@@ -206,7 +229,7 @@ end
 
 local function notify(msg)
     pcall(function()
-        StarterGui:SetCore("SendNotification", { Title = "DP v8.4", Text = msg, Duration = 2.5 })
+        StarterGui:SetCore("SendNotification", { Title = "DP v8.5", Text = msg, Duration = 2.5 })
     end)
     log("INFO", msg)
 end
@@ -758,6 +781,10 @@ local function parryNow(entry, plan)
         local after = (myChar() == char) and (char:GetAttribute("ParryLands") or 0) or before
         local ok = after > before
         entry.landed = ok
+        if ok and entry.near then   -- parry sukses = animasi ini beneran serangan (jangan dianggap "ga pernah kena")
+            local st = statOf(entry.key)
+            st.hits = st.hits + 1
+        end
         local extra = ""
         if not ok and entry.hit and entry.fired then
             -- margin = berapa lama parry nyampe server SEBELUM kena. Negatif = telat. Di luar jendela wajar -> koreksi.
@@ -785,7 +812,7 @@ local function threatens(k, lead)
     local to = me.Position - pos
     local dist = to.Magnitude
     if dist > CFG.parry.range then return false end
-    if dist < 0.01 then return true end
+    if dist < 0.01 or dist <= 5 then return true end   -- udah nempel: arah hadap ga usah dicek
     return k.root.CFrame.LookVector:Dot(to.Unit) >= CFG.parry.frontDot
 end
 
@@ -793,7 +820,10 @@ local function watchKiller(k)
     local animator = k.hum:FindFirstChildOfClass("Animator")
     if not animator or Parry.watched[animator] then return end
     Parry.watched[animator] = true
-    animator.AnimationPlayed:Connect(function(track)
+    local seenTrack = setmetatable({}, { __mode = "k" })
+    local function onTrack(track)
+        if seenTrack[track] then return end
+        seenTrack[track] = true
         if not alive() or not CFG.parry.enabled or not amSurvivor() then return end
         if track.Looped then return end
         if track.Priority.Value < CFG.parry.minPriority.Value then return end
@@ -815,7 +845,7 @@ local function watchKiller(k)
             local d, hit, known = planDelay(key)
             local st = statOf(key)
             -- animasi yang udah dikenal tapi jarang bikin kena = bukan serangan: jangan buang cooldown 60s
-            if known and st.plays >= 2 and st.hits / st.plays < CFG.parry.minChance then return end
+            if known and st.plays >= CFG.parry.minPlays and st.hits / st.plays < CFG.parry.minChance then return end
             if (not known) and not CFG.parry.fireUnknown then return end
             if known and CFG.parry.skipHopeless and d < -CFG.parry.slack then
                 if os.clock() - parryHopeAt > 2 then
@@ -857,6 +887,21 @@ local function watchKiller(k)
                 log("PARRY", "animasi serang kebaca tapi killer ga ngancam (jarak/arah)")
             end
         end)
+    end
+    animator.AnimationPlayed:Connect(onTrack)
+    -- cadangan: track yang ga kebaca lewat AnimationPlayed (dedupe pakai seenTrack)
+    task.spawn(function()
+        while alive() and animator.Parent do
+            if CFG.parry.enabled then
+                local ok, tracks = pcall(function() return animator:GetPlayingAnimationTracks() end)
+                if ok and tracks then
+                    for _, t in ipairs(tracks) do
+                        if not seenTrack[t] and t.IsPlaying and t.TimePosition < 0.3 then pcall(onTrack, t) end
+                    end
+                end
+            end
+            RunService.Heartbeat:Wait()
+        end
     end)
 end
 
@@ -866,6 +911,7 @@ local function hookHealth()
     local hum = myHum()
     if not hum or Parry.hpHum == hum then return end
     Parry.hpHum = hum
+    Parry.cdUntil = 0   -- karakter baru = item baru, cooldown lama ga berlaku
     local last = hum.Health
     hum.HealthChanged:Connect(function(h)
         local drop = last - h
@@ -904,6 +950,8 @@ task.spawn(function()
         pd:WaitForChild("parryResult", 10).OnClientEvent:Connect(function(success, cooldown, permanent, chained)
             local cd = tonumber(cooldown)
             if cd and cd > 0 then Parry.cdUntil = os.clock() + cd end
+            -- parry sukses: item nunggu sampai killer mukul (permanent) -> jangan kirim parry lagi, server pasti nolak
+            if permanent == true then Parry.cdUntil = math.huge end
             if chained == true then Parry.cdUntil = 0 end   -- parry nyambung: game ngehapus cooldown
             log("PARRY", "result success=" .. tostring(success) .. " cd=" .. tostring(cooldown)
                 .. (permanent and " permanent" or "") .. (chained == true and " chained" or ""))
@@ -914,7 +962,7 @@ task.spawn(function()
         if CFG.parry.enabled then
             for _, k in ipairs(killers()) do watchKiller(k) end
         end
-        task.wait(1)
+        task.wait(0.25)
     end
 end)
 
@@ -1296,6 +1344,7 @@ local Skill = {
     hidden = {}, stuck = {},
     resultN = 0, tuneDelta = {}, tierFail = {}, ladder = nil, probed = false, actBtn = nil,
     pressTier = nil, pressRung = 0, echoFor = nil,
+    gameFns = {}, gameScanAt = -10,
 }
 
 local function refreshOwners()
@@ -1538,7 +1587,83 @@ local function fireBtn()
     return n > 0, string.format("%d signal ke %d tombol", n, #targets)
 end
 
+-- tier "game": panggil handleSkillCheck milik game langsung (Skillcheck-gen / Skillcheck-player). Fungsi itu yang
+-- ngitung zona, nembak SkillCheckResultEvent dan beresin UI, jadi ga perlu simulasi input sama sekali.
+local function scriptOfFn(f)
+    if getfenv then
+        local ok, env = pcall(getfenv, f)
+        if ok and type(env) == "table" then
+            local ok2, sc = pcall(function() return env.script end)
+            if ok2 and typeof(sc) == "Instance" then return sc end
+        end
+    end
+    return nil
+end
+
+local function gameFnLive(f)   -- script skill check di game nempel ke character yang lagi dipakai
+    local sc = scriptOfFn(f)
+    if sc then
+        local c = myChar()
+        return c ~= nil and sc.Parent == c
+    end
+    return true
+end
+
+local function refreshGameFns(force)
+    local ok0 = #Skill.gameFns > 0
+    for _, f in ipairs(Skill.gameFns) do
+        if not gameFnLive(f) then ok0 = false break end
+    end
+    if ok0 and not force then return end
+    local now = os.clock()
+    if now - Skill.gameScanAt < 2.5 then return end
+    Skill.gameScanAt = now
+    if not (getgc and debug and debug.info) then return end
+    local okg, list = pcall(getgc, false)
+    if not okg or type(list) ~= "table" then return end
+    local out, names = {}, {}
+    for i = 1, #list do
+        local f = list[i]
+        if type(f) == "function" then
+            local okn, name = pcall(debug.info, f, "n")
+            if okn and name == "handleSkillCheck" and not isOurs(f) then
+                local sc = scriptOfFn(f)
+                local label = sc and sc.Name or (ownerOf(f) or "")
+                if label:lower():find("skillcheck", 1, true) and gameFnLive(f) then
+                    out[#out + 1] = f
+                    names[#names + 1] = label
+                end
+            end
+        end
+    end
+    Skill.gameFns = out
+    log("SKILL", string.format("handler game: %d ketemu {%s}", #out, table.concat(names, ",")))
+end
+
+local function fireGameHandlers()
+    local n = 0
+    for _, f in ipairs(Skill.gameFns) do
+        if gameFnLive(f) then
+            n = n + 1
+            task.spawn(pcall, f, "success")   -- game sendiri yang nentuin success/neutral/fail dari posisi jarum
+        end
+    end
+    if n == 0 then return false, "game: ga ada handler hidup" end
+    return true, string.format("game %d handler", n)
+end
+
+-- tier "down": MouseButton1Down tombol aksi tanpa argumen (handler skill check ga butuh koordinat)
+local function fireActionDown()
+    if not firesignal then return false, "firesignal ga ada" end
+    local act = findActionButton()
+    if not act or not act:IsA("GuiButton") then return false, "tombol aksi (GuiButton) ga ketemu" end
+    local ok = pcall(firesignal, act.MouseButton1Down)
+    return ok, ok and "MouseButton1Down tanpa argumen" or "firesignal error"
+end
+
 local function sendTier(tier, raw)
+    if tier == "game" then return fireGameHandlers() end
+    if tier == "down" then return fireActionDown() end
     if tier == "btn" then return fireBtn() end
     if tier == "tap" or tier == "click" then
         local x, y, obj = tapTarget()
@@ -1559,6 +1684,8 @@ local function buildLadder()
         refreshOwners()
         haveOwner = next(Skill.owners) ~= nil
     end
+    if #Skill.gameFns > 0 then add("game") end
+    if act and act:IsA("GuiButton") and firesignal then add("down") end
     if isMobile() then
         -- HP: skill check dipencet lewat tombol aksi, bukan Space
         if haveBtn then add("btn") end
@@ -1595,6 +1722,7 @@ local function pressLadder()
     local raw = getBind("kb_skillcheck", "Space")
     local list = Skill.ladder or buildLadder()
     Skill.ladder = nil
+    if #Skill.gameFns > 0 and not indexOf(list, "game") then table.insert(list, 1, "game") end   -- scan baru kelar setelah ladder dibikin
     if #list == 0 then
         log("SKILL", "ga ada cara kirim input (VIM/firesignal/getconnections ga ada)")
         return nil
@@ -1715,6 +1843,9 @@ end)
 log("SKILL", string.format("env: mobile=%s VIM=%s getconnections=%s firesignal=%s", tostring(isMobile()), tostring(VIM ~= nil),
     tostring(getconnections ~= nil), tostring(firesignal ~= nil)))
 
+-- tengah zona sukses relatif ke Goal.Rotation (kode game: 102 <= Line.Rotation - Goal.Rotation <= 116)
+local function zoneMid() return (CFG.skill.zoneLo + CFG.skill.zoneHi) / 2 end
+
 -- regresi linear: kecepatan sudut (deg/s) dari sample (waktu, sudut kontinu)
 local function slope(samples)
     local n = #samples
@@ -1748,7 +1879,7 @@ local function skillTrackNamed(evtInfo, gen)
     local act, samples, moved = nil, {}, false
     local lastRot
 
-    while os.clock() - t0 < 3.5 and alive() and CFG.skill.enabled and Skill.gen == gen do
+    while os.clock() - t0 < 5 and alive() and CFG.skill.enabled and Skill.gen == gen do
         local dtf = RunService.RenderStepped:Wait()
         local now = os.clock()
 
@@ -1761,7 +1892,7 @@ local function skillTrackNamed(evtInfo, gen)
             lastTr = now
             local p = cur or P[1]
             tr(string.format("%s vis=%s L=%.0f G=%.0f", p.gui.Name == "SkillCheckPromptGui" and "kb" or "pad",
-                tostring(cur ~= nil), p.line.AbsoluteRotation, p.goal.AbsoluteRotation))
+                tostring(cur ~= nil), p.line.Rotation, p.goal.Rotation))
         end
 
         if cur then
@@ -1773,7 +1904,7 @@ local function skillTrackNamed(evtInfo, gen)
                 log("SKILL", string.format("check muncul %.2fs setelah event (tune=%.0fms) goal anak={%s}",
                     now - t0, curTune(math.clamp(dtf, 1 / 120, 1 / 20)) * 1000, table.concat(kids, ",")))
             end
-            local raw = act.line.AbsoluteRotation
+            local raw = act.line.Rotation
             local a = raw
             if #samples > 0 then a = samples[#samples][2] + angDiff(raw, samples[#samples][2]) end   -- kontinu (anti wrap)
             -- sample baru cuma kalau jarum beneran gerak (game update per frame, jangan dobel)
@@ -1797,7 +1928,7 @@ local function skillTrackNamed(evtInfo, gen)
                 moved = true
                 Skill.cur.w = w
                 local last = samples[#samples]
-                local zone = act.goal.AbsoluteRotation + CFG.skill.offset
+                local zone = act.goal.Rotation + zoneMid() + CFG.skill.offset
                 local dir = (w >= 0) and 1 or -1
                 local rem = ((zone - last[2]) * dir) % 360          -- sisa sudut ke tengah zona, searah jarum
                 rem = rem - w * dir * (now - last[1]) * 0 + 0       -- sample udah terbaru (per frame)
@@ -1818,7 +1949,7 @@ local function skillTrackNamed(evtInfo, gen)
     end
 
     local why
-    if not act then why = "check ga pernah tampil dalam 3.5s"
+    if not act then why = "check ga pernah tampil dalam 5s"
     elseif not moved then why = "check tampil tapi jarum ga kebaca gerak"
     else why = "jarum kebaca tapi ga ketekan (kelewat / check selesai duluan)" end
     log("SKILL", why)
@@ -1836,7 +1967,7 @@ SkillHook.judged = function(args, name)
     local since = os.clock() - Skill.pressClock
     local w = c.w or 0
     local dir = (w >= 0) and 1 or -1
-    local err = angDiff(c.line.AbsoluteRotation, c.goal.AbsoluteRotation + CFG.skill.offset) * dir
+    local err = angDiff(c.line.Rotation, c.goal.Rotation + zoneMid() + CFG.skill.offset) * dir
     local errT = (math.abs(w) > 1) and (err / math.abs(w)) or 0
     local mine = since >= 0 and since < 0.3
     log("SKILL", string.format("HASIL %s %s %s | err=%+.1f deg (%+.0f ms %s) | tekan->hasil %.0f ms | %s",
@@ -1985,6 +2116,7 @@ local function runSkillCheck(info)
     unhideChecks()                     -- Check yang tadi kita sembunyiin (nyangkut) dibalikin, game yang atur sisanya
     local gen = Skill.gen
     Skill.active = true
+    task.spawn(function() pcall(refreshGameFns) end)
     task.spawn(function()
         local ok, err = pcall(skillTrack, info, gen)
         if not ok then log("SKILL", "error: " .. tostring(err)) end
@@ -1992,30 +2124,74 @@ local function runSkillCheck(info)
     end)
 end
 
+-- SkillCheckEvent ga ada di lobby (remote dibuat pas ronde). Jadi dipantau terus, bukan WaitForChild lalu nyerah,
+-- dan dipasang ulang kalau remote-nya diganti. Remote Result/Fail juga didaftarin ke Spy dari sini.
 local function hookSkillEvents(folder)
     task.spawn(function()
-        pcall(function()
-            local f = RS:WaitForChild("Remotes", 20):WaitForChild(folder, 20)
-            local ev = f:WaitForChild("SkillCheckEvent", 10)
-            Skill.events[folder] = ev
-            Spy[f:WaitForChild("SkillCheckResultEvent", 10)] = folder .. ".Result"
-            Spy[f:WaitForChild("SkillCheckFailEvent", 10)] = folder .. ".Fail"
-            ev.OnClientEvent:Connect(function(...)
-                local parts = {}
-                for i = 1, math.min(select("#", ...), 8) do
-                    local v = (select(i, ...))
-                    parts[#parts + 1] = typeof(v) .. "=" .. tostring(v)
+        local conn, cur
+        while alive() do
+            local remotes = RS:FindFirstChild("Remotes")
+            local f = remotes and remotes:FindFirstChild(folder)
+            if f then
+                for nm, tag in pairs({ SkillCheckResultEvent = ".Result", SkillCheckFailEvent = ".Fail" }) do
+                    local r = f:FindFirstChild(nm)
+                    if r and not Spy[r] then Spy[r] = folder .. tag end
                 end
-                local info = folder .. " event args: " .. table.concat(parts, ", ")
-                log("SKILL", info)
-                runSkillCheck(info)
-            end)
-            log("SKILL", "hooked " .. folder)
-        end)
+                local ev = f:FindFirstChild("SkillCheckEvent")
+                if ev ~= cur then
+                    if conn then
+                        conn:Disconnect()
+                        conn = nil
+                    end
+                    cur = ev
+                    Skill.events[folder] = ev
+                    if ev then
+                        local okc, c = pcall(function()
+                            return ev.OnClientEvent:Connect(function(...)
+                                local parts = {}
+                                for i = 1, math.min(select("#", ...), 8) do
+                                    local v = (select(i, ...))
+                                    parts[#parts + 1] = typeof(v) .. "=" .. tostring(v)
+                                end
+                                local info = folder .. " event args: " .. table.concat(parts, ", ")
+                                log("SKILL", info)
+                                runSkillCheck(info)
+                            end)
+                        end)
+                        if okc then
+                            conn = c
+                            log("SKILL", "hooked " .. folder .. " (" .. ev.ClassName .. ")")
+                        else
+                            log("SKILL", "gagal hook " .. folder .. ": " .. tostring(c))
+                        end
+                    end
+                end
+            end
+            task.wait(0.5)
+        end
+        if conn then conn:Disconnect() end
     end)
 end
 hookSkillEvents("Generator")
 hookSkillEvents("Healing")
+
+-- cadangan kalau event ga ke-hook: tracker jalan sendiri pas GUI Check muncul (tepi hidden -> visible).
+-- Kalau tracker dari event udah jalan (Skill.active) ga dobel.
+task.spawn(function()
+    local was = setmetatable({}, { __mode = "k" })
+    while alive() do
+        RunService.Heartbeat:Wait()
+        if CFG.skill.enabled then
+            for _, p in ipairs(skillPairs()) do
+                local vis = p.chk.Parent ~= nil and p.chk.Visible and p.gui.Enabled ~= false
+                if vis and not was[p.chk] and not Skill.active then
+                    runSkillCheck("gui " .. p.gui.Name)
+                end
+                was[p.chk] = vis
+            end
+        end
+    end
+end)
 
 -- watchdog: Check yang tampil tapi jarumnya diem >1.2s padahal ga ada event baru = UI nyangkut -> sembunyiin
 task.spawn(function()
@@ -2366,4 +2542,4 @@ UIS.InputBegan:Connect(function(i, gp)
     end
 end)
 
-notify("v8.4 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap tombol DP buat panel")
+notify("v8.5 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap tombol DP buat panel")
