@@ -1,5 +1,5 @@
 --[[
-    Distrik Pembantai v8.9  (PlaceId 93978595733734)  -  Delta / Luau
+    Distrik Pembantai v9.0  (PlaceId 93978595733734)  -  Delta / Luau
 
     Fitur
       1. Auto Parry        : Parrying Dagger, delay dipelajari otomatis (sama kayak v6)
@@ -11,6 +11,28 @@
       5. ESP               : outline badan + outline objek, bar progress/HP, teks bisa full/mini/off (F8, F10 = mode teks)
 
     Kontrol : tombol bulat "DP" (geser bebas)  |  F1 parry  F2 snap  F3 skill  F4 panel  F5 trigger  F8 esp
+
+    v9.0  (perbaikan dari v8.9: generator ESP masih ga keliatan + parry/gun dimaksimalin + cincin kayak di video)
+      - ESP GENERATOR, akar: v8.9 cuma nyari di SATU tempat (Workspace.Map.newGenerators, harus Model). Kalau di map yang lagi
+        main generatornya ada di folder lain / bukan Model, ESP-nya kosong tanpa error. Sekarang dicari lewat 3 jalur sekaligus:
+          1) folder Map.newGenerators (cara lama)
+          2) tag CollectionService "GeneratorPoint" (dipakai kode game sendiri: SurvivorActions / Skillcheck-gen)
+          3) part bernama "GeneratorBody" di seluruh Workspace (nama ini juga dipakai kode game; discan bertahap biar ga lag,
+             cuma jalan kalau jalur 1 kosong)
+        Hasilnya digabung tanpa dobel. Progress dibaca dari beberapa nama attribute (RepairProgress / Progress / ...), dan kalau
+        ga ada attribute-nya generator TETAP muncul (teks "GEN" kuning, tanpa bar) bukannya disembunyiin. Isi outline generator
+        sekarang tipis (fillGens 0.6) biar keliatan dari jauh. Log nyatet "generator ketemu: folder X, tag Y, body Z | contoh: <path>"
+        tiap ada perubahan. Kalau masih kosong: Copy Log, kirim baris itu ke aku.
+      - CINCIN PARRY: cincin teal di tanah ngelilingin kamu = jangkauan auto parry (CFG.parry.range), kayak di video referensi.
+        Teal = parry siap, abu = cooldown / lagi nahan, putih = ada killer di dalam cincin, oranye = killer di dalam tapi parry
+        belum siap. Killer yang masuk cincin outline-nya ikut keisi (lebih tebel). Murni visual client. Tombol "Ring" + "Range" di panel.
+        Cincin cuma muncul kalau kamu survivor yang punya Parrying Dagger.
+      - PARRY MAKSIMAL: range 13 -> 16, frontDot 0.35 -> 0.15 (killer agak nyamping tetap kehitung), arriveLead 0.06 -> 0.16
+        (parry dikirim lebih awal; window parry game 0.8s jadi pukulan jatuh di tengah window, bukan di ujung), slack 0.15 -> 0.25
+        (biar animasi yang tadinya lolos tetap lolos, soalnya arriveLead naik), pollWindow 0.35 -> 0.5, lead 0.08 -> 0.12,
+        minChance 0.25 -> 0.15 dan minPlays 4 -> 6 (animasi serang jarang jangan cepet dibuang).
+      - GUN MAKSIMAL: lockFov 60 -> 90, maxDist 180 -> 220, hitRadius 2.2 -> 2.8, fireTol 3 -> 4 (auto fire nembak pas kamera
+        udah deket, ga nunggu persis), shotGap 0.8 -> 0.6. Logika anti-macet (jam) dan step charge ga disentuh.
 
     v8.9  (perbaikan dari v8.8: generator ESP ilang + aim masih meleset)
       - ESP generator ilang: teks cuma muncul dalam 70 stud (generator biasanya jauh) dan bar-nya nyaris item di map gelap.
@@ -175,23 +197,23 @@ local CFG = {
     parry = {
         enabled      = true,
         via          = "game",     -- "game" (manggil ParryClient asli: animasi + cooldown UI ikut) | "input" | "remote" (tanpa animasi)
-        range        = 13,
-        frontDot     = 0.35,
+        range        = 16,
+        frontDot     = 0.15,
         hitGuess     = 0.16,       -- detik: tebakan "animasi mulai -> kena" buat animasi yang belum pernah kena kamu
-        arriveLead   = 0.06,       -- detik: parry harus nyampe server segini SEBELUM kena (ping & fps dihitung otomatis)
-        slack        = 0.15,       -- detik: telat <= segini tetap dikirim langsung (window parry 0.8s), lebih telat = dibuang
+        arriveLead   = 0.16,       -- detik: parry harus nyampe server segini SEBELUM kena (ping & fps dihitung otomatis)
+        slack        = 0.25,       -- detik: telat <= segini tetap dikirim langsung (window parry 0.8s), lebih telat = dibuang
         skipHopeless = true,       -- true = parry ga dikirim kalau ping bikin bener-bener mustahil kekejar (cd 60s ga kebuang)
         fireUnknown  = true,       -- true = animasi yang belum pernah kena kamu tetap dicoba (pakai hitGuess)
-        minChance    = 0.25,       -- animasi yang udah dikenal: parry cuma kalau (kena / muncul deket) >= ini
-        minPlays     = 4,          -- baru boleh dibuang karena rasio rendah setelah muncul segini kali (parry sukses ikut dihitung)
+        minChance    = 0.15,       -- animasi yang udah dikenal: parry cuma kalau (kena / muncul deket) >= ini
+        minPlays     = 6,          -- baru boleh dibuang karena rasio rendah setelah muncul segini kali (parry sukses ikut dihitung)
         jitter       = 0.004,
         spacing      = 0.5,
         autoEquip    = true,       -- dagger di-equip pas animasi mulai (bukan pas parry), biar ga makan waktu
         learn        = true,       -- true = waktu kena per animasi dipelajari dari damage yang beneran kena
         minDelay     = 0,
         maxDelay     = 0.7,
-        pollWindow   = 0.35,       -- detik: setelah delay, tunggu killer masuk jangkauan selama segini
-        lead         = 0.08,       -- detik: minimal prediksi gerak killer (lunge) buat cek jarak
+        pollWindow   = 0.5,        -- detik: setelah delay, tunggu killer masuk jangkauan selama segini
+        lead         = 0.12,       -- detik: minimal prediksi gerak killer (lunge) buat cek jarak
         useServerCd  = true,       -- true = nahan parry selama cooldown dari parryResult server (meleset = cd 60s)
         minPriority  = Enum.AnimationPriority.Action,
     },
@@ -200,23 +222,23 @@ local CFG = {
         snap         = true,      -- tembakan manual yang deket killer dibelokkan pas ke badan
         trigger      = true,      -- nembak otomatis pas crosshair kamu di badan killer (kamu yang bidik)
         aimLock      = true,      -- kamera otomatis nempel ke killer pas kamu tahan aim
-        lockFov      = 60,        -- derajat dari arah kamera: killer di luar sudut ini ga di-lock (180 = semua arah)
+        lockFov      = 90,        -- derajat dari arah kamera: killer di luar sudut ini ga di-lock (180 = semua arah)
         lockSmooth   = 0.85,      -- 1 = keras (langsung nempel), makin kecil makin halus
-        fireTol      = 3,         -- derajat MAKS: kamera harus segini dekat ke target baru auto-fire (ngecil sendiri kalau killer jauh)
+        fireTol      = 4,         -- derajat MAKS: kamera harus segini dekat ke target baru auto-fire (ngecil sendiri kalau killer jauh)
         leadPing     = 1.0,       -- x ping: tembak ke posisi killer di depan (kompensasi lag). 0 = mati. 1 = ping penuh (RTT)
         leadBase     = 0.1,       -- detik: tambahan tetap di atas leadPing (interpolasi pemain lain ~0.1s)
         leadMax      = 0.5,       -- detik: batas atas total waktu prediksi
         autoTravel   = true,      -- true = kalau di tuning game ada kecepatan peluru, dipakai buat waktu tempuh (lead = 1)
         fireStep     = 0,         -- 0 = auto (step tercepat yang aman dari macet). 3 = selalu charge penuh. 1/2 = paksa step itu
-        hitRadius    = 2.2,       -- stud: jarak peluru-ke-badan yang dianggap "aim pas" (makin gede makin longgar)
+        hitRadius    = 2.8,       -- stud: jarak peluru-ke-badan yang dianggap "aim pas" (makin gede makin longgar)
         snapFov      = 8,         -- derajat: batas belok buat tembakan manual (snap)
-        maxDist      = 180,
+        maxDist      = 220,
         aimPart      = "UpperTorso",
         lead         = 0,         -- 0 = hitscan. 1 = tambah prediksi buat travel time peluru (jarak / bulletSpeed)
         bulletSpeed  = 800,
         needLOS      = true,      -- trigger cuma nembak kalau killer ga ketutup tembok
         chargeMargin = 0.12,      -- detik, tambahan di atas waktu charge step (biar server ga nolak)
-        shotGap      = 0.8,       -- detik, jeda minimum antar tembakan trigger
+        shotGap      = 0.6,       -- detik, jeda minimum antar tembakan trigger
         confirmWait  = 0.7,       -- detik, nunggu bukti tembakan kekirim
     },
 
@@ -249,6 +271,7 @@ local CFG = {
         objOutline = true,        -- outline buat generator / pallet / hook / exit juga
         fillPlayers = 0.78,       -- transparansi isi outline pemain (1 = cuma garis)
         fillObjs    = 1,          -- transparansi isi outline objek (1 = cuma garis)
+        fillGens    = 0.6,        -- v9.0: transparansi isi outline generator (biar keliatan dari jauh)
         textDistObjs    = 70,     -- teks PALLET / HOOK cuma muncul kalau lebih deket dari ini (stud). 0 = selalu. Generator/exit/pemain selalu
         textDistPlayers = 0,      -- sama buat pemain. 0 = selalu
         maxHighlights   = 20,     -- batas Highlight bareng (Roblox ~31 TERMASUK punya game). Sisanya yang paling jauh / ga penting ga digambar
@@ -265,6 +288,19 @@ local CFG = {
         scanPlayers = 0.5,        -- detik antar scan pemain
         scanObjects = 1.5,        -- detik antar scan generator / pallet
         scanMap     = 5,          -- detik antar scan nama hook / exit (GetDescendants Map)
+        scanGens    = 1,          -- v9.0: detik antar scan generator (folder + tag, murah)
+        scanBody    = 8,          -- v9.0: detik antar scan part "GeneratorBody" di Workspace (cadangan, cuma jalan kalau folder kosong)
+        genBodyScan = true,       -- v9.0: false = matiin jalur cadangan GeneratorBody
+    },
+
+    ring = {                      -- v9.0: cincin jangkauan parry di tanah (kayak video referensi)
+        enabled   = true,
+        thickness = 0.45,         -- stud, tebal cincin
+        onTop     = false,        -- true = cincin tembus tembok / objek
+        ready     = Color3.fromRGB(70, 235, 235),    -- teal: parry siap
+        cooldown  = Color3.fromRGB(120, 135, 145),   -- abu: cooldown / lagi nahan
+        inRange   = Color3.fromRGB(235, 255, 255),   -- putih: killer di dalam cincin, parry siap
+        danger    = Color3.fromRGB(255, 150, 50),    -- oranye: killer di dalam cincin, parry belum siap
     },
 }
 
@@ -329,7 +365,7 @@ end
 
 local function notify(msg)
     pcall(function()
-        StarterGui:SetCore("SendNotification", { Title = "DP v8.9", Text = msg, Duration = 2.5 })
+        StarterGui:SetCore("SendNotification", { Title = "DP v9.0", Text = msg, Duration = 2.5 })
     end)
     log("INFO", msg)
 end
@@ -2698,7 +2734,7 @@ local function resetAll()
     notify("Reset: state gun/skill dibersihin")
 end
 
------------------------------------------------------------------- 4) ESP (v8.9)
+------------------------------------------------------------------ 4) ESP (v9.0)
 -- Murni sisi client. Highlight + BillboardGui ditaruh di folder gethui/CoreGui (ga bisa dibaca script game, ga kereplikasi).
 -- Ga ada remote yang ditembak dan ga ada objek game yang diubah.
 -- v8.8: outline juga buat objek, mode teks full/mini/off, bar progress/HP, jatah Highlight (batas Roblox ~31).
@@ -2822,6 +2858,102 @@ local ESP_PLAYER = { player = true }
 local ESP_OBJ = { gen = true, pallet = true, hook = true, exit = true }
 local ESP_PRIO = { player = 1, gen = 1, exit = 2, hook = 3, pallet = 3 }   -- jatah Highlight: kecil = duluan
 
+-- v9.0: generator dicari lewat 3 jalur sekaligus (folder Map.newGenerators, tag "GeneratorPoint", part "GeneratorBody").
+-- Semua disimpan di tabel ESP biar ga nambah variabel local di chunk utama (batas Lua 200).
+ESP.gen = { found = {}, bodies = {}, tScan = -10, tBody = -10, sig = "", tLog = 0, busy = false }
+ESP.genProgNames = { "RepairProgress", "Progress", "repairProgress", "GeneratorProgress" }
+
+function ESP.genTop(inst)   -- model generator dari GeneratorBody / GeneratorPoint
+    local p = inst.Parent
+    if p and p ~= workspace and p:IsA("Model") and not Players:GetPlayerFromCharacter(p) then return p end
+    return inst
+end
+
+function ESP.genScan()
+    local G, now = ESP.gen, os.clock()
+    if now - G.tScan < CFG.esp.scanGens then return G.found end
+    G.tScan = now
+    local found, via = {}, { folder = 0, tag = 0, body = 0 }
+    local function dup(inst)   -- udah ada dia / induknya (<= 4 tingkat) di daftar
+        local up = inst
+        for _ = 1, 4 do
+            if not up or up == workspace then return false end
+            if found[up] then return true end
+            up = up.Parent
+        end
+        return false
+    end
+    local function add(m, how)
+        if m and m.Parent and not dup(m) then
+            found[m] = how
+            via[how] = via[how] + 1
+        end
+    end
+    local map = workspace:FindFirstChild("Map")
+    local ng = map and map:FindFirstChild("newGenerators")
+    if ng then
+        for _, m in ipairs(ng:GetChildren()) do
+            if m:IsA("Model") or m:IsA("BasePart") then add(m, "folder") end
+        end
+    end
+    pcall(function()
+        for _, pt in ipairs(CS:GetTagged("GeneratorPoint")) do
+            if pt:IsDescendantOf(workspace) then add(ESP.genTop(pt), "tag") end
+        end
+    end)
+    -- cadangan: part "GeneratorBody" (nama dipakai kode game). Discan bertahap di thread sendiri biar ga lag.
+    if CFG.esp.genBodyScan and via.folder == 0 and now - G.tBody >= CFG.esp.scanBody and not G.busy then
+        G.tBody, G.busy = now, true
+        task.spawn(function()
+            local list, n = {}, 0
+            pcall(function()
+                for _, d in ipairs(workspace:GetDescendants()) do
+                    n = n + 1
+                    if d.Name == "GeneratorBody" and d:IsA("BasePart") then list[#list + 1] = d end
+                    if n % 4000 == 0 then task.wait() end
+                end
+            end)
+            G.bodies, G.busy = list, false
+        end)
+    end
+    for _, b in ipairs(G.bodies) do
+        if b.Parent and b:IsDescendantOf(workspace) then add(ESP.genTop(b), "body") end
+    end
+    G.found = found
+
+    local total = via.folder + via.tag + via.body
+    local sig = via.folder .. "/" .. via.tag .. "/" .. via.body
+    if sig ~= G.sig or (total == 0 and now - G.tLog > 20) then
+        G.sig, G.tLog = sig, now
+        local first
+        for m in pairs(found) do
+            first = m
+            break
+        end
+        log("ESP", string.format("generator ketemu: folder %d, tag %d, body %d%s", via.folder, via.tag, via.body,
+            first and (" | contoh: " .. first:GetFullName())
+            or (" | KOSONG (Map=" .. tostring(map ~= nil) .. ", newGenerators=" .. tostring(ng ~= nil) .. ")")))
+    end
+    return found
+end
+
+function ESP.genAdornee(m)
+    if m:IsA("BasePart") then return m end
+    return m:FindFirstChild("GeneratorBody", true) or m:FindFirstChild("HitBox", true) or espAdornee(m)
+end
+
+function ESP.genProg(e)   -- nil = progress ga ketemu di attribute mana pun
+    for _, o in ipairs({ e.model, e.adornee }) do
+        if o then
+            for _, n in ipairs(ESP.genProgNames) do
+                local v = tonumber(o:GetAttribute(n))
+                if v then return v end
+            end
+        end
+    end
+    return nil
+end
+
 local function espScanPlayers()
     local C = CFG.esp
     local seen = {}
@@ -2850,13 +2982,12 @@ end
 local function espScanObjects()
     local C = CFG.esp
     local seen = {}
-    local map = workspace:FindFirstChild("Map")
-    if map and C.objects then
-        local gens = map:FindFirstChild("newGenerators")
-        if gens and C.gens then
-            for _, m in ipairs(gens:GetChildren()) do
-                if m:IsA("Model") then
-                    local ad = m:FindFirstChild("HitBox") or espAdornee(m)
+    -- v9.0: generator lewat genScan (folder + tag + GeneratorBody), ga lagi bergantung ke Map.newGenerators doang
+    if C.objects and C.gens then
+        local okG, errG = pcall(function()
+            for m in pairs(ESP.genScan()) do
+                if m.Parent then
+                    local ad = ESP.genAdornee(m)
                     if ad then
                         local e = ESP.entries[m] or espMake(m, ad, "gen")
                         if e then
@@ -2866,7 +2997,14 @@ local function espScanObjects()
                     end
                 end
             end
+        end)
+        if not okG and os.clock() - ESP.errAt > 5 then
+            ESP.errAt = os.clock()
+            log("ESP", "scan gen error: " .. tostring(errG))
         end
+    end
+    local map = workspace:FindFirstChild("Map")
+    if map and C.objects then
         local pals = map:FindFirstChild("Pallets")
         if pals and C.pallets then
             for _, m in ipairs(pals:GetChildren()) do
@@ -2940,6 +3078,7 @@ local ESP_COL = {
     broken = Color3.fromRGB(150, 150, 150), hook = Color3.fromRGB(255, 140, 0),
     exit = Color3.fromRGB(140, 255, 140), lock = Color3.fromRGB(255, 255, 255),
     genLo = Color3.fromRGB(255, 70, 70), genHi = Color3.fromRGB(80, 255, 120),
+    genUnk = Color3.fromRGB(255, 200, 60),
 }
 
 local function espUpdate()
@@ -2987,15 +3126,17 @@ local function espUpdate()
             end
             mini = state or (locked and "LOCK") or (e.isK and "KILLER") or ""
         elseif e.kind == "gen" then
-            local prog = tonumber(e.model:GetAttribute("RepairProgress")) or 0
-            if C.hideDoneGens and prog >= 99.9 then show = false end
-            col = ESP_COL.genLo:Lerp(ESP_COL.genHi, math.clamp(prog / 100, 0, 1))
-            title = string.format("GEN %d%%", math.floor(prog + 0.5))
+            local prog = ESP.genProg(e)
+            local known = prog ~= nil
+            prog = prog or 0
+            if C.hideDoneGens and known and prog >= 99.9 then show = false end
+            col = known and ESP_COL.genLo:Lerp(ESP_COL.genHi, math.clamp(prog / 100, 0, 1)) or ESP_COL.genUnk
+            title = known and string.format("GEN %d%%", math.floor(prog + 0.5)) or "GEN"
             local n = tonumber(e.model:GetAttribute("PlayersRepairingCount")) or 0
             if n > 0 then title = title .. " x" .. n end
             if e.model:GetAttribute("ProgressPaused") then title = title .. " (pause)" end
-            frac = math.clamp(prog / 100, 0, 1)
-            mini = string.format("%d%%", math.floor(prog + 0.5))
+            if known then frac = math.clamp(prog / 100, 0, 1) end
+            mini = known and string.format("%d%%", math.floor(prog + 0.5)) or "GEN"
         elseif e.kind == "pallet" then
             if e.state == "broken" then
                 if not C.showBroken then show = false end
@@ -3053,6 +3194,7 @@ local function espUpdate()
             and ((isPlayer and C.outline) or ((not isPlayer) and C.objOutline))
         if hlWanted then
             want[#want + 1] = { e = e, col = col, dist = dist, locked = locked,
+                near = (e.isK == true and dist <= CFG.parry.range),   -- v9.0: killer di dalam cincin parry -> isi lebih tebel
                 prio = locked and 0 or (ESP_PRIO[e.kind] or 3) }
         elseif e.hl then
             e.hl.Enabled = false
@@ -3083,7 +3225,11 @@ local function espUpdate()
                     h.Enabled = true
                     h.OutlineColor = w.col
                     h.FillColor = w.col
-                    h.FillTransparency = w.locked and 0.55 or (e.kind == "player" and C.fillPlayers or C.fillObjs)
+                    h.FillTransparency = w.locked and 0.55
+                        or (w.near and 0.5)
+                        or (e.kind == "player" and C.fillPlayers)
+                        or (e.kind == "gen" and C.fillGens)
+                        or C.fillObjs
                 end
             elseif e.hl then
                 e.hl.Enabled = false
@@ -3129,6 +3275,96 @@ task.spawn(function()
     espClear()
 end)
 
+------------------------------------------------------------------ 5) CINCIN PARRY (v9.0)
+-- Cincin di tanah ngelilingin kamu = jangkauan auto parry (CFG.parry.range). Murni visual client:
+-- CylinderHandleAdornment di folder gethui/CoreGui, ga ada objek game yang disentuh dan ga ada remote.
+-- Dibungkus do...end biar ga nambah variabel local di chunk utama.
+do
+    local R = { adorn = nil, folder = nil }
+
+    local function ringDrop()
+        if R.adorn then pcall(function() R.adorn:Destroy() end) end
+        if R.folder then pcall(function() R.folder:Destroy() end) end
+        R.adorn, R.folder = nil, nil
+        ENV.DP3_RINGFOLDER = nil
+    end
+
+    local function ringMake()
+        local parent
+        pcall(function() parent = (gethui and gethui()) or game:GetService("CoreGui") end)
+        if not parent then parent = LP:FindFirstChildOfClass("PlayerGui") end
+        if not parent then return false end
+        local f = Instance.new("Folder")
+        f.Name = "DP3_RING"
+        f.Parent = parent
+        local a = Instance.new("CylinderHandleAdornment")
+        a.Name = "parry_ring"
+        a.Height = 0.06
+        a.ZIndex = 1
+        a.Parent = f
+        R.folder, R.adorn = f, a
+        ENV.DP3_RINGFOLDER = f
+        return true
+    end
+
+    do   -- sisa instance sebelumnya (reload)
+        local old = ENV.DP3_RINGFOLDER
+        if old then pcall(function() old:Destroy() end) end
+    end
+
+    task.spawn(function()
+        local errAt = 0
+        while alive() do
+            task.wait(0.1)
+            local ok, err = pcall(function()
+                local C = CFG.ring
+                local me, hum = myRoot(), myHum()
+                local dagger = (C.enabled and CFG.parry.enabled) and findDagger() or nil
+                if not (C.enabled and dagger and me and hum and hum.Health > 0 and amSurvivor()) then
+                    if R.adorn then ringDrop() end
+                    return
+                end
+                if not (R.adorn and R.adorn.Parent) then
+                    if R.adorn or R.folder then ringDrop() end
+                    if not ringMake() then return end
+                end
+                local a = R.adorn
+                local now = os.clock()
+                local range = CFG.parry.range
+
+                local near = false
+                for _, k in ipairs(killers()) do
+                    if (k.root.Position - me.Position).Magnitude <= range then
+                        near = true
+                        break
+                    end
+                end
+                local okR, ready = pcall(parryReady, now)
+                ready = okR and ready == true
+
+                local col
+                if near then col = ready and C.inRange or C.danger
+                else col = ready and C.ready or C.cooldown end
+                local pulse = 0.5 + 0.5 * math.sin(now * (near and 8 or 3))
+
+                local drop = (hum.HipHeight > 0 and hum.HipHeight or 2) + me.Size.Y / 2 - 0.08
+                a.Adornee = me
+                a.Radius = range
+                a.InnerRadius = math.clamp(range - C.thickness, 0.1, range - 0.05)
+                a.CFrame = CFrame.new(0, -drop, 0) * CFrame.Angles(math.rad(90), 0, 0)
+                a.Color3 = col
+                a.AlwaysOnTop = C.onTop == true
+                a.Transparency = near and (0.1 + 0.15 * pulse) or (0.38 + 0.12 * pulse)
+            end)
+            if not ok and os.clock() - errAt > 5 then
+                errAt = os.clock()
+                log("RING", "error: " .. tostring(err))
+            end
+        end
+        ringDrop()
+    end)
+end
+
 ------------------------------------------------------------------ UI
 local panel, statusLabel
 local function buildUI()
@@ -3160,7 +3396,7 @@ local function buildUI()
     panel = Instance.new("Frame")
     panel.Size = UDim2.fromOffset(238, 0)
     panel.AutomaticSize = Enum.AutomaticSize.Y
-    panel.Position = UDim2.new(0, 60, 0.5, -262)
+    panel.Position = UDim2.new(0, 60, 0.5, -280)
     panel.BackgroundColor3 = Color3.fromRGB(16, 16, 20)
     panel.BackgroundTransparency = 0.08
     panel.Visible = false
@@ -3240,7 +3476,7 @@ local function buildUI()
     mkBtn(r4, function() return "Step: " .. (CFG.gun.fireStep == 0 and "auto" or CFG.gun.fireStep), true end,
         function() CFG.gun.fireStep = cycle({ 0, 3, 2, 1 }, CFG.gun.fireStep) end, 0.5)
     mkBtn(r4, function() return "Radius: " .. CFG.gun.hitRadius, true end,
-        function() CFG.gun.hitRadius = cycle({ 1.6, 2.2, 3.0, 4.0 }, CFG.gun.hitRadius) end, 0.5)
+        function() CFG.gun.hitRadius = cycle({ 1.6, 2.2, 2.8, 4.0 }, CFG.gun.hitRadius) end, 0.5)
 
     local r5 = mkRow()
     mkBtn(r5, function() return "Lock FOV: " .. CFG.gun.lockFov, true end,
@@ -3289,6 +3525,12 @@ local function buildUI()
         function() CFG.esp.objOutline = not CFG.esp.objOutline end, 0.5)
     mkBtn(r12, function() return "Lead: " .. CFG.gun.leadPing, CFG.gun.leadPing > 0 end,
         function() CFG.gun.leadPing = cycle({ 0, 0.5, 1, 1.5 }, CFG.gun.leadPing) end, 0.5)
+
+    local r13 = mkRow()
+    mkBtn(r13, function() return "Ring: " .. onoff(CFG.ring.enabled), CFG.ring.enabled end,
+        function() CFG.ring.enabled = not CFG.ring.enabled end, 0.5)
+    mkBtn(r13, function() return "Range: " .. CFG.parry.range, true end,
+        function() CFG.parry.range = cycle({ 10, 13, 16, 20 }, CFG.parry.range) end, 0.5)
 
     local r8 = mkRow()
     mkBtn(r8, function() return "Copy Log", true end, function()
@@ -3402,4 +3644,4 @@ UIS.InputBegan:Connect(function(i, gp)
     end
 end)
 
-notify("v8.9 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap tombol DP buat panel")
+notify("v9.0 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap tombol DP buat panel")
