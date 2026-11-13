@@ -1,5 +1,5 @@
 --[[
-    Distrik Pembantai v8.7  (PlaceId 93978595733734)  -  Delta / Luau
+    Distrik Pembantai v8.8  (PlaceId 93978595733734)  -  Delta / Luau
 
     Fitur
       1. Auto Parry        : Parrying Dagger, delay dipelajari otomatis (sama kayak v6)
@@ -8,9 +8,31 @@
                              otomatis. Tembakan apapun selama lock aktif (manual juga) arahnya dikunci ke badan killer.
       3. Gun Snap          : tembakan manual kamu yang udah deket killer (<= snapFov) dibelokkan pas ke badan
       4. Auto Skill Check  : jarum + zona dari GUI, tekan di tengah zona, ada verifikasi + auto-unstick UI
-      5. ESP               : outline + nama + jarak killer/survivor, progress generator, pallet, hook (F8)
+      5. ESP               : outline badan + outline objek, bar progress/HP, teks bisa full/mini/off (F8, F10 = mode teks)
 
     Kontrol : tombol bulat "DP" (geser bebas)  |  F1 parry  F2 snap  F3 skill  F4 panel  F5 trigger  F8 esp
+
+    v8.8  (ESP lebih rapi + aim lebih akurat)
+      - ESP OBJEK: generator / pallet / hook / exit sekarang punya OUTLINE juga (cuma garis, isinya transparan penuh),
+        warnanya ngikut status (generator merah -> hijau sesuai progress). Tombol "Line Obj" di panel buat matiin.
+        Highlight Roblox dibatasi ~31 sekaligus, jadi dijatah (CFG.esp.maxHighlights): killer yang lagi di-lock duluan,
+        lalu pemain, lalu generator/exit, terakhir hook/pallet, dalam tiap kelompok yang paling deket menang.
+      - TEKS ga penuh layar lagi: 3 mode (tombol "Teks" di panel / F10): FULL (nama + info + jarak), MINI (satu baris
+        pendek: jarak / persen generator, objek lain cuma outline), OFF (tanpa teks sama sekali). Teks objek cuma muncul
+        kalau lebih deket dari CFG.esp.textDistObjs (70 stud), makin jauh makin pudar, font lebih kecil.
+      - BAR tipis di bawah label: progress generator dan HP survivor (tombol "Bar"). Bar ga makan tempat kayak teks.
+      - Killer yang lagi di-lock aim outline-nya jadi PUTIH ([LOCK] di mode full) biar keliatan siapa yang dikunci.
+      - AIM LEBIH AKURAT:
+          1) prediksi gerak: kecepatan killer dihitung sendiri dari perpindahan posisi per frame (EMA, bukan
+             AssemblyLinearVelocity yang berisik), lalu tembakan diarahkan ke posisi killer di depan sejauh
+             ping x CFG.gun.leadPing + leadBase (server nembak pakai posisi yang udah maju dari yang kamu liat).
+             Dipakai di: kunci kamera, arah tembakan (lock / trigger / snap), pemilihan target, dan cek crosshair.
+          2) toleransi auto fire ngecil otomatis sesuai jarak (sudut yang dipakai hitRadius), jadi killer jauh
+             ditembak cuma kalau bener-bener pas, killer deket tetap longgar. fireTol 5 -> 3 sebagai batas atas.
+          3) kamera nempel lebih cepet: lockSmooth 0.6 -> 0.85.
+        Tombol "Lead" di panel: 0 / 0.5 / 0.75 / 1. Kalau tembakan meleset ke BELAKANG killer yang lari -> naikin,
+        kalau meleset ke DEPAN -> turunin. 0 = persis kayak v8.7 (tanpa prediksi).
+      - Panel dinaikin dikit karena nambah 2 baris tombol.
 
     v8.7  (fitur baru: ESP)
       - ESP murni sisi client: Highlight (outline badan) + BillboardGui (teks) di folder gethui/CoreGui. Server dan pemain
@@ -132,6 +154,7 @@ local CFG = {
         lock  = Enum.KeyCode.F6,
         hide  = Enum.KeyCode.F7,
         esp   = Enum.KeyCode.F8,
+        text  = Enum.KeyCode.F10,   -- ganti mode teks ESP (F9 = console Roblox)
     },
 
     parry = {
@@ -163,14 +186,17 @@ local CFG = {
         trigger      = true,      -- nembak otomatis pas crosshair kamu di badan killer (kamu yang bidik)
         aimLock      = true,      -- kamera otomatis nempel ke killer pas kamu tahan aim
         lockFov      = 60,        -- derajat dari arah kamera: killer di luar sudut ini ga di-lock (180 = semua arah)
-        lockSmooth   = 0.6,       -- 1 = keras (langsung nempel), makin kecil makin halus
-        fireTol      = 5,         -- derajat: kamera harus segini dekat ke target baru auto-fire
+        lockSmooth   = 0.85,      -- 1 = keras (langsung nempel), makin kecil makin halus
+        fireTol      = 3,         -- derajat MAKS: kamera harus segini dekat ke target baru auto-fire (ngecil sendiri kalau killer jauh)
+        leadPing     = 0.5,       -- x ping: tembak ke posisi killer di depan (kompensasi lag). 0 = mati. 0.5/0.75/1 = makin jauh ke depan
+        leadBase     = 0.03,      -- detik: tambahan tetap di atas leadPing (interpolasi pemain lain)
+        leadMax      = 0.3,       -- detik: batas atas total waktu prediksi
         fireStep     = 0,         -- 0 = auto (step tercepat yang aman dari macet). 3 = selalu charge penuh. 1/2 = paksa step itu
         hitRadius    = 2.2,       -- stud: jarak peluru-ke-badan yang dianggap "aim pas" (makin gede makin longgar)
         snapFov      = 8,         -- derajat: batas belok buat tembakan manual (snap)
         maxDist      = 180,
         aimPart      = "UpperTorso",
-        lead         = 0,         -- 0 = hitscan. 1 = prediksi gerak kalau ternyata peluru ada travel time
+        lead         = 0,         -- 0 = hitscan. 1 = tambah prediksi buat travel time peluru (jarak / bulletSpeed)
         bulletSpeed  = 800,
         needLOS      = true,      -- trigger cuma nembak kalau killer ga ketutup tembok
         chargeMargin = 0.12,      -- detik, tambahan di atas waktu charge step (biar server ga nolak)
@@ -199,9 +225,17 @@ local CFG = {
         killer    = true,         -- tampilkan killer
         survivors = true,         -- tampilkan survivor lain
         outline   = true,         -- Highlight (outline + isi tipis) di badan pemain. Batas Roblox ~31 Highlight sekaligus
-        names     = true,         -- nama pemain / nama objek
+        names     = true,         -- nama pemain / nama objek (mode teks FULL)
         dist      = true,         -- jarak (stud)
-        hp        = true,         -- sisa HP % survivor
+        hp        = true,         -- sisa HP % survivor (mode teks FULL)
+        text      = "full",       -- "full" | "mini" | "off"   (tombol Teks di panel / F10). off = tanpa teks sama sekali
+        bars      = true,         -- bar tipis progress generator + HP survivor
+        objOutline = true,        -- outline buat generator / pallet / hook / exit juga
+        fillPlayers = 0.78,       -- transparansi isi outline pemain (1 = cuma garis)
+        fillObjs    = 1,          -- transparansi isi outline objek (1 = cuma garis)
+        textDistObjs    = 70,     -- teks objek cuma muncul kalau lebih deket dari ini (stud). 0 = selalu. Outline + bar tetap
+        textDistPlayers = 0,      -- sama buat pemain. 0 = selalu
+        maxHighlights   = 28,     -- batas Highlight bareng (Roblox ~31). Sisanya yang paling jauh / paling ga penting ga digambar
         objects   = true,         -- generator / pallet / hook / exit
         gens      = true,
         pallets   = true,
@@ -279,7 +313,7 @@ end
 
 local function notify(msg)
     pcall(function()
-        StarterGui:SetCore("SendNotification", { Title = "DP v8.7", Text = msg, Duration = 2.5 })
+        StarterGui:SetCore("SendNotification", { Title = "DP v8.8", Text = msg, Duration = 2.5 })
     end)
     log("INFO", msg)
 end
@@ -538,13 +572,59 @@ local function visibleFrom(origin, part)
     return workspace:Raycast(origin, part.Position - origin, rayP) == nil
 end
 
-local function dirTo(origin, part)
-    local pos = part.Position
-    if CFG.gun.lead > 0 then
-        local v = part.AssemblyLinearVelocity or Vector3.new(0, 0, 0)
-        local t = (pos - origin).Magnitude / CFG.gun.bulletSpeed
-        pos = pos + v * t * CFG.gun.lead
+-- v8.8: PREDIKSI GERAK. Kecepatan killer dihitung sendiri dari perpindahan posisi per frame (EMA, tahan lag spike).
+-- Server nembak pakai posisi killer yang udah maju dari yang kamu liat (ping + interpolasi), jadi tembakan diarahkan
+-- ke posisi killer di depan sejauh leadTime(). leadPing = 0 -> persis kayak v8.7 (tanpa prediksi).
+local Track = {}   -- [Model karakter killer] = { pos, t, vel, grounded }
+RunService.Heartbeat:Connect(function()
+    if not alive() then return end
+    local now = os.clock()
+    for _, k in ipairs(killers()) do
+        local pos = k.root.Position
+        local tr = Track[k.char]
+        if not tr then
+            Track[k.char] = { pos = pos, t = now, vel = Vector3.new(0, 0, 0), grounded = true }
+        else
+            local dt = now - tr.t
+            if dt > 0.003 then
+                if dt > 0.4 or (pos - tr.pos).Magnitude > 40 then
+                    tr.vel = Vector3.new(0, 0, 0)               -- respawn / teleport: jangan dihitung sebagai kecepatan
+                else
+                    local a = 1 - math.exp(-dt / 0.06)
+                    tr.vel = tr.vel:Lerp((pos - tr.pos) / dt, a)
+                end
+                tr.pos, tr.t = pos, now
+                tr.grounded = k.hum.FloorMaterial ~= Enum.Material.Air
+            end
+        end
     end
+    for ch in pairs(Track) do
+        if not ch.Parent then Track[ch] = nil end
+    end
+end)
+
+local function leadTime(dist)
+    local G = CFG.gun
+    local t = 0
+    if G.leadPing > 0 then t = t + Net.rtt * G.leadPing + G.leadBase end
+    if G.lead > 0 and G.bulletSpeed > 0 then t = t + (dist / G.bulletSpeed) * G.lead end
+    return math.clamp(t, 0, G.leadMax)
+end
+
+local function predictPos(part, origin)
+    local pos = part.Position
+    local tr = Track[part.Parent]
+    if not tr then return pos end
+    local t = leadTime((pos - origin).Magnitude)
+    if t <= 0 then return pos end
+    local v = tr.vel
+    if tr.grounded then v = Vector3.new(v.X, 0, v.Z) end      -- lagi napak tanah: ga usah nebak naik/turun
+    if v.Magnitude > 70 then v = v.Unit * 70 end              -- batas kecepatan masuk akal (dash), glitch ga bikin tembakan nyasar
+    return pos + v * t
+end
+
+local function dirTo(origin, part)
+    local pos = predictPos(part, origin)
     local d = pos - origin
     if d.Magnitude < 0.01 then return nil end
     return d.Unit
@@ -582,7 +662,7 @@ local function snapDir(orig)
     for _, k in ipairs(killers()) do
         local part = pickPart(k.char)
         if part then
-            local to = part.Position - origin
+            local to = predictPos(part, origin) - origin
             local dist = to.Magnitude
             if dist <= CFG.gun.maxDist and dist > 0.5 then
                 local ang = math.deg(math.acos(math.clamp(o:Dot(to.Unit), -1, 1)))
@@ -1244,7 +1324,7 @@ local function findTarget()
     for _, k in ipairs(killers()) do
         local part = pickPart(k.char)
         if part then
-            local to = part.Position - origin
+            local to = predictPos(part, origin) - origin
             local dist = to.Magnitude
             if dist <= CFG.gun.maxDist and dist > 1 then
                 local along = to:Dot(dir)
@@ -1393,6 +1473,14 @@ local function fireTrigger(tool, part)
     end)
 end
 
+-- v8.8: toleransi sudut buat auto fire ngecil sesuai jarak (sudut yang ditempati hitRadius), dibatasi 1 .. fireTol derajat
+local function fireTolFor(part)
+    local cam = workspace.CurrentCamera
+    local dist = cam and (part.Position - cam.CFrame.Position).Magnitude or 0
+    if dist < 1 then return CFG.gun.fireTol end
+    return math.clamp(math.deg(math.atan(CFG.gun.hitRadius / dist)), 1, CFG.gun.fireTol)
+end
+
 local function gunStep()
     local tool = equippedGun()
     local aiming = tool ~= nil and aimingNow()
@@ -1438,7 +1526,7 @@ local function gunStep()
     -- target: kalau kamera udah nempel ke target lock -> tembak. kalau belum, cek crosshair manual
     local part, miss
     local lt = Gun.lockTarget
-    if CFG.gun.aimLock and lt and lt.Parent and Gun.lockAng <= CFG.gun.fireTol then
+    if CFG.gun.aimLock and lt and lt.Parent and Gun.lockAng <= fireTolFor(lt) then
         part, miss = lt, 0
     else
         part, miss = findTarget()
@@ -1487,7 +1575,7 @@ local function pickLockTarget(origin, camCF)
     for _, k in ipairs(killers()) do
         local part = pickPart(k.char)
         if part then
-            local to = part.Position - camCF.Position
+            local to = predictPos(part, origin) - camCF.Position
             local dist = to.Magnitude
             if dist <= CFG.gun.maxDist and dist > 1 then
                 local ang = math.deg(math.acos(math.clamp(look:Dot(to.Unit), -1, 1)))
@@ -1533,7 +1621,7 @@ local function aimLockStep(dt)
         log("LOCK", string.format("nempel ke %s (%.0f deg)", part.Parent.Name, ang))
     end
 
-    local goal = (part.Position - cf.Position).Unit
+    local goal = (predictPos(part, origin) - cf.Position).Unit
     local a = 1 - (1 - math.clamp(CFG.gun.lockSmooth, 0.02, 1)) ^ (math.clamp(dt, 0, 0.1) * 60)
     local nl = cf.LookVector:Lerp(goal, a)
     if nl.Magnitude < 0.01 then nl = goal end
@@ -2520,9 +2608,10 @@ local function resetAll()
     notify("Reset: state gun/skill dibersihin")
 end
 
------------------------------------------------------------------- 4) ESP (v8.7)
+------------------------------------------------------------------ 4) ESP (v8.8)
 -- Murni sisi client. Highlight + BillboardGui ditaruh di folder gethui/CoreGui (ga bisa dibaca script game, ga kereplikasi).
 -- Ga ada remote yang ditembak dan ga ada objek game yang diubah.
+-- v8.8: outline juga buat objek, mode teks full/mini/off, bar progress/HP, jatah Highlight (batas Roblox ~31).
 local ESP = { entries = {}, folder = nil, errAt = 0, tPlayers = 0, tObjs = 0, tMap = 0, nameHits = {} }
 
 local function espFolder()
@@ -2559,7 +2648,8 @@ local function espClear()
 end
 
 -- kind: "player" | "gen" | "pallet" | "hook" | "exit"
-local function espMake(key, adornee, kind, hlTarget)
+-- Highlight dibuat malas (lazy) di espUpdate sesuai jatah, jadi espMake cuma bikin label + bar.
+local function espMake(key, adornee, kind)
     local f = espFolder()
     if not f then return nil end
     local bb = Instance.new("BillboardGui")
@@ -2568,31 +2658,54 @@ local function espMake(key, adornee, kind, hlTarget)
     bb.AlwaysOnTop = true
     bb.LightInfluence = 0
     bb.ResetOnSpawn = false
-    bb.Size = UDim2.fromOffset(170, 34)
-    bb.StudsOffsetWorldSpace = Vector3.new(0, kind == "player" and 3.4 or 2.2, 0)
+    bb.Size = UDim2.fromOffset(150, 40)
+    bb.StudsOffsetWorldSpace = Vector3.new(0, kind == "player" and 3.6 or 2.4, 0)
     bb.Parent = f
+
     local l = Instance.new("TextLabel")
     l.BackgroundTransparency = 1
-    l.Size = UDim2.fromScale(1, 1)
-    l.Font = Enum.Font.GothamBold
-    l.TextSize = 13
-    l.TextStrokeTransparency = 0.35
+    l.Position = UDim2.fromOffset(0, 0)
+    l.Size = UDim2.new(1, 0, 0, 28)
+    l.Font = Enum.Font.GothamMedium
+    l.TextSize = 12
+    l.TextYAlignment = Enum.TextYAlignment.Bottom
+    l.TextStrokeTransparency = 0.5
     l.TextColor3 = Color3.new(1, 1, 1)
     l.Text = ""
     l.Parent = bb
-    local e = { kind = kind, adornee = adornee, bb = bb, lbl = l }
-    if hlTarget and CFG.esp.outline then
-        local h = Instance.new("Highlight")
-        h.Name = "esp_hl"
-        h.Adornee = hlTarget
-        h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-        h.FillTransparency = 0.8
-        h.OutlineTransparency = 0
-        h.Parent = f
-        e.hl = h
-    end
+
+    -- bar tipis: progress generator / HP survivor
+    local back = Instance.new("Frame")
+    back.AnchorPoint = Vector2.new(0.5, 0)
+    back.Position = UDim2.new(0.5, 0, 0, 31)
+    back.Size = UDim2.fromOffset(60, 5)
+    back.BackgroundColor3 = Color3.fromRGB(10, 10, 12)
+    back.BackgroundTransparency = 0.2
+    back.BorderSizePixel = 0
+    back.Visible = false
+    back.Parent = bb
+    local fill = Instance.new("Frame")
+    fill.Size = UDim2.fromScale(0, 1)
+    fill.BorderSizePixel = 0
+    fill.Parent = back
+
+    local e = { kind = kind, adornee = adornee, bb = bb, lbl = l, bar = back, barFill = fill }
     ESP.entries[key] = e
     return e
+end
+
+local function espHighlight(e)
+    if e.hl and e.hl.Parent then return e.hl end
+    local f = ESP.folder
+    if not f then return nil end
+    local h = Instance.new("Highlight")
+    h.Name = "esp_hl"
+    h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    h.OutlineTransparency = 0
+    h.Adornee = e.hlTarget
+    h.Parent = f
+    e.hl = h
+    return h
 end
 
 local function espAdornee(m)
@@ -2616,6 +2729,7 @@ end
 
 local ESP_PLAYER = { player = true }
 local ESP_OBJ = { gen = true, pallet = true, hook = true, exit = true }
+local ESP_PRIO = { player = 1, gen = 2, exit = 2, hook = 3, pallet = 3 }   -- jatah Highlight: kecil = duluan
 
 local function espScanPlayers()
     local C = CFG.esp
@@ -2630,9 +2744,9 @@ local function espScanPlayers()
                 local hum = ch:FindFirstChildOfClass("Humanoid")
                 local root = ch:FindFirstChild("HumanoidRootPart")
                 if hum and root and hum.Health > 0 then
-                    local e = ESP.entries[ch] or espMake(ch, root, "player", ch)
+                    local e = ESP.entries[ch] or espMake(ch, root, "player")
                     if e then
-                        e.p, e.hum, e.root, e.isK, e.adornee = p, hum, root, isK, root
+                        e.p, e.hum, e.root, e.isK, e.adornee, e.hlTarget = p, hum, root, isK, root, ch
                         seen[ch] = true
                     end
                 end
@@ -2653,9 +2767,9 @@ local function espScanObjects()
                 if m:IsA("Model") then
                     local ad = m:FindFirstChild("HitBox") or espAdornee(m)
                     if ad then
-                        local e = ESP.entries[m] or espMake(m, ad, "gen", nil)
+                        local e = ESP.entries[m] or espMake(m, ad, "gen")
                         if e then
-                            e.model, e.adornee = m, ad
+                            e.model, e.adornee, e.hlTarget = m, ad, m
                             seen[m] = true
                         end
                     end
@@ -2672,9 +2786,10 @@ local function espScanObjects()
                     elseif broken and espVisible(broken) then state = "broken" end
                     local ad = espAdornee(intact or broken or m)
                     if ad and state then
-                        local e = ESP.entries[m] or espMake(m, ad, "pallet", nil)
+                        local e = ESP.entries[m] or espMake(m, ad, "pallet")
                         if e then
                             e.model, e.adornee, e.state = m, ad, state
+                            e.hlTarget = (state == "ok") and intact or broken
                             seen[m] = true
                         end
                     end
@@ -2717,9 +2832,9 @@ local function espScanObjects()
         if d.Parent and isOn and C.objects then
             local ad = espAdornee(d)
             if ad then
-                local e = ESP.entries[d] or espMake(d, ad, kind, nil)
+                local e = ESP.entries[d] or espMake(d, ad, kind)
                 if e then
-                    e.model, e.adornee = d, ad
+                    e.model, e.adornee, e.hlTarget = d, ad, d
                     seen[d] = true
                 end
             end
@@ -2732,7 +2847,7 @@ local ESP_COL = {
     killer = Color3.fromRGB(255, 60, 60), survivor = Color3.fromRGB(90, 200, 255),
     bad = Color3.fromRGB(255, 150, 40), pallet = Color3.fromRGB(255, 220, 90),
     broken = Color3.fromRGB(150, 150, 150), hook = Color3.fromRGB(255, 140, 0),
-    exit = Color3.fromRGB(140, 255, 140),
+    exit = Color3.fromRGB(140, 255, 140), lock = Color3.fromRGB(255, 255, 255),
     genLo = Color3.fromRGB(255, 70, 70), genHi = Color3.fromRGB(80, 255, 120),
 }
 
@@ -2741,6 +2856,10 @@ local function espUpdate()
     local cam = workspace.CurrentCamera
     local me = myRoot()
     local from = (me and me.Position) or (cam and cam.CFrame.Position)
+    local mode = C.text
+    local lockedChar = Gun.lockTarget and Gun.lockTarget.Parent
+    local want = {}   -- kandidat Highlight, dijatah setelah loop
+
     for key, e in pairs(ESP.entries) do
         local ad = e.adornee
         if not (ad and ad.Parent) or (e.hum and e.hum.Health <= 0) then
@@ -2748,7 +2867,10 @@ local function espUpdate()
         else
             local dist = from and (ad.Position - from).Magnitude or 0
             local show = (C.maxDist <= 0) or dist <= C.maxDist
-            local title, sub, col = "", nil, Color3.new(1, 1, 1)
+            local title, mini, sub, frac = "", "", nil, nil
+            local col = Color3.new(1, 1, 1)
+            local locked = false
+
             if e.kind == "player" then
                 local ch = e.hum.Parent
                 col = e.isK and ESP_COL.killer or ESP_COL.survivor
@@ -2759,11 +2881,18 @@ local function espUpdate()
                     elseif ch:GetAttribute("Trapped") then state = "TRAP" end
                 end
                 if state and not e.isK then col = ESP_COL.bad end
+                locked = e.isK and lockedChar ~= nil and lockedChar == ch
+                if locked then col = ESP_COL.lock end
                 title = (e.isK and "KILLER " or "") .. (C.names and e.p.DisplayName or "")
+                if locked then title = "[LOCK] " .. title end
                 if state then title = title .. " [" .. state .. "]" end
                 if C.hp and not e.isK and e.hum.MaxHealth > 0 then
                     sub = string.format("%d%%", math.floor(e.hum.Health / e.hum.MaxHealth * 100 + 0.5))
                 end
+                if (not e.isK) and e.hum.MaxHealth > 0 then
+                    frac = e.hum.Health / e.hum.MaxHealth
+                end
+                mini = state or (locked and "LOCK") or (e.isK and "KILLER") or ""
             elseif e.kind == "gen" then
                 local prog = tonumber(e.model:GetAttribute("RepairProgress")) or 0
                 if C.hideDoneGens and prog >= 99.9 then show = false end
@@ -2772,6 +2901,8 @@ local function espUpdate()
                 local n = tonumber(e.model:GetAttribute("PlayersRepairingCount")) or 0
                 if n > 0 then title = title .. " x" .. n end
                 if e.model:GetAttribute("ProgressPaused") then title = title .. " (pause)" end
+                frac = math.clamp(prog / 100, 0, 1)
+                mini = string.format("%d%%", math.floor(prog + 0.5))
             elseif e.kind == "pallet" then
                 if e.state == "broken" then
                     if not C.showBroken then show = false end
@@ -2783,18 +2914,74 @@ local function espUpdate()
                 col, title = ESP_COL.hook, "HOOK"
             else
                 col, title = ESP_COL.exit, (e.model and e.model.Name or "EXIT"):upper()
+                mini = "EXIT"
             end
-            local text = title
-            if sub then text = text .. "  " .. sub end
-            if C.dist then text = text .. "\n" .. math.floor(dist + 0.5) .. "m" end
-            e.bb.Enabled = show
+
+            -- teks: off = kosong, mini = satu baris pendek, full = nama + info + jarak
+            local isPlayer = e.kind == "player"
+            local textOk = mode ~= "off"
+            if textOk and not isPlayer and C.textDistObjs > 0 and dist > C.textDistObjs then textOk = false end
+            if textOk and isPlayer and C.textDistPlayers > 0 and dist > C.textDistPlayers then textOk = false end
+            local distTxt = C.dist and (math.floor(dist + 0.5) .. "m") or nil
+            local text = ""
+            if textOk then
+                if mode == "mini" then
+                    text = mini
+                    if distTxt and isPlayer then text = (text ~= "" and (text .. " ") or "") .. distTxt end
+                else
+                    local parts = {}
+                    if title ~= "" then parts[#parts + 1] = title end
+                    if sub then parts[#parts + 1] = sub end
+                    text = table.concat(parts, "  ")
+                    if distTxt then text = (text ~= "" and (text .. "\n") or "") .. distTxt end
+                end
+            end
+            local fade = math.clamp((dist - 60) / 240, 0, 0.55)   -- makin jauh makin pudar
+
+            local showBar = show and C.bars and frac ~= nil
+            e.bb.Enabled = show and (text ~= "" or showBar)
             e.lbl.Text = text
             e.lbl.TextColor3 = col
-            if e.hl then
-                e.hl.Enabled = show
-                e.hl.OutlineColor = col
-                e.hl.FillColor = col
+            e.lbl.TextSize = (mode == "mini") and 11 or 12
+            e.lbl.TextTransparency = fade
+            e.lbl.TextStrokeTransparency = 0.5 + fade * 0.5
+            e.bar.Visible = showBar
+            if showBar then
+                e.barFill.Size = UDim2.fromScale(math.clamp(frac, 0, 1), 1)
+                e.barFill.BackgroundColor3 = col
             end
+
+            -- outline: kandidat jatah Highlight
+            local hlWanted = show and e.hlTarget and e.hlTarget.Parent
+                and ((isPlayer and C.outline) or ((not isPlayer) and C.objOutline))
+            if hlWanted then
+                want[#want + 1] = { e = e, col = col, dist = dist, locked = locked,
+                    prio = locked and 0 or (ESP_PRIO[e.kind] or 3) }
+            elseif e.hl then
+                e.hl.Enabled = false
+            end
+        end
+    end
+
+    -- jatah Highlight: lock > pemain > generator/exit > hook/pallet, dalam kelompok yang paling deket duluan
+    table.sort(want, function(a, b)
+        if a.prio ~= b.prio then return a.prio < b.prio end
+        return a.dist < b.dist
+    end)
+    local budget = math.max(1, math.floor(C.maxHighlights))
+    for i, w in ipairs(want) do
+        local e = w.e
+        if i <= budget then
+            local h = espHighlight(e)
+            if h then
+                if h.Adornee ~= e.hlTarget then h.Adornee = e.hlTarget end
+                h.Enabled = true
+                h.OutlineColor = w.col
+                h.FillColor = w.col
+                h.FillTransparency = w.locked and 0.55 or (e.kind == "player" and C.fillPlayers or C.fillObjs)
+            end
+        elseif e.hl then
+            e.hl.Enabled = false
         end
     end
 end
@@ -2863,7 +3050,7 @@ local function buildUI()
     panel = Instance.new("Frame")
     panel.Size = UDim2.fromOffset(238, 0)
     panel.AutomaticSize = Enum.AutomaticSize.Y
-    panel.Position = UDim2.new(0, 60, 0.5, -226)
+    panel.Position = UDim2.new(0, 60, 0.5, -262)
     panel.BackgroundColor3 = Color3.fromRGB(16, 16, 20)
     panel.BackgroundTransparency = 0.08
     panel.Visible = false
@@ -2949,7 +3136,7 @@ local function buildUI()
     mkBtn(r5, function() return "Lock FOV: " .. CFG.gun.lockFov, true end,
         function() CFG.gun.lockFov = cycle({ 30, 60, 90, 180 }, CFG.gun.lockFov) end, 0.5)
     mkBtn(r5, function() return "Smooth: " .. CFG.gun.lockSmooth, true end,
-        function() CFG.gun.lockSmooth = cycle({ 0.25, 0.6, 1 }, CFG.gun.lockSmooth) end, 0.5)
+        function() CFG.gun.lockSmooth = cycle({ 0.25, 0.6, 0.85, 1 }, CFG.gun.lockSmooth) end, 0.5)
 
     local r6 = mkRow()
     mkBtn(r6, function() return "Skill: " .. onoff(CFG.skill.enabled), CFG.skill.enabled end,
@@ -2977,12 +3164,21 @@ local function buildUI()
 
     local r10 = mkRow()
     mkBtn(r10, function() return "Outline: " .. onoff(CFG.esp.outline), CFG.esp.outline end,
-        function()
-            CFG.esp.outline = not CFG.esp.outline
-            espClear()   -- dibikin ulang di scan berikutnya
-        end, 0.5)
+        function() CFG.esp.outline = not CFG.esp.outline end, 0.5)
     mkBtn(r10, function() return CFG.esp.maxDist <= 0 and "Jarak: inf" or ("Jarak: " .. CFG.esp.maxDist), true end,
         function() CFG.esp.maxDist = cycle({ 150, 300, 600, 0 }, CFG.esp.maxDist) end, 0.5)
+
+    local r11 = mkRow()
+    mkBtn(r11, function() return "Teks: " .. CFG.esp.text:upper(), CFG.esp.text ~= "off" end,
+        function() CFG.esp.text = ({ full = "mini", mini = "off", off = "full" })[CFG.esp.text] or "full" end, 0.5)
+    mkBtn(r11, function() return "Bar: " .. onoff(CFG.esp.bars), CFG.esp.bars end,
+        function() CFG.esp.bars = not CFG.esp.bars end, 0.5)
+
+    local r12 = mkRow()
+    mkBtn(r12, function() return "Line Obj: " .. onoff(CFG.esp.objOutline), CFG.esp.objOutline end,
+        function() CFG.esp.objOutline = not CFG.esp.objOutline end, 0.5)
+    mkBtn(r12, function() return "Lead: " .. CFG.gun.leadPing, CFG.gun.leadPing > 0 end,
+        function() CFG.gun.leadPing = cycle({ 0, 0.5, 0.75, 1 }, CFG.gun.leadPing) end, 0.5)
 
     local r8 = mkRow()
     mkBtn(r8, function() return "Copy Log", true end, function()
@@ -3029,7 +3225,7 @@ local function buildUI()
             if d.Magnitude > 8 then moved = true end
             if moved then
                 fab.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
-                panel.Position = UDim2.new(fab.Position.X.Scale, fab.Position.X.Offset + 50, fab.Position.Y.Scale, fab.Position.Y.Offset - 204)
+                panel.Position = UDim2.new(fab.Position.X.Scale, fab.Position.X.Offset + 50, fab.Position.Y.Scale, fab.Position.Y.Offset - 240)
             end
         end
     end)
@@ -3047,8 +3243,8 @@ local function buildUI()
             task.wait(0.25)
             if panel.Visible then
                 if statusLabel then
-                    statusLabel.Text = string.format("gun: %s\nping %.0f ms | fps %.0f | rung %s", tostring(Gun.status),
-                        Net.rtt * 1000, 1 / Net.frameDt, tostring(Skill.tierName or "-"))
+                    statusLabel.Text = string.format("gun: %s\nping %.0f ms | fps %.0f | lead %.0f ms | rung %s", tostring(Gun.status),
+                        Net.rtt * 1000, 1 / Net.frameDt, leadTime(50) * 1000, tostring(Skill.tierName or "-"))
                 end
                 if logDirty and logLabel then
                     logDirty = false
@@ -3088,9 +3284,12 @@ UIS.InputBegan:Connect(function(i, gp)
         CFG.esp.enabled = not CFG.esp.enabled
         if not CFG.esp.enabled then espClear() end
         notify("ESP: " .. (CFG.esp.enabled and "ON" or "OFF"))
+    elseif k == CFG.keys.text then
+        CFG.esp.text = ({ full = "mini", mini = "off", off = "full" })[CFG.esp.text] or "full"
+        notify("ESP teks: " .. CFG.esp.text:upper())
     elseif k == CFG.keys.panel and panel then
         panel.Visible = not panel.Visible
     end
 end)
 
-notify("v8.7 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap tombol DP buat panel")
+notify("v8.8 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap tombol DP buat panel")
