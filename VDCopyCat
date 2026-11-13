@@ -1,20 +1,6 @@
--- === SAFE WRAPPER ===
-local ok, err = pcall(function()
+-- === SAFE WRAPPER (v2) ===
+local __ok, __err = xpcall(function()
 
--- tempel seluruh script v11 di sini (dari --[[ sampai notify terakhir)
-
-end)
-if not ok then
-    warn("[DP3] Script error: " .. tostring(err))
-    pcall(function()
-        game:GetService("StarterGui"):SetCore("SendNotification", {
-            Title = "DP3 Error",
-            Text = tostring(err):sub(1, 200),
-            Duration = 10,
-        })
-    end)
-end
--- === END SAFE WRAPPER ===
 --[[
     Distrik Pembantai v11  (PlaceId 93978595733734)  -  Delta / Luau
     =============== MERGED ===============
@@ -459,6 +445,7 @@ local function ownerOf(f)
 end
 
 local function fireHandlers(sig, obj, filter)
+    if ENV.DP3_NOFIRE then return 0, 0 end
     local ok, conns = pcall(getconnections, sig)
     if not ok or not conns then return 0, 0 end
     local n, total = 0, 0
@@ -810,6 +797,10 @@ local function hookBody(self, ...)
 end
 
 local function installHook()
+    if ENV.DP3_NOHOOK then
+        log("HOOK", "DP3_NOHOOK aktif -> hook dimatikan (mode tes)")
+        return false
+    end
     if not (hookmetamethod and getnamecallmethod and setnamecallmethod and newcclosure) then
         log("HOOK", "executor ga support hookmetamethod -> snap/kunci arah ga jalan")
         return false
@@ -953,7 +944,7 @@ end
 
 local function pgScan()
     PG.scanAt = os.clock()
-    if not getgc then PG.noGc = true return nil, 0 end
+    if ENV.DP3_NOGC or not getgc then PG.noGc = true return nil, 0 end
     local ok, list = pcall(getgc, true)
     if not ok or type(list) ~= "table" then return nil, 0 end
     local best, bestScore, n = nil, 0, 0
@@ -2302,6 +2293,7 @@ end
 local VIM_RUNG = { tap = true, click = true, vim = true }
 
 local function fireSig(sig, ...)
+    if ENV.DP3_NOFIRE then return 0 end
     local args = table.pack(...)
     if firesignal then
         return (pcall(firesignal, sig, table.unpack(args, 1, args.n))) and 1 or 0
@@ -2320,6 +2312,7 @@ local function fireSig(sig, ...)
 end
 
 local function fireBtn()
+    if ENV.DP3_NOFIRE then return false, "DP3_NOFIRE aktif" end
     if not (firesignal or getconnections) then return false, "firesignal/getconnections ga ada" end
     local targets = {}
     local act = findActionButton()
@@ -2394,7 +2387,7 @@ local function refreshGameFns(force)
     local now = os.clock()
     if now - Skill.gameScanAt < 2.5 then return end
     Skill.gameScanAt = now
-    if not (getgc and debug and debug.info) then return end
+    if ENV.DP3_NOGC or not (getgc and debug and debug.info) then return end
     local okg, list = pcall(getgc, false)
     if not okg or type(list) ~= "table" then return end
     local out, names = {}, {}
@@ -2417,6 +2410,7 @@ local function refreshGameFns(force)
 end
 
 local function fireGameHandlers()
+    if ENV.DP3_NOFIRE then return false, "DP3_NOFIRE aktif" end
     local n = 0
     for _, f in ipairs(Skill.gameFns) do
         if gameFnLive(f) then
@@ -4084,8 +4078,8 @@ local function buildUI()
         function() CFG.veil.spearGravity = cycle({ 0, 10, 20, 40, 80 }, CFG.veil.spearGravity) end, 0.33)
     mkBtn(rV3, function()
         local remain = (Veil and Veil.cdEndsAt or 0) - os.clock()
-        return remain > 0 and string.format("CD:%.1f", remain) or "CD:ok"
-    end, true end, function()
+        return (remain > 0 and string.format("CD:%.1f", remain) or "CD:ok"), true
+    end, function()
         if Veil then Veil.cdEndsAt = 0 end
     end, 0.33)
 
@@ -4261,3 +4255,19 @@ keep(UIS.InputBegan:Connect(function(i, gp)
 end))
 
 notify("v11 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap DP buat panel")
+
+end, function(e)
+    return tostring(e) .. "\n" .. tostring(debug.traceback and debug.traceback("", 2) or "")
+end)
+if not __ok then
+    warn("[DP3] Script error: " .. tostring(__err))
+    pcall(function()
+        local first = tostring(__err):match("^[^\n]+") or tostring(__err)
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = "DP3 Error",
+            Text = first:sub(1, 200),
+            Duration = 10,
+        })
+    end)
+end
+-- === END SAFE WRAPPER ===
