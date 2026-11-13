@@ -1,235 +1,26 @@
 --[[
-    Distrik Pembantai v10.1  (PlaceId 93978595733734)  -  Delta / Luau
+    Distrik Pembantai v11  (PlaceId 93978595733734)  -  Delta / Luau
+    =============== MERGED ===============
+    SURVIVOR: Auto Parry | Gun Aim Lock + Auto Fire | Gun Snap | Auto Skill Check | ESP | Ring/Cone
+    KILLER  : Veil Aim Assist | Spear Prediction | Projectile Tracker | Cooldown Monitor
 
-    Fitur
-      1. Auto Parry        : Parrying Dagger, delay dipelajari otomatis (sama kayak v6)
-      2. Gun Aim Lock + Auto Fire: pas kamu tahan aim, kamera otomatis nempel ke badan killer terdekat
-                             (harus keliatan, ga ketutup tembok). Pas udah nempel dan charge cukup, script nembak
-                             otomatis. Tembakan apapun selama lock aktif (manual juga) arahnya dikunci ke badan killer.
-      3. Gun Snap          : tembakan manual kamu yang udah deket killer (<= snapFov) dibelokkan pas ke badan
-      4. Auto Skill Check  : jarum + zona dari GUI, tekan di tengah zona, ada verifikasi + auto-unstick UI
-      5. ESP               : outline badan + outline objek, bar progress/HP, teks bisa full/mini/off (F8, F10 = mode teks)
+    Kontrol : F1 parry | F2 snap | F3 skill | F4 panel | F5 trigger | F6 lock | F7 hide | F8 esp | F10 teks
+              RightShift = toggle Veil Assist (killer)   |   tahan RMB = aim (gun di survivor, spear di killer)
+              tombol bulat "DP" bisa digeser, tap = panel
 
-    Kontrol : tombol bulat "DP" (geser bebas)  |  F1 parry  F2 snap  F3 skill  F4 panel  F5 trigger  F8 esp
-
-    v10.1  (gun: charge lebih cepet + log buat diagnosa peluru 0.5)
-      - GUN: chargeMargin 0.12 -> 0.04. Game sendiri ngitung step pakai waktu persis tanpa margin, jadi tembakan
-        keluar ~0.08s lebih awal di tiap step. Kalau jadi sering macet / server nolak, naikin ke 0.08.
-      - GUN: log baru "aim mulai" (shots / tofHalf / tofRoll / tofState pas mulai bidik) dan detail yang sama pas tembakan keluar.
-        Buat ngecek: peluru 0.5 itu shots = 0 -> pakai tabel macet "habis" (80% / 65% / 50%), dan roll-nya kapan berubah.
-      - Yang ga berubah: auto fire tetap nahan kalau tofRoll bakal bikin macet (itu yang ngejaga gun ga ke-lock).
-
-    v10.0  (audit penuh v9.1: bug, kebocoran, performa, akurasi skill check, belajar tersimpan)
-      - KEBOCORAN: tiap reload, koneksi lama (Heartbeat, input, remote, animasi) cuma berhenti sendiri tapi tetap nyambung, dan hook
-        __namecall nambah 1 lapis per reload. Sekarang semua koneksi didaftarkan (keep) dan diputus pas reload, hook dipasang SEKALI
-        per sesi executor (dispatcher), reload cuma ganti isinya.
-      - PERFORMA: killers() dipanggil belasan kali per frame (tiap kali loop semua pemain + string lower/find). Sekarang nama team
-        di-cache dan daftar killer dipakai bareng dalam satu frame. Cek halangan (Blockcast sampai 8x per killer per frame pas aim)
-        di-cache 50 ms per killer, titik moncong di-cache per frame. Loop cadangan skill check / animasi parry dilambatin ke ~25-30 Hz.
-        Scan hook/exit di Map (GetDescendants) sekarang nyicil (yield tiap 2500 objek) jadi ga bikin freeze di map gede.
-      - SKILL CHECK: (1) kecepatan jarum di-seed dari atribut game skillcheckspeed (tween linear 360 / max(1.3 x speed, 0.4) detik, dari
-        Skillcheck-gen), jadi tekan bisa dihitung dari sample pertama, ga nunggu regresi 3 sample. (2) frame-snap: kalau jarum tinggal
-        <= 1.5 frame dari tengah zona, rotasi Line dirapihin ke tengah zona tepat sebelum handleSkillCheck game dipanggil -> sukses ga
-        tergantung FPS (zona cuma 14 derajat = ~50 ms; di 20-30 FPS satu frame bisa lompat lewat zona). (3) verifikasi mandiri: tekanan
-        dianggap MASUK kalau jarum berhenti (tween dibatalin game) atau Check ketutup, ga cuma kalau hook FireServer nangkep Result;
-        kalau hook mati dulu semua rung ditembak berantai. (4) tier \"down\" sekarang punya jalur getconnections yang cuma manggil handler
-        milik script Skillcheck (firesignal lama ikut manggil SEMUA handler tombol aksi, termasuk repair/interaksi).
-      - GUN: auto-fire ga nunggu killer \"lurus\" kalau killer deket (<= steadyMinDist 20 stud, prediksi jarak dekat udah akurat),
-        steadyWait 0.9 -> 0.5. Sisa kode placeholder di evalShot dibersihin.
-      - PARRY: kecepatan killer buat cek ancaman pakai kecepatan hasil lacakan sendiri (EMA, tahan noise) bukan AssemblyLinearVelocity
-        mentah, cuma sumbu datar. Cooldown \"permanent\" jalur remote dibatasi 30 detik (dulu math.huge = bisa nyangkut sampai respawn).
-      - BELAJAR TERSIMPAN: hasil belajar (waktu kena per animasi parry, koreksi lead/bias/originLag gun, range parry, tuning skill check)
-        disimpan ke dp10_learn.json (writefile) tiap 20 detik dan dimuat pas script jalan, jadi ga mulai dari nol tiap ronde/reload.
-        Hapus file itu kalau mau reset belajar.
-      - DIAGNOSA: log \"ENV\" di awal nyatet fitur executor yang ada (hook, getgc, debug.info, firesignal, getconnections, VIM, writefile).
-
-    v9.1  (perbaikan dari v9.0: cincin + garis jangkauan killer, tanpa dagger, gun belajar dari tembakannya sendiri)
-      - CINCIN + GARIS HIT KILLER (sesuai gambar referensi): lingkaran di tanah ngelilingin kamu = jangkauan kamu kena hit = jangkauan
-        parry (satu angka: CFG.parry.range). Dari tiap killer keluar DUA garis putih ke depan (tepi kerucut serang, CFG.ring.coneDeg)
-        sepanjang jangkauan itu, plus garis tipis killer -> kamu kalau udah deket. Kamu masuk kerucut + jangkauan = garis jadi merah.
-        Cincin dan garis muncul TANPA harus pegang dagger (v9.0 nyembunyiin cincin kalau ga punya dagger). Tombol Ring / Cone / Range.
-        Jangkauan belajar sendiri: tiap kamu kena hit, jarak killer terdekat dicatat, range naik kalau killer ternyata kena dari lebih jauh.
-      - GUN, akar tembakan meleset (dari kode game): game cuma ngirim ARAH + tool ke server (Fire: tool, arah, step), server yang nentuin
-        titik tembak dan casting-nya (Blockcast 0.5 stud, nembus survivor / part transparan). Jadi meleset datang dari 4 hal:
-          1) toleransi auto-fire v9.0 kelonggaran (sampai 4 derajat = 2-3 stud di jarak 40). Sekarang dalam STUD (fireStuds 0.6).
-          2) titik tembak server ga sama sama titik tembak kamu pas KAMU lagi gerak (posisi kamu di server ketinggalan). Sekarang
-             origin dikoreksi pakai kecepatan kamu (originLag 0.035s) dan dipelajari otomatis dari balasan server.
-          3) cek halangan pakai Raycast tipis, sedangkan game pakai Blockcast 0.5 -> tembakan kena sudut tembok. Sekarang cek pakai
-             Blockcast yang sama + nembus part transparan kayak game.
-          4) killer gerak: prediksi pakai kecepatan yang berubah-ubah. Sekarang auto-fire nunggu killer \"lurus\" (arah + kecepatan stabil
-             0.4s terakhir, nunggu maksimal steadyWait 0.9s), titik bidik pindah ke HumanoidRootPart (+0.3), dan lead dipelajari.
-      - GUN BELAJAR: server nyiarin garis peluru (VisualizeBullet: origin, titik akhir). Dari situ script tahu tembakannya kena atau
-        meleset berapa stud (kanan / atas), lalu: killer gerak -> lead dikoreksi (leadAdj), killer diem tapi meleset -> bias arah
-        dikoreksi, kamu gerak -> originLag dikoreksi. Tiap tembakan nyatet baris \"TEMBAK ... hit X/Y\" di log, ada hit rate di panel.
-        Kalau server ga nyiarin ke penembak, baris itu ga akan muncul (aman, cuma belajarnya yang mati). Tombol Learn / Steady.
-      - Config: range 16 -> 12 (default, naik sendiri kalau kena hit dari lebih jauh), fireTol 4 -> 2.5, leadMax 0.5 -> 0.7.
-
-    v9.0  (perbaikan dari v8.9: generator ESP masih ga keliatan + parry/gun dimaksimalin + cincin kayak di video)
-      - ESP GENERATOR, akar: v8.9 cuma nyari di SATU tempat (Workspace.Map.newGenerators, harus Model). Kalau di map yang lagi
-        main generatornya ada di folder lain / bukan Model, ESP-nya kosong tanpa error. Sekarang dicari lewat 3 jalur sekaligus:
-          1) folder Map.newGenerators (cara lama)
-          2) tag CollectionService "GeneratorPoint" (dipakai kode game sendiri: SurvivorActions / Skillcheck-gen)
-          3) part bernama "GeneratorBody" di seluruh Workspace (nama ini juga dipakai kode game; discan bertahap biar ga lag,
-             cuma jalan kalau jalur 1 kosong)
-        Hasilnya digabung tanpa dobel. Progress dibaca dari beberapa nama attribute (RepairProgress / Progress / ...), dan kalau
-        ga ada attribute-nya generator TETAP muncul (teks "GEN" kuning, tanpa bar) bukannya disembunyiin. Isi outline generator
-        sekarang tipis (fillGens 0.6) biar keliatan dari jauh. Log nyatet "generator ketemu: folder X, tag Y, body Z | contoh: <path>"
-        tiap ada perubahan. Kalau masih kosong: Copy Log, kirim baris itu ke aku.
-      - CINCIN PARRY: cincin teal di tanah ngelilingin kamu = jangkauan auto parry (CFG.parry.range), kayak di video referensi.
-        Teal = parry siap, abu = cooldown / lagi nahan, putih = ada killer di dalam cincin, oranye = killer di dalam tapi parry
-        belum siap. Killer yang masuk cincin outline-nya ikut keisi (lebih tebel). Murni visual client. Tombol "Ring" + "Range" di panel.
-        Cincin cuma muncul kalau kamu survivor yang punya Parrying Dagger.
-      - PARRY MAKSIMAL: range 13 -> 16, frontDot 0.35 -> 0.15 (killer agak nyamping tetap kehitung), arriveLead 0.06 -> 0.16
-        (parry dikirim lebih awal; window parry game 0.8s jadi pukulan jatuh di tengah window, bukan di ujung), slack 0.15 -> 0.25
-        (biar animasi yang tadinya lolos tetap lolos, soalnya arriveLead naik), pollWindow 0.35 -> 0.5, lead 0.08 -> 0.12,
-        minChance 0.25 -> 0.15 dan minPlays 4 -> 6 (animasi serang jarang jangan cepet dibuang).
-      - GUN MAKSIMAL: lockFov 60 -> 90, maxDist 180 -> 220, hitRadius 2.2 -> 2.8, fireTol 3 -> 4 (auto fire nembak pas kamera
-        udah deket, ga nunggu persis), shotGap 0.8 -> 0.6. Logika anti-macet (jam) dan step charge ga disentuh.
-
-    v8.9  (perbaikan dari v8.8: generator ESP ilang + aim masih meleset)
-      - ESP generator ilang: teks cuma muncul dalam 70 stud (generator biasanya jauh) dan bar-nya nyaris item di map gelap.
-        Sekarang generator / exit / pemain SELALU ada teks (batas jarak cuma buat pallet & hook), bar lebih gede + ada
-        garis tepi putih, jatah Highlight 28 -> 20 (Highlight bawaan game ikut ngitung ke batas Roblox ~31) dan generator
-        satu kelas prioritas sama pemain. Tiap entry ESP di-update pakai pcall: kalau satu error, yang lain tetap jalan,
-        dan errornya masuk log ("ESP update gen error: ...").
-      - AIM masih meleset: prediksi v8.8 cuma setengah dari yang dibutuhin. Server nembak pakai posisi killer SEKARANG,
-        sedangkan yang kamu liat tertinggal ~ ping + interpolasi (~0.1s). Default sekarang leadPing 1.0 + leadBase 0.1
-        (v8.8: 0.5 + 0.03), batas 0.5s. Tombol Lead: 0 / 0.5 / 1 / 1.5.
-      - AIM: arah tembakan dihitung dari ORIGIN yang beneran dikirim game (args[1]) kalau dia Vector3 dekat moncong,
-        bukan dari tebakan moncong sendiri. Prediksi juga ngitung waktu tempuh peluru kalau ketemu.
-      - AIM: tuning gun dari game (TwistoffateTuning) dibaca dan dicatat ke log ("TUNE ..."), nama remote gun ("GUN remote ..."),
-        dan tiap tembakan nyatet speed killer + lead + ping ("HIT lock -> ... spd .. lead .."). Kalau di tuning ada
-        kecepatan peluru, otomatis dipakai (CFG.gun.autoTravel). Kalau masih meleset: tembak ~10x, Copy Log, kirim ke aku.
-
-    v8.8  (ESP lebih rapi + aim lebih akurat)
-      - ESP OBJEK: generator / pallet / hook / exit sekarang punya OUTLINE juga (cuma garis, isinya transparan penuh),
-        warnanya ngikut status (generator merah -> hijau sesuai progress). Tombol "Line Obj" di panel buat matiin.
-        Highlight Roblox dibatasi ~31 sekaligus, jadi dijatah (CFG.esp.maxHighlights): killer yang lagi di-lock duluan,
-        lalu pemain, lalu generator/exit, terakhir hook/pallet, dalam tiap kelompok yang paling deket menang.
-      - TEKS ga penuh layar lagi: 3 mode (tombol "Teks" di panel / F10): FULL (nama + info + jarak), MINI (satu baris
-        pendek: jarak / persen generator, objek lain cuma outline), OFF (tanpa teks sama sekali). Teks objek cuma muncul
-        kalau lebih deket dari CFG.esp.textDistObjs (70 stud), makin jauh makin pudar, font lebih kecil.
-      - BAR tipis di bawah label: progress generator dan HP survivor (tombol "Bar"). Bar ga makan tempat kayak teks.
-      - Killer yang lagi di-lock aim outline-nya jadi PUTIH ([LOCK] di mode full) biar keliatan siapa yang dikunci.
-      - AIM LEBIH AKURAT:
-          1) prediksi gerak: kecepatan killer dihitung sendiri dari perpindahan posisi per frame (EMA, bukan
-             AssemblyLinearVelocity yang berisik), lalu tembakan diarahkan ke posisi killer di depan sejauh
-             ping x CFG.gun.leadPing + leadBase (server nembak pakai posisi yang udah maju dari yang kamu liat).
-             Dipakai di: kunci kamera, arah tembakan (lock / trigger / snap), pemilihan target, dan cek crosshair.
-          2) toleransi auto fire ngecil otomatis sesuai jarak (sudut yang dipakai hitRadius), jadi killer jauh
-             ditembak cuma kalau bener-bener pas, killer deket tetap longgar. fireTol 5 -> 3 sebagai batas atas.
-          3) kamera nempel lebih cepet: lockSmooth 0.6 -> 0.85.
-        Tombol "Lead" di panel: 0 / 0.5 / 0.75 / 1. Kalau tembakan meleset ke BELAKANG killer yang lari -> naikin,
-        kalau meleset ke DEPAN -> turunin. 0 = persis kayak v8.7 (tanpa prediksi).
-      - Panel dinaikin dikit karena nambah 2 baris tombol.
-
-    v8.7  (fitur baru: ESP)
-      - ESP murni sisi client: Highlight (outline badan) + BillboardGui (teks) di folder gethui/CoreGui. Server dan pemain
-        lain ga bisa liat, ga ada remote yang ditembak, ga nyentuh objek game.
-      - Pemain: killer (merah) dan survivor (biru) dengan nama, sisa HP %, jarak. Survivor yang lagi digantung / digendong /
-        kena trap berubah oranye + label statusnya (dibaca dari attribute karakter IsHooked / IsCarried / Trapped).
-      - Objek: generator (progress dari attribute RepairProgress, merah -> hijau, yang udah 100% disembunyiin), pallet
-        (berdiri / patah dari model Intact / Broken), hook dan exit/lever (dicari lewat nama di Workspace.Map; daftar
-        namanya bisa diedit di CFG.esp.hookNames / exitNames).
-      - Kontrol: F8, tombol ESP / ESP Obj / Outline / Jarak di panel. Reload script otomatis bersihin ESP lama.
-
-    v8.6  (perbaikan dari v8.5, dicocokin ke ParryClient di dump game 20261113)
-      - PARRY, akar animasi + cooldown UI: v8.5 nembak remote "parry" langsung. Itu ngelewatin objek ParryClient milik game,
-        jadi (1) animasi parry ga pernah main (parryTrack:Play ada di ParryClient.Parry), (2) pas server bales parryResult,
-        handler game DIABAIKAN karena isParryResolving belum true -> gradient cooldown di UI ga jalan dan tombol item
-        keliatan masih siap, padahal server udah cooldown.
-        Sekarang via = "game" (default): script nyari objek ParryClient asli lewat getgc dan manggil :Parry() miliknya.
-        Hasilnya sama persis kayak pemain beneran: animasi dagger main + replikasi ke pemain lain, badan madep kamera,
-        slow, tag "doing action", gradient cooldown di UI (PC & HP), ikon abu-abu, dan parry nyangkut permanent juga ikut.
-      - PARRY: status siap/cooldown sekarang dibaca dari objek game (isParryOnCooldown / isParryResolving / isSilenced /
-        HP < 50% / lagi action lain), bukan hitungan sendiri. Kalau UI game masih cooldown, script ga nembak.
-      - PARRY: kalau ParryClient belum ketemu, otomatis turun ke "input" (tekan tombol item, tetap lewat game), terakhir
-        "remote" (cara lama, TANPA animasi, dikasih peringatan di log). Tombol Via di panel muter game > input > remote.
-      - PARRY: objek ParryClient dicari di background (hanya pas dagger ada), bukan pas parry, jadi ga ada lag spike
-        getgc di tengah timing. Cari ulang kalau dagger ganti / ronde baru, jeda cari makin panjang kalau ga ketemu.
-
-    v8.5  (perbaikan dari v8.4, dicocokin ke dump game 20261113)
-      - SKILL CHECK, akar #1: zona sukses di game = Line.Rotation antara Goal.Rotation+102 .. +116 (tengah +109),
-        tapi v8.4 nargetin Goal.Rotation itu sendiri -> selalu meleset ~109 derajat (~0.47 detik), jadi tiap check fail.
-        Sekarang target = Goal.Rotation + 109 (CFG.skill.zoneLo / zoneHi), dibaca dari .Rotation (sama kayak game).
-      - SKILL CHECK, akar #2: remote SkillCheckEvent ga ada di lobby (dibuat pas ronde). v8.4 WaitForChild 10 detik lalu
-        nyerah -> listener ga pernah nempel kalau script di-execute di lobby. Sekarang dipantau terus (dan dipasang
-        ulang kalau remote-nya dibuat ulang). Cadangan: tracker juga jalan sendiri pas GUI Check muncul.
-      - SKILL CHECK, cara tekan baru "game": manggil fungsi handleSkillCheck milik game langsung (ketemu lewat getgc),
-        tanpa simulasi sentuhan/input. Cadangan "down": firesignal MouseButton1Down tombol aksi tanpa argumen.
-        Hide UI default OFF (biar keliatan kalau ada yang salah). Jendela tracker 3.5s -> 5s (skillcheckspeed bisa < 1).
-      - PARRY, akar #1: window parry di game 0.8 detik setelah dipakai, bukan timing pas. Dulu animasi yang "dikenal"
-        dianggap ga kekejar kalau hit - RTT < 0, lalu ga dikirim sama sekali. Sekarang telat dikit tetap dikirim
-        langsung, baru dibuang kalau telatnya > CFG.parry.slack (0.15s).
-      - PARRY, akar #2: parry yang SUKSES ga dihitung sebagai "kena" di statistik animasi, jadi makin sering sukses
-        rasio kena/muncul turun lalu animasi serang itu dianggap bukan serangan dan ga di-parry lagi. Sekarang parry
-        sukses dihitung, dan butuh minimal minPlays kemunculan sebelum animasi dibuang.
-      - PARRY: parryResult permanent (parry sukses, item nunggu killer mukul) sekarang ditahan, cooldown direset
-        tiap ganti karakter. Deteksi animasi killer ditambah polling GetPlayingAnimationTracks (cadangan
-        AnimationPlayed), scan killer tiap 0.25s. Kalau killer udah <= 5 stud arah hadap ga dicek.
-
-    v8.4
-      - PARRY (ping/fps): delay dihitung dari ping + fps. hit (animasi mulai -> kena, dipelajari per animasi) dikurangi
-        arriveLead dan RTT (Stats "Data Ping" + jitter). Dijadwalin per Heartbeat, bukan task.wait (yang selalu dibulatin
-        ke frame berikutnya). Parry yang ga mungkin kekejar (ping kegedean) ga dikirim, soalnya meleset = cd 60 detik.
-        Di log lama dua parry yang kekirim dua-duanya telat: dikirim 110 ms / 181 ms setelah animasi, padahal kena di
-        164 ms / 111 ms, belum ditambah RTT.
-      - PARRY: damage dicatat ke SEMUA animasi killer yang baru main (bukan cuma yang terakhir), jadi animasi "aba-aba"
-        yang muncul duluan (mis. 1296... sebelum 1136...) punya waktu kena sendiri dan bisa dipakai parry lebih awal.
-      - PARRY: dagger di-equip pas animasi mulai (bukan pas parry), cek ancaman pakai posisi prediksi pas kena, parry
-        meleset ngoreksi dirinya sendiri dari margin (log "margin ... ms"), animasi yang jarang bikin kena ga dicoba lagi.
-      - SKILL CHECK: tangga input. Cara input ga lagi dicoba 1 per check (tiap salah = fail -10). Kalau satu cara ga
-        ngasilin hasil dalam jendela singkat, langsung cara berikutnya di check yang SAMA. Urutan HP: btn (nembak signal
-        tombol aksi langsung) > tap > click > owner > vim > all. PC: owner > vim > btn > click > tap > all.
-        Cara yang masuk dikunci, 3x gagal berturut-turut dilepas.
-      - SKILL CHECK: tune dihitung per cara (cara VIM otomatis + 1 frame), diagnosa "DIAG" otomatis sekali per sesi
-        (tombol Probe di panel), dan "echo input" buat nunjukin input VIM sampai ke game atau nggak.
-
-    v8.3
-      - SKILL CHECK, akar masalah: di HP (touch, tanpa keyboard) Space ga dipakai. Skill check dipencet lewat tombol aksi
-        Survivor-mob.Controls.action. Input Space (VIM) dan getconnections (0 handler di Delta) ga pernah masuk, jadi
-        tiap check fail -10. Sekarang ada tier baru "tap" (sentuh asli lewat VIM di tengah tombol aksi) dan "click"
-        (klik mouse di titik yang sama). Di HP tier ini dicoba duluan.
-      - SKILL CHECK: deteksi "tekanan masuk" diperbaiki. Dulu hasil apa pun setelah tekan dianggap masuk (padahal itu fail
-        karena timeout). Sekarang masuk = ada hasil <= 0.3s setelah tekan. Kalau ga masuk, tier diganti buat check berikutnya
-        (retry di tengah check percuma, jarum udah lewat). Tier yang masuk dikunci.
-      - SKILL CHECK: log "input manual" kalau kamu tap sendiri pas check (nunjukin objek GUI yang kena), buat diagnosa.
-      - PARRY: delay dipelajari per animasi dari damage yang beneran kena (waktu animasi mulai -> kena, dikurangi aimLead).
-        Parry meleset (success=true tapi ga landing) ditebak karena delay fix 0.12s ga cocok sama semua animasi.
-      - PARRY: cooldown server dihormati lagi (parry meleset = cd 60s, nembak pas cd cuma buang), HP < 50% dilog,
-        killer yang lagi lunge diprediksi (kecepatan), nunggu sampai ngancam (polling) bukan sekali cek, 1 animasi = 1 parry.
-
-    v8.2
-      - Parry disamain sama script lama yang parry-nya jalan: delay tetap 0.12s (bukan belajar dari 0.04s),
-        remote dicari ulang tiap kali, ga lewat hook, cooldown server ga nahan lagi (CFG.parry.useServerCd).
-      - Log PARRY lebih jelas: "kirim parry", "animasi serang kebaca tapi ga ngancam", "dagger ga ada".
-
-    v8.1
-      - AKAR "ga ada peluru": log() ke label GUI dipanggil dari dalam hook FireServer (thread game) -> thread game
-        mati sebelum remote kekirim. Efeknya tembakan ga pernah nyampe server, skill result juga ga nyampe (UI nyangkut).
-        Sekarang log() cuma nyimpen teks, label di-update dari loop executor.
-      - Balasan server dari remote Twist of Fate dicatat ("SERVER ...") buat diagnosa.
-
-    v8 (perbaikan dari v7)
-      - Gun: AIM LOCK balik (kamera nempel ke killer, cuma aktif selama kamu tahan aim, lepas langsung pas aim dilepas)
-        + AUTO FIRE ga perlu bidik manual lagi. Step "auto": nembak di step tercepat yang aman dari macet.
-      - Gun: tier "remote" (tembak lewat remote game langsung) kalau input palsu ga masuk, formatnya dipelajari
-        dari tembakan asli pertama kamu.
-      - Skill check: pas Auto Skill Check ON, UI jarum/zona/tombol disembunyiin (transparan). Logika game dan
-        tracker ga disentuh, jadi tetep jalan normal. Toggle: panel "Hide UI" / F7.
-      - Hotkey baru: F6 aim lock, F7 hide skill UI.
-
-    v7 (perbaikan dari v6)
-      - AKAR "stuck/ngebug": v6 nembak input palsu ke SEMUA handler UserInputService (Space = skill check +
-        action + drop pallet + vault, MouseButton1 = trigger + interact + basic attack). Objek input palsunya
-        juga beda antara Begin dan End, jadi handler yang nunggu End dari objek yang sama nyangkut.
-        v7: input dikirim cuma ke script yang relevan (TwistoffateClient / pemilik SkillCheckEvent), objek
-        yang sama dipakai buat Begin dan End, dan kalau ga masuk otomatis pindah tier (owner -> vim -> all).
-      - Gun: auto-aim + kunci kamera dari v6 DIBUANG (itu yang bikin aim/tembak nyangkut). Sekarang manual.
-      - Gun: ga nembak kalau bakal macet (baca tofRoll vs batas jam tiap step), nunggu charge sesuai step.
-      - Skill check: slope jarum pakai regresi 5 sample, belajar dari hasil Result DAN Fail, tune boleh negatif,
-        verifikasi tekanan masuk (kalau ga masuk -> retry tier lain), watchdog buat UI yang nyangkut.
-    Debug   : "Copy Log" dan "Copy Dump" di panel -> tempel hasilnya kalau ada yang masih ga jalan
+    v11 (merge + upgrade veil):
+      - File tunggal. Fitur survivor dari v10.1 utuh. Veil Assist digabung sebagai modul killer-side.
+      - VEIL AIMBOT: pakai Track EMA (sama kayak gun), lead ping (Net.rtt * leadPing), FOV derajat (bukan pixel), smoothing.
+      - VEIL PREDICTION: iterasi 4x untuk waktu terbang spear, gravitasi spear terkompensasi di titik bidik,
+        kecepatan spear dipelajari otomatis dari lemparan sendiri (disimpan ke learn file).
+      - VEIL TRACKER: projectiles (VeilSpearId / VeilSpearPhase / nama *spear*) dicatat, jejak warna beda
+        (biru = lemparan kita, merah = lemparan killer lain). Max 60 segmen, fade 3 detik.
+      - VEIL COOLDOWN: dipelajari dari jeda antar lemparan (3-30 detik), tampil di status panel. Bisa dipaksa reset.
+      - VEIL ESP: target yang di-lock aim di-highlight hijau (konsisten dengan warna lock gun di survivor).
+        Warna ESP pemain kini relatif tim: di killer, survivor = merah (target), killer lain = biru (teman).
+      - Veil tetap murni client-side (camera + marker + trail). Tidak memanggil remote apa pun.
+      - Learn file dp10_learn.json sekarang juga nyimpen spearSpeed, spearGravity, cooldownSeconds.
+      - Hotkey baru: RightShift = veil on/off (di samping toggle di panel).
 ]]
 
 ------------------------------------------------------------------ CONFIG
@@ -243,132 +34,153 @@ local CFG = {
         lock  = Enum.KeyCode.F6,
         hide  = Enum.KeyCode.F7,
         esp   = Enum.KeyCode.F8,
-        text  = Enum.KeyCode.F10,   -- ganti mode teks ESP (F9 = console Roblox)
+        text  = Enum.KeyCode.F10,
+        veil  = Enum.KeyCode.RightShift,
     },
 
     parry = {
         enabled      = true,
-        via          = "game",     -- "game" (manggil ParryClient asli: animasi + cooldown UI ikut) | "input" | "remote" (tanpa animasi)
+        via          = "game",
         range        = 12,
         frontDot     = 0.15,
-        hitGuess     = 0.16,       -- detik: tebakan "animasi mulai -> kena" buat animasi yang belum pernah kena kamu
-        arriveLead   = 0.16,       -- detik: parry harus nyampe server segini SEBELUM kena (ping & fps dihitung otomatis)
-        slack        = 0.25,       -- detik: telat <= segini tetap dikirim langsung (window parry 0.8s), lebih telat = dibuang
-        skipHopeless = true,       -- true = parry ga dikirim kalau ping bikin bener-bener mustahil kekejar (cd 60s ga kebuang)
-        fireUnknown  = true,       -- true = animasi yang belum pernah kena kamu tetap dicoba (pakai hitGuess)
-        minChance    = 0.15,       -- animasi yang udah dikenal: parry cuma kalau (kena / muncul deket) >= ini
-        minPlays     = 6,          -- baru boleh dibuang karena rasio rendah setelah muncul segini kali (parry sukses ikut dihitung)
+        hitGuess     = 0.16,
+        arriveLead   = 0.16,
+        slack        = 0.25,
+        skipHopeless = true,
+        fireUnknown  = true,
+        minChance    = 0.15,
+        minPlays     = 6,
         jitter       = 0.004,
         spacing      = 0.5,
-        autoEquip    = true,       -- dagger di-equip pas animasi mulai (bukan pas parry), biar ga makan waktu
-        learn        = true,       -- true = waktu kena per animasi dipelajari dari damage yang beneran kena
+        autoEquip    = true,
+        learn        = true,
         minDelay     = 0,
         maxDelay     = 0.7,
-        pollWindow   = 0.5,        -- detik: setelah delay, tunggu killer masuk jangkauan selama segini
-        lead         = 0.12,       -- detik: minimal prediksi gerak killer (lunge) buat cek jarak
-        useServerCd  = true,       -- true = nahan parry selama cooldown dari parryResult server (meleset = cd 60s)
+        pollWindow   = 0.5,
+        lead         = 0.12,
+        useServerCd  = true,
         minPriority  = Enum.AnimationPriority.Action,
     },
 
     gun = {
-        snap         = true,      -- tembakan manual yang deket killer dibelokkan pas ke badan
-        trigger      = true,      -- nembak otomatis pas crosshair kamu di badan killer (kamu yang bidik)
-        aimLock      = true,      -- kamera otomatis nempel ke killer pas kamu tahan aim
-        lockFov      = 90,        -- derajat dari arah kamera: killer di luar sudut ini ga di-lock (180 = semua arah)
-        lockSmooth   = 0.85,      -- 1 = keras (langsung nempel), makin kecil makin halus
-        fireStuds    = 0.6,       -- v9.1: toleransi auto-fire dalam STUD (dijadiin sudut sesuai jarak). v9.0 pakai sudut doang = kelonggaran
-        fireTol      = 2.5,       -- derajat MAKS: kamera harus segini dekat ke target baru auto-fire (ngecil sendiri kalau killer jauh)
-        leadPing     = 1.0,       -- x ping: tembak ke posisi killer di depan (kompensasi lag). 0 = mati. 1 = ping penuh (RTT)
-        leadBase     = 0.1,       -- detik: tambahan tetap di atas leadPing (interpolasi pemain lain ~0.1s)
-        leadMax      = 0.7,       -- detik: batas atas total waktu prediksi
-        autoTravel   = true,      -- true = kalau di tuning game ada kecepatan peluru, dipakai buat waktu tempuh (lead = 1)
-        fireStep     = 0,         -- 0 = auto (step tercepat yang aman dari macet). 3 = selalu charge penuh. 1/2 = paksa step itu
-        hitRadius    = 2.8,       -- stud: jarak peluru-ke-badan yang dianggap "aim pas" (makin gede makin longgar)
-        snapFov      = 8,         -- derajat: batas belok buat tembakan manual (snap)
+        snap         = true,
+        trigger      = true,
+        aimLock      = true,
+        lockFov      = 90,
+        lockSmooth   = 0.85,
+        fireStuds    = 0.6,
+        fireTol      = 2.5,
+        leadPing     = 1.0,
+        leadBase     = 0.1,
+        leadMax      = 0.7,
+        autoTravel   = true,
+        fireStep     = 0,
+        hitRadius    = 2.8,
+        snapFov      = 8,
         maxDist      = 220,
-        aimPart      = "HumanoidRootPart",   -- v9.1: titik paling stabil (posisi yang direplikasi server)
-        aimYOffset   = 0.3,       -- v9.1: stud di atas HumanoidRootPart (pusat badan)
-        lead         = 0,         -- 0 = hitscan. 1 = tambah prediksi buat travel time peluru (jarak / bulletSpeed)
+        aimPart      = "HumanoidRootPart",
+        aimYOffset   = 0.3,
+        lead         = 0,
         bulletSpeed  = 800,
-        needLOS      = true,      -- trigger cuma nembak kalau killer ga ketutup tembok
-        chargeMargin = 0.04,      -- detik, tambahan di atas waktu charge step (v10.1: 0.12 -> 0.04; naikin kalau sering macet)
-        shotGap      = 0.6,       -- detik, jeda minimum antar tembakan trigger
-        confirmWait  = 0.7,       -- detik, nunggu bukti tembakan kekirim
-        originLag    = 0.035,     -- v9.1: detik, posisi kamu di server ketinggalan segini -> origin tembakan digeser mundur (belajar otomatis)
-        steady       = true,      -- v9.1: auto-fire nunggu killer lurus (arah + kecepatan stabil) sebelum nembak
-        steadyAng    = 25,        -- derajat: perubahan arah gerak killer 0.4s terakhir yang masih dianggap lurus
-        steadyAcc    = 0.35,      -- perubahan kecepatan (fraksi) yang masih dianggap stabil
-        steadyWait   = 0.5,       -- detik: maksimal nunggu killer lurus, habis itu tembak aja (v10: 0.9 -> 0.5)
-        steadyMinDist = 20,       -- v10: stud. killer lebih deket dari ini ga usah nunggu lurus (prediksi jarak dekat udah akurat)
-        learn        = true,      -- v9.1: koreksi lead / bias arah / originLag dari balasan server (VisualizeBullet)
-        evalDelay    = 0.1,       -- detik: nunggu interpolasi sebelum posisi killer dibandingin sama garis peluru
+        needLOS      = true,
+        chargeMargin = 0.04,
+        shotGap      = 0.6,
+        confirmWait  = 0.7,
+        originLag    = 0.035,
+        steady       = true,
+        steadyAng    = 25,
+        steadyAcc    = 0.35,
+        steadyWait   = 0.5,
+        steadyMinDist = 20,
+        learn        = true,
+        evalDelay    = 0.1,
     },
 
     skill = {
         enabled = true,
-        lead    = 0.02,           -- dipakai metode lama
-        offset  = 0,              -- derajat, geser titik tekan (tombol di panel)
-        zoneLo  = 102,            -- dari kode game: sukses kalau Line.Rotation ada di Goal.Rotation + zoneLo .. zoneHi
+        lead    = 0.02,
+        offset  = 0,
+        zoneLo  = 102,
         zoneHi  = 116,
         maxWait = 6,
-        latency = 0.01,           -- detik, awal tekan sebelum jarum sampai tengah (di-tune otomatis, boleh negatif)
+        latency = 0.01,
         learn   = true,
-        unstick = true,           -- sembunyiin Check yang nyangkut (jarum diem >1.2s padahal ga ada event)
-        hideUI  = false,          -- sembunyiin UI skill check (jarum, zona, tombol) pas Auto Skill Check ON
-        verifySync = 0.07,        -- detik: nunggu hasil dari game setelah input langsung (btn/owner/all) sebelum cara berikutnya
-        verifyVim  = 0.11,        -- detik: sama, buat input VIM (tap/click/vim) yang diproses di frame berikutnya
-        allowAll   = true,        -- tier "all" (semua handler input) jadi cara terakhir
-        frameSnap  = true,        -- v10: rapihin rotasi Line ke tengah zona sesaat sebelum handler game dipanggil (anti lompat frame di FPS rendah)
-        snapFrames = 1.5,         -- v10: frame-snap cuma aktif kalau jarum tinggal <= segini frame dari tengah zona
+        unstick = true,
+        hideUI  = false,
+        verifySync = 0.07,
+        verifyVim  = 0.11,
+        allowAll   = true,
+        frameSnap  = true,
+        snapFrames = 1.5,
     },
 
     esp = {
         enabled   = true,
-        killer    = true,         -- tampilkan killer
-        survivors = true,         -- tampilkan survivor lain
-        outline   = true,         -- Highlight (outline + isi tipis) di badan pemain. Batas Roblox ~31 Highlight sekaligus
-        names     = true,         -- nama pemain / nama objek (mode teks FULL)
-        dist      = true,         -- jarak (stud)
-        hp        = true,         -- sisa HP % survivor (mode teks FULL)
-        text      = "full",       -- "full" | "mini" | "off"   (tombol Teks di panel / F10). off = tanpa teks sama sekali
-        bars      = true,         -- bar tipis progress generator + HP survivor
-        objOutline = true,        -- outline buat generator / pallet / hook / exit juga
-        fillPlayers = 0.78,       -- transparansi isi outline pemain (1 = cuma garis)
-        fillObjs    = 1,          -- transparansi isi outline objek (1 = cuma garis)
-        fillGens    = 0.6,        -- v9.0: transparansi isi outline generator (biar keliatan dari jauh)
-        textDistObjs    = 70,     -- teks PALLET / HOOK cuma muncul kalau lebih deket dari ini (stud). 0 = selalu. Generator/exit/pemain selalu
-        textDistPlayers = 0,      -- sama buat pemain. 0 = selalu
-        maxHighlights   = 20,     -- batas Highlight bareng (Roblox ~31 TERMASUK punya game). Sisanya yang paling jauh / ga penting ga digambar
-        objects   = true,         -- generator / pallet / hook / exit
+        killer    = true,
+        survivors = true,
+        outline   = true,
+        names     = true,
+        dist      = true,
+        hp        = true,
+        text      = "full",
+        bars      = true,
+        objOutline = true,
+        fillPlayers = 0.78,
+        fillObjs    = 1,
+        fillGens    = 0.6,
+        textDistObjs    = 70,
+        textDistPlayers = 0,
+        maxHighlights   = 20,
+        objects   = true,
         gens      = true,
         pallets   = true,
         hooks     = true,
         exits     = true,
-        hideDoneGens = true,      -- generator 100% disembunyiin
-        showBroken   = false,     -- pallet yang udah patah ikut ditampilkan (abu-abu)
-        maxDist   = 0,            -- stud, 0 = tanpa batas
-        hookNames = { "hook" },                      -- nama objek di Workspace.Map yang dianggap hook
-        exitNames = { "lever", "exit", "hatch" },    -- ... dianggap exit / lever
-        scanPlayers = 0.5,        -- detik antar scan pemain
-        scanObjects = 1.5,        -- detik antar scan generator / pallet
-        scanMap     = 5,          -- detik antar scan nama hook / exit (GetDescendants Map)
-        scanGens    = 1,          -- v9.0: detik antar scan generator (folder + tag, murah)
-        scanBody    = 8,          -- v9.0: detik antar scan part "GeneratorBody" di Workspace (cadangan, cuma jalan kalau folder kosong)
-        genBodyScan = true,       -- v9.0: false = matiin jalur cadangan GeneratorBody
+        hideDoneGens = true,
+        showBroken   = false,
+        maxDist   = 0,
+        hookNames = { "hook" },
+        exitNames = { "lever", "exit", "hatch" },
+        scanPlayers = 0.5,
+        scanObjects = 1.5,
+        scanMap     = 5,
+        scanGens    = 1,
+        scanBody    = 8,
+        genBodyScan = true,
     },
 
-    ring = {                      -- v9.1: cincin jangkauan hit/parry + garis jangkauan hit killer
+    ring = {
         enabled   = true,
-        cone      = true,         -- garis putih tepi kerucut serang dari tiap killer
-        coneDeg   = 40,           -- derajat: setengah lebar kerucut serang killer (cuma visual; parry pakai frontDot)
-        learnRange = true,        -- range naik sendiri kalau kamu kena hit dari killer yang lebih jauh dari range
-        thickness = 0.45,         -- stud, tebal cincin
-        onTop     = false,        -- true = cincin / garis tembus tembok & objek
-        ready     = Color3.fromRGB(70, 235, 235),    -- teal: parry siap / ga ada dagger
-        cooldown  = Color3.fromRGB(120, 135, 145),   -- abu: parry cooldown / lagi nahan
-        inRange   = Color3.fromRGB(235, 255, 255),   -- putih: killer di dalam cincin, parry siap
-        danger    = Color3.fromRGB(255, 80, 60),     -- merah: killer di dalam cincin & parry belum siap / kamu di dalam kerucut
-        coneCol   = Color3.fromRGB(255, 255, 255),   -- warna garis killer
+        cone      = true,
+        coneDeg   = 40,
+        learnRange = true,
+        thickness = 0.45,
+        onTop     = false,
+        ready     = Color3.fromRGB(70, 235, 235),
+        cooldown  = Color3.fromRGB(120, 135, 145),
+        inRange   = Color3.fromRGB(235, 255, 255),
+        danger    = Color3.fromRGB(255, 80, 60),
+        coneCol   = Color3.fromRGB(255, 255, 255),
+    },
+
+    veil = {
+        enabled         = true,
+        aimbot          = true,
+        autoHeadshot    = true,
+        spearAssist     = true,
+        tracker         = true,
+        fovDeg          = 25,
+        maxDist         = 220,
+        smoothing       = 0.35,
+        requireVisible  = true,
+        spearSpeed      = 120,
+        spearGravity    = 0,
+        leadPing        = 1.0,
+        cooldownSeconds = 8,
+        trailLifetime   = 3,
+        maxTrails       = 60,
+        forceVeil       = false,
+        holdKey         = Enum.UserInputType.MouseButton2,
     },
 }
 
@@ -384,14 +196,13 @@ pcall(function() VIM = game:GetService("VirtualInputManager") end)
 
 local LP = Players.LocalPlayer
 
--- reload aman: instance lama otomatis mati
 local ENV = (getgenv and getgenv()) or _G
 local TOKEN = {}
 ENV.DP3_TOKEN = TOKEN
 local function alive() return ENV.DP3_TOKEN == TOKEN end
-pcall(function() RunService:UnbindFromRenderStep("DP3_CamLock") end)   -- sisa v6 (kunci kamera)
+pcall(function() RunService:UnbindFromRenderStep("DP3_CamLock") end)
+pcall(function() RunService:UnbindFromRenderStep("DP3_VeilAim") end)
 
--- v10: semua koneksi global didaftarkan di sini. Reload memutus yang lama (dulu cuma berhenti sendiri tapi tetap nyambung).
 local Conns = ENV.DP3_CONNS
 if type(Conns) == "table" then
     for _, c in ipairs(Conns) do pcall(function() c:Disconnect() end) end
@@ -400,7 +211,7 @@ Conns = {}
 ENV.DP3_CONNS = Conns
 local function keep(c)
     Conns[#Conns + 1] = c
-    if #Conns > 400 then   -- koneksi animasi numpuk antar ronde: buang yang udah putus
+    if #Conns > 400 then
         local alive2 = {}
         for _, x in ipairs(Conns) do
             local okc, on = pcall(function() return x.Connected end)
@@ -412,16 +223,12 @@ local function keep(c)
     return c
 end
 
------------------------------------------------------------------- NET CLOCK (ping + fps)
--- dipakai parry (hitung delay) dan skill check (hitung lead). EMA biar satu lag spike ga ngerusak hitungan.
+------------------------------------------------------------------ NET CLOCK
 local Net = { frameDt = 1 / 60, rtt = 0.10, jitter = 0.01 }
 do
     local hbConn
     hbConn = keep(RunService.Heartbeat:Connect(function(dt)
-        if not alive() then
-            hbConn:Disconnect()
-            return
-        end
+        if not alive() then hbConn:Disconnect() return end
         Net.frameDt = Net.frameDt * 0.9 + math.clamp(dt, 0.004, 0.2) * 0.1
     end))
 end
@@ -441,9 +248,6 @@ end)
 
 ------------------------------------------------------------------ LOG
 local LOG, logLabel, logDirty, inHook = {}, nil, false, false
--- PENTING: log() dipanggil juga dari dalam hook FireServer, yang jalan di thread GAME. Thread itu ga boleh nyentuh
--- GUI executor (label di CoreGui/gethui) -> thread game mati dan tembakan/skill result ga pernah nyampe server.
--- Jadi log() cuma nyimpen teks; label di-update dari loop executor (lihat buildUI).
 local function log(tag, msg)
     local line = string.format("[%.1f] %s %s", os.clock() % 1000, tag, tostring(msg))
     LOG[#LOG + 1] = line
@@ -454,16 +258,13 @@ end
 
 local function notify(msg)
     pcall(function()
-        StarterGui:SetCore("SendNotification", { Title = "DP v10.1", Text = msg, Duration = 2.5 })
+        StarterGui:SetCore("SendNotification", { Title = "DP v11", Text = msg, Duration = 2.5 })
     end)
     log("INFO", msg)
 end
 
 local function copy(txt)
-    if setclipboard then
-        pcall(setclipboard, txt)
-        return true
-    end
+    if setclipboard then pcall(setclipboard, txt) return true end
     return false
 end
 
@@ -478,11 +279,9 @@ local function myRoot()
     return c and c:FindFirstChild("HumanoidRootPart")
 end
 
--- v10: nama team di-cache (dicek ulang kalau namanya berubah) dan daftar killer dipakai bareng dalam satu frame.
--- Dulu killers() dipanggil belasan kali per frame (Track, aim lock, ring, ESP, parry) dan tiap kali loop semua pemain + lower/find.
-local TeamC = { k = setmetatable({}, { __mode = "k" }), t = -1, list = {} }
+local TeamC = { k = setmetatable({}, { __mode = "k" }), t = -1, list = {}, survT = -1, surv = {} }
 
-local function teamKind(t)   -- "killer" | "survivor" | "other" | "none"
+local function teamKind(t)
     if not t then return "none" end
     local nm = t.Name
     local c = TeamC.k[t]
@@ -498,6 +297,11 @@ local function amSurvivor()
     local t = LP.Team
     if not t then return true end
     return teamKind(t) == "survivor"
+end
+
+local function amKiller()
+    local t = LP.Team
+    return t ~= nil and teamKind(t) == "killer"
 end
 
 local function killers()
@@ -518,6 +322,31 @@ local function killers()
     return out
 end
 
+local function survivors()
+    local now = os.clock()
+    if now - TeamC.survT < 0.008 then return TeamC.surv end
+    local out = {}
+    local iAmK = amKiller()
+    for _, p in ipairs(Players:GetPlayers()) do
+        local ch = p.Character
+        if p ~= LP and ch then
+            local kk = teamKind(p.Team)
+            local isTarget = false
+            if kk == "survivor" then isTarget = true
+            elseif kk == "none" and iAmK then isTarget = true end
+            if isTarget then
+                local hum = ch:FindFirstChildOfClass("Humanoid")
+                local root = ch:FindFirstChild("HumanoidRootPart")
+                if hum and root and hum.Health > 0 then
+                    out[#out + 1] = { player = p, char = ch, hum = hum, root = root }
+                end
+            end
+        end
+    end
+    TeamC.survT, TeamC.surv = now, out
+    return out
+end
+
 local function angDiff(a, b)
     local d = (a - b) % 360
     if d > 180 then d = d - 360 end
@@ -532,7 +361,7 @@ local function nameHas(name, pats)
     return false
 end
 
------------------------------------------------------------------- INPUT (targeted)
+------------------------------------------------------------------ INPUT
 local function parseBind(raw)
     if raw == "MouseButton1" then return "mouse", 0 end
     if raw == "MouseButton2" then return "mouse", 1 end
@@ -553,8 +382,6 @@ local function viewCenter()
     return s.X / 2, s.Y / 2
 end
 
--- objek input palsu. Begin dan End PAKAI OBJEK YANG SAMA (handler game banyak yang cocokin identitas objek
--- atau nunggu input.Changed), jadi state-nya diubah in-place lalu Changed ditembak.
 local function newInput(kind, v, pos)
     local cx, cy = viewCenter()
     local utype, kcode
@@ -594,7 +421,6 @@ local function isOurs(f)
     return ok and r == true
 end
 
--- nama script pemilik sebuah fungsi (buat nyaring handler). hasilnya di-cache.
 local ownerCache = setmetatable({}, { __mode = "k" })
 local function ownerOf(f)
     local c = ownerCache[f]
@@ -615,7 +441,6 @@ local function ownerOf(f)
     return name
 end
 
--- panggil handler sebuah signal. filter(ownerName) -> true = ikut. return (dipanggil, total)
 local function fireHandlers(sig, obj, filter)
     local ok, conns = pcall(getconnections, sig)
     if not ok or not conns then return 0, 0 end
@@ -635,8 +460,6 @@ local function fireHandlers(sig, obj, filter)
     return n, total
 end
 
--- tier: "owner" (cuma handler yang lolos filter) | "vim" (input asli lewat VirtualInputManager) | "all" (semua handler)
--- return ok, keterangan
 local function press(raw, hold, tier, filter)
     local kind, v = parseBind(raw)
     if not kind then return false, "bind ga dikenal: " .. tostring(raw) end
@@ -677,7 +500,7 @@ local function press(raw, hold, tier, filter)
 end
 
 ------------------------------------------------------------------ REMOTE SPY + HOOK
-local Spy = {}   -- [RemoteEvent] = nama
+local Spy = {}
 local Gun = {
     fire = nil, hookOK = false,
     fireCount = 0, fireSeen = 0, chargeStart = 0, wasAiming = false,
@@ -685,11 +508,11 @@ local Gun = {
     tierIdx = 1, tierGood = {}, failStreak = 0, cycles = 0, pauseUntil = 0,
     lockUntil = 0, status = "-", lastWhy = 0, lastWhyText = "",
     lockTarget = nil, lockAng = 180, template = nil, templateN = 0, selfFire = false,
-    leadAdj = 0, biasR = 0, biasU = 0, steadyAt = 0, shots = 0, hits = 0, last = nil,   -- v9.1
+    leadAdj = 0, biasR = 0, biasU = 0, steadyAt = 0, shots = 0, hits = 0, last = nil,
 }
-Gun.vis = setmetatable({}, { __mode = "k" })   -- v10: cache cek halangan per killer
-Gun.mzc = nil                                  -- v10: cache titik moncong per frame
-local SkillHook = { judged = function() end }   -- diisi di bagian skill check
+Gun.vis = setmetatable({}, { __mode = "k" })
+Gun.mzc = nil
+local SkillHook = { judged = function() end }
 
 local function logSpy(name, args, n)
     local parts = {}
@@ -708,7 +531,6 @@ local function pickPart(char)
         or char:FindFirstChild("HumanoidRootPart")
 end
 
--- sama kayak TwistoffateEffects.safeOrigin: titik muncul peluru
 local function muzzleOrigin()
     local root = myRoot()
     if not root then return nil end
@@ -725,8 +547,6 @@ local function muzzleOrigin()
     end)
     local pos = b
     if ok and res then pos = res.Position - d.Unit * 0.5 end
-    -- v9.1: posisi kamu di SERVER ketinggalan dari posisi di layar kamu (replikasi). Kalau lagi gerak, titik tembak server
-    -- ada di belakang titik tembak lokal -> geser origin mundur sejauh kecepatan x originLag (dipelajari dari VisualizeBullet).
     local lag = CFG.gun.originLag
     if lag and lag > 0 then
         local v = Vector3.new(0, 0, 0)
@@ -739,7 +559,6 @@ local function muzzleOrigin()
     return pos
 end
 
--- survivor lain ditembus peluru (lihat aimPoint/survivorOf di game), jadi ga dianggap penghalang
 local function visibleRaw(origin, part)
     local ign = { myChar(), part.Parent }
     for _, p in ipairs(Players:GetPlayers()) do
@@ -747,8 +566,6 @@ local function visibleRaw(origin, part)
             ign[#ign + 1] = p.Character
         end
     end
-    -- v9.1: sama kayak piercingBlockcast game (Blockcast 0.5 stud, nembus part transparan selain HumanoidRootPart + aksesori).
-    -- Raycast tipis v9.0 bilang "keliatan" padahal Blockcast game nyangkut di sudut tembok -> peluru kena tembok.
     local o, dir = origin, part.Position - origin
     local left = dir.Magnitude
     if left < 0.5 then return true end
@@ -774,7 +591,6 @@ local function visibleRaw(origin, part)
     return false
 end
 
--- v10: hasil cek halangan dipakai ulang 50 ms per killer (aim lock + findTarget manggil ini tiap frame buat tiap killer)
 local function visibleFrom(origin, part)
     local now = os.clock()
     local c = Gun.vis[part]
@@ -784,45 +600,40 @@ local function visibleFrom(origin, part)
     return v
 end
 
--- v8.8: PREDIKSI GERAK. Kecepatan killer dihitung sendiri dari perpindahan posisi per frame (EMA, tahan lag spike).
--- Server nembak pakai posisi killer yang udah maju dari yang kamu liat (ping + interpolasi), jadi tembakan diarahkan
--- ke posisi killer di depan sejauh leadTime(). leadPing = 0 -> persis kayak v8.7 (tanpa prediksi).
-local Track = {}   -- [Model karakter killer] = { pos, t, vel, grounded }
+local Track = {}
+local function trackChar(k, now)
+    local pos = k.root.Position
+    local tr = Track[k.char]
+    if not tr then
+        Track[k.char] = { pos = pos, t = now, vel = Vector3.new(0, 0, 0), grounded = true }
+    else
+        local dt = now - tr.t
+        if dt > 0.003 then
+            if dt > 0.4 or (pos - tr.pos).Magnitude > 40 then
+                tr.vel = Vector3.new(0, 0, 0)
+            else
+                local a = 1 - math.exp(-dt / 0.06)
+                tr.vel = tr.vel:Lerp((pos - tr.pos) / dt, a)
+            end
+            tr.pos, tr.t = pos, now
+            tr.grounded = k.hum.FloorMaterial ~= Enum.Material.Air
+            local h = tr.hist
+            if not h then h = {}; tr.hist = h end
+            h[#h + 1] = { t = now, v = tr.vel }
+            while #h > 0 and now - h[1].t > 0.4 do table.remove(h, 1) end
+        end
+    end
+end
 keep(RunService.Heartbeat:Connect(function()
     if not alive() then return end
     local now = os.clock()
-    for _, k in ipairs(killers()) do
-        local pos = k.root.Position
-        local tr = Track[k.char]
-        if not tr then
-            Track[k.char] = { pos = pos, t = now, vel = Vector3.new(0, 0, 0), grounded = true }
-        else
-            local dt = now - tr.t
-            if dt > 0.003 then
-                if dt > 0.4 or (pos - tr.pos).Magnitude > 40 then
-                    tr.vel = Vector3.new(0, 0, 0)               -- respawn / teleport: jangan dihitung sebagai kecepatan
-                else
-                    local a = 1 - math.exp(-dt / 0.06)
-                    tr.vel = tr.vel:Lerp((pos - tr.pos) / dt, a)
-                end
-                tr.pos, tr.t = pos, now
-                tr.grounded = k.hum.FloorMaterial ~= Enum.Material.Air
-                local h = tr.hist
-                if not h then
-                    h = {}
-                    tr.hist = h
-                end
-                h[#h + 1] = { t = now, v = tr.vel }
-                while #h > 0 and now - h[1].t > 0.4 do table.remove(h, 1) end
-            end
-        end
-    end
+    for _, k in ipairs(killers()) do trackChar(k, now) end
+    for _, s in ipairs(survivors()) do trackChar(s, now) end
     for ch in pairs(Track) do
         if not ch.Parent then Track[ch] = nil end
     end
 end))
 
--- v9.1: killer lagi lurus? (arah + kecepatan gerak stabil dalam ~0.4s terakhir). Prediksi cuma bisa akurat kalau iya.
 function Gun.steady(char)
     local tr = Track[char]
     if not tr or not tr.hist or #tr.hist < 4 then return true end
@@ -846,17 +657,17 @@ end
 
 local function predictPos(part, origin)
     local pos = part.Position
-    if part.Name == "HumanoidRootPart" then pos = pos + Vector3.new(0, CFG.gun.aimYOffset or 0, 0) end   -- v9.1: pusat badan
+    if part.Name == "HumanoidRootPart" then pos = pos + Vector3.new(0, CFG.gun.aimYOffset or 0, 0) end
     local tr = Track[part.Parent]
     if not tr then return pos end
     local G = CFG.gun
     local base = (G.leadPing > 0) and (Net.rtt * G.leadPing + G.leadBase + Gun.leadAdj) or 0
     if base <= 0 and G.lead <= 0 then return pos end
     local v = tr.vel
-    if tr.grounded then v = Vector3.new(v.X, 0, v.Z) end      -- lagi napak tanah: ga usah nebak naik/turun
-    if v.Magnitude > 70 then v = v.Unit * 70 end              -- batas kecepatan masuk akal (dash), glitch ga bikin tembakan nyasar
+    if tr.grounded then v = Vector3.new(v.X, 0, v.Z) end
+    if v.Magnitude > 70 then v = v.Unit * 70 end
     local t = base
-    if G.lead > 0 and G.bulletSpeed > 0 then                  -- waktu tempuh peluru (kalau ada): diselesaikan iteratif
+    if G.lead > 0 and G.bulletSpeed > 0 then
         for _ = 1, 3 do
             local p = pos + v * t
             t = base + ((p - origin).Magnitude / G.bulletSpeed) * G.lead
@@ -865,7 +676,6 @@ local function predictPos(part, origin)
     return pos + v * math.clamp(t, 0, G.leadMax)
 end
 
--- ringkasan buat log tembakan (diagnosa aim)
 local function leadInfo(part, origin)
     local tr = Track[part.Parent]
     local spd = tr and Vector3.new(tr.vel.X, 0, tr.vel.Z).Magnitude or 0
@@ -877,7 +687,6 @@ local function dirTo(origin, part)
     local d = pos - origin
     if d.Magnitude < 0.01 then return nil end
     local u = d.Unit
-    -- v9.1: bias arah yang dipelajari dari tembakan diam yang lewat di sebelah killer
     local bR, bU = Gun.biasR or 0, Gun.biasU or 0
     if (bR ~= 0 or bU ~= 0) and CFG.gun.learn then
         local r = u:Cross(Vector3.yAxis)
@@ -889,14 +698,10 @@ local function dirTo(origin, part)
     return u
 end
 
--- dipanggil dari hook pas game ngirim gun.Fire. orig = arah bidikan asli game
 local function snapDir(orig, originArg)
     local origin = muzzleOrigin()
-    -- v8.9: kalau game ngirim origin tembakan (Vector3 dekat moncong), pakai itu: server nembak dari titik itu
     if typeof(originArg) == "Vector3" and origin and (originArg - origin).Magnitude < 6 then origin = originArg end
     if not origin then return nil end
-
-    -- 1) tembakan dari auto-trigger: target udah dipilih, arah dihitung ULANG pas ini (posisi paling baru)
     local p = Gun.pending
     if p and p.Parent and os.clock() - Gun.pendingAt < 0.8 then
         local nd = dirTo(origin, p)
@@ -906,8 +711,6 @@ local function snapDir(orig, originArg)
             return nd
         end
     end
-
-    -- 1b) aim lock aktif: tembakan apapun (manual atau trigger) diarahkan ke badan target kunci
     local lt = Gun.lockTarget
     if CFG.gun.aimLock and lt and lt.Parent then
         local nd = dirTo(origin, lt)
@@ -917,8 +720,6 @@ local function snapDir(orig, originArg)
             return nd
         end
     end
-
-    -- 2) tembakan manual: belok kalau killer deket arah bidikan
     if not CFG.gun.snap or orig.Magnitude < 0.01 then return nil end
     local o = orig.Unit
     local best, bestAng, bestDist
@@ -946,7 +747,7 @@ local function onGunFire(args)
     local now = os.clock()
     Gun.fireCount = Gun.fireCount + 1
     Gun.fireSeen = now
-    if not Gun.selfFire then   -- simpen format argumen tembakan asli (dipakai tier "remote")
+    if not Gun.selfFire then
         local t, hi = {}, 0
         for i = 1, 8 do
             if args[i] ~= nil then t[i], hi = args[i], i end
@@ -960,7 +761,7 @@ local function onGunFire(args)
             Gun.template, Gun.templateN = t, hi
         end
     end
-    Gun.chargeStart = now            -- charge mulai ulang dari tembakan (sama kayak game)
+    Gun.chargeStart = now
     if amSurvivor() and typeof(args[2]) == "Vector3" then
         local nd = snapDir(args[2], args[1])
         if nd then args[2] = nd end
@@ -996,7 +797,6 @@ local function installHook()
         log("HOOK", "executor ga support hookmetamethod -> snap/kunci arah ga jalan")
         return false
     end
-    -- v10: hook dipasang SEKALI per sesi executor. Reload cuma ganti isi dispatcher (v9.1: tiap reload nambah 1 lapis hook).
     local D = ENV.DP3_HOOKD
     if type(D) == "table" and D.oldNC then
         oldNC = D.oldNC
@@ -1025,7 +825,6 @@ log("ENV", string.format("hook=%s getgc=%s debug.info=%s firesignal=%s getconnec
     tostring(Gun.hookOK), tostring(getgc ~= nil), tostring(debug ~= nil and debug.info ~= nil), tostring(firesignal ~= nil),
     tostring(getconnections ~= nil), tostring(VIM ~= nil), tostring(writefile ~= nil), tostring(isexecutorclosure ~= nil)))
 
--- cari remote (sekali, di background)
 task.spawn(function()
     local ok = pcall(function()
         local remotes = RS:WaitForChild("Remotes", 20)
@@ -1065,36 +864,21 @@ task.spawn(function()
     if not ok or not Gun.fire then log("GUN", "remote Twist of Fate ga ketemu") end
 end)
 
------------------------------------------------------------------- 1) AUTO PARRY
--- v8.4: waktu parry dihitung dari PING + FPS, bukan angka tetap.
---   hit = detik dari "kamu liat animasi serang mulai" sampai "kamu kena" (dipelajari per animasi, kuantil 25%).
---   Parry yang kamu kirim butuh 1 RTT buat nyampe server, jadi:   delay = hit - arriveLead - (ping + jitter)
---   Kalau hasilnya negatif banget (ping kegedean buat animasi secepat itu) parry ga dikirim: parry meleset = cd 60 detik.
---   Dijadwalin per Heartbeat (task.wait selalu dibulatin ke frame berikutnya = telat 0-1 frame) dan dikoreksi sendiri
---   dari margin parry yang meleset.
+------------------------------------------------------------------ AUTO PARRY
 local Parry = {
     watched = setmetatable({}, { __mode = "k" }), last = 0, cdUntil = 0, remote = nil,
-    hits = {},      -- [animasi] = sampel "animasi mulai -> kena" (detik), maks 5
-    shift = {},     -- [animasi] = koreksi dari parry yang meleset (detik)
-    stat = {},      -- [animasi] = { plays = muncul deket kamu, hits = bikin kamu kena }
-    recent = {}, hpHum = nil,
+    hits = {}, shift = {}, stat = {}, recent = {}, hpHum = nil,
 }
 local parrySeenAt, parryWhyAt, parryCdAt, parryHpAt, parryHopeAt = 0, 0, 0, 0, 0
 
-local function shortKey(key)
-    return tostring(key):match("%d+") or tostring(key)
-end
+local function shortKey(key) return tostring(key):match("%d+") or tostring(key) end
 
 local function statOf(key)
     local s = Parry.stat[key]
-    if not s then
-        s = { plays = 0, hits = 0 }
-        Parry.stat[key] = s
-    end
+    if not s then s = { plays = 0, hits = 0 }; Parry.stat[key] = s end
     return s
 end
 
--- kuantil 25%: sampel "animasi -> kena" bisa bimodal (lag killer beda-beda). Condong ke yang CEPAT, karena parry telat = gagal total.
 local function hitFor(key)
     local h = Parry.hits[key]
     if not h or #h == 0 then return CFG.parry.hitGuess, false end
@@ -1103,7 +887,6 @@ local function hitFor(key)
     return s[math.max(1, math.ceil(#s * 0.25))], true
 end
 
--- return delay (detik, negatif = udah telat), hit, dikenal?
 local function planDelay(key)
     local hit, known = hitFor(key)
     local d = hit - CFG.parry.arriveLead - (Net.rtt + Net.jitter) + (Parry.shift[key] or 0)
@@ -1120,11 +903,6 @@ local function findDagger()
     return t, false
 end
 
------------------------------------------------------------------- PARRY CLIENT GAME (v8.6)
--- ReplicatedStorage.Modules.Items.ParryingDagger.ParryClient dibikin oleh LocalScript di dagger: ParryClient.new{tool, animationId}.
--- Objeknya (tabel dengan field tool/parryEvent/parryTrack/isParryOnCooldown/...) cuma dipegang upvalue koneksi game, jadi dicari
--- lewat getgc. :Parry() miliknya ngelakuin semuanya: FireServer, madep kamera, parryTrack:Play(), slow, tag "doing action", dan
--- state isParryResolving yang bikin handler parryResult game ngejalanin tween cooldown di UI.
 local PG = { inst = nil, class = nil, scanAt = 0, gap = 1.5, lastTool = nil, noGc = false, whyAt = 0, missAt = 0 }
 
 local function pgClass()
@@ -1135,7 +913,6 @@ local function pgClass()
     return PG.class or nil
 end
 
--- 3 = dagger di karakter, 2 = di backpack, 0 = ga kepakai (karakter lama / tool udah dihancurin)
 local function pgScore(t)
     local ch = myChar()
     if not ch or rawget(t, "character") ~= ch then return 0 end
@@ -1159,16 +936,12 @@ end
 
 local function pgScan()
     PG.scanAt = os.clock()
-    if not getgc then
-        PG.noGc = true
-        return nil, 0
-    end
+    if not getgc then PG.noGc = true return nil, 0 end
     local ok, list = pcall(getgc, true)
     if not ok or type(list) ~= "table" then return nil, 0 end
     local best, bestScore, n = nil, 0, 0
     for i = 1, #list do
         local t = list[i]
-        -- cek murah dulu (rawget ga bisa error di tabel), baru pcall yang mahal buat kandidat
         if type(t) == "table" and rawget(t, "parryEvent") ~= nil and pgIsClient(t) then
             n = n + 1
             local sc = pgScore(t)
@@ -1188,7 +961,6 @@ local function pgCached()
     return nil
 end
 
--- dipanggil dari loop background (bukan dari jalur parry): cari objek game cuma kalau dagger ada
 local function pgPrewarm()
     if CFG.parry.via ~= "game" or not CFG.parry.enabled or PG.noGc then return end
     local tool = findDagger()
@@ -1213,7 +985,6 @@ local function pgPrewarm()
     end
 end
 
--- kenapa game bakal nolak parry sekarang? nil = boleh. ignoreEquip = true buat nentuin perlu pre-equip atau nggak
 local function pgBlock(c, ignoreEquip)
     if c.isSilenced then return "kena silence" end
     if c.isParryLocked then return "parry nyangkut permanent, nunggu killer mukul (UI game cooldown)" end
@@ -1230,7 +1001,6 @@ local function pgBlock(c, ignoreEquip)
     return nil
 end
 
--- boleh kirim parry sekarang? (dipakai buat nentuin perlu pre-equip dagger atau nggak)
 local function parryReady(now)
     if not CFG.parry.enabled then return false end
     if now - Parry.last < CFG.parry.spacing then return false end
@@ -1244,7 +1014,6 @@ local function parryReady(now)
     return true
 end
 
--- true kalau parry terkirim. plan = delay yang direncanain (buat log)
 local function parryNow(entry, plan)
     if not CFG.parry.enabled then return false end
     local now = os.clock()
@@ -1252,7 +1021,6 @@ local function parryNow(entry, plan)
     local hum, char = myHum(), myChar()
     if not hum or hum.Health <= 0 or not char then return false end
 
-    -- jalur: game (ParryClient asli) > input (tombol item, tetap lewat game) > remote (cara lama, tanpa animasi)
     local via = CFG.parry.via
     local gcl = nil
     if via == "game" then
@@ -1261,7 +1029,6 @@ local function parryNow(entry, plan)
     end
 
     if gcl then
-        -- status diambil dari objek game: kalau UI game masih cooldown, kita ga nembak
         local why = pgBlock(gcl, true)
         if why then
             if now - parryCdAt > 2 then
@@ -1278,7 +1045,7 @@ local function parryNow(entry, plan)
             end
             return false
         end
-        if hum.Health < hum.MaxHealth * 0.5 then   -- client game nolak parry kalau HP < 50%
+        if hum.Health < hum.MaxHealth * 0.5 then
             if now - parryHpAt > 3 then
                 parryHpAt = now
                 log("PARRY", "HP < 50%: game nolak parry (ParryClient._isLowHealth)")
@@ -1298,13 +1065,11 @@ local function parryNow(entry, plan)
     if not equipped then
         if not CFG.parry.autoEquip then return false end
         hum:EquipTool(tool)
-        -- biasanya udah ke-equip duluan pas animasi mulai. Kalau belum, tunggu sampai bener-bener di tangan (maks 0.12s)
         local t1 = os.clock()
         repeat RunService.Heartbeat:Wait() until (select(2, findDagger())) or os.clock() - t1 > 0.12
     end
 
     if gcl then
-        -- cek ulang lengkap (termasuk equip) persis kayak ParryClient:CanUse()
         local why = pgBlock(gcl, false)
         if why then
             if now - parryCdAt > 2 then
@@ -1320,8 +1085,6 @@ local function parryNow(entry, plan)
     local before = char:GetAttribute("ParryLands") or 0
 
     if gcl then
-        -- ParryClient:Parry() nge-yield sampai animasi selesai / parry kena -> jalanin di thread sendiri.
-        -- FireServer ada di baris pertama sebelum yield pertama, jadi timing kirimnya sama kayak sebelumnya.
         task.spawn(function()
             local okp, err = pcall(gcl.Parry, gcl)
             if not okp then log("PARRY", "ParryClient:Parry error: " .. tostring(err)) end
@@ -1334,7 +1097,6 @@ local function parryNow(entry, plan)
         local ok = press(getBind("kb_item", "MouseButton2"), 0.04, "vim")
         if not ok then press(getBind("kb_item", "MouseButton2"), 0.04, "all") end
     else
-        -- cari ulang tiap kali (sama kayak script lama), jangan pegang remote lama yang bisa udah ke-replace
         local ev = Parry.remote
         if not (ev and ev.Parent) then
             local okf, r = pcall(function() return RS.Remotes.Items["Parrying Dagger"].parry end)
@@ -1343,10 +1105,7 @@ local function parryNow(entry, plan)
                 Parry.remote = r
             end
         end
-        if not ev then
-            log("PARRY", "remote parry ga ketemu")
-            return false
-        end
+        if not ev then log("PARRY", "remote parry ga ketemu"); return false end
         if now - parryWhyAt > 6 then
             parryWhyAt = now
             log("PARRY", "PERINGATAN: via remote = tanpa animasi & UI cooldown game ga ikut. Pakai Via: GAME.")
@@ -1361,13 +1120,12 @@ local function parryNow(entry, plan)
         local after = (myChar() == char) and (char:GetAttribute("ParryLands") or 0) or before
         local ok = after > before
         entry.landed = ok
-        if ok and entry.near then   -- parry sukses = animasi ini beneran serangan (jangan dianggap "ga pernah kena")
+        if ok and entry.near then
             local st = statOf(entry.key)
             st.hits = st.hits + 1
         end
         local extra = ""
         if not ok and entry.hit and entry.fired then
-            -- margin = berapa lama parry nyampe server SEBELUM kena. Negatif = telat. Di luar jendela wajar -> koreksi.
             local h, f = entry.hit - entry.t0, entry.fired - entry.t0
             local margin = h - Net.rtt - f
             extra = string.format(" | margin %+.0f ms (negatif = telat)", margin * 1000)
@@ -1382,12 +1140,9 @@ local function parryNow(entry, plan)
     return true
 end
 
--- killer ngancam kita? lead = prediksi gerak (lunge)
 local function threatens(k, lead)
     local me = myRoot()
     if not me or not k.root.Parent then return false end
-    -- v10: kecepatan dari lacakan sendiri (EMA per frame, tahan noise) dan cuma sumbu datar (lunge). AssemblyLinearVelocity
-    -- pemain lain sering berisik / telat, dan sumbu Y (lompat / turun tangga) bikin prediksi jarak meleset.
     local vel = Vector3.new(0, 0, 0)
     local tr = Track[k.char]
     if tr and os.clock() - tr.t < 0.25 then
@@ -1401,7 +1156,7 @@ local function threatens(k, lead)
     local to = me.Position - pos
     local dist = to.Magnitude
     if dist > CFG.parry.range then return false end
-    if dist < 0.01 or dist <= 5 then return true end   -- udah nempel: arah hadap ga usah dicek
+    if dist < 0.01 or dist <= 5 then return true end
     return k.root.CFrame.LookVector:Dot(to.Unit) >= CFG.parry.frontDot
 end
 
@@ -1433,7 +1188,6 @@ local function watchKiller(k)
         task.spawn(function()
             local d, hit, known = planDelay(key)
             local st = statOf(key)
-            -- animasi yang udah dikenal tapi jarang bikin kena = bukan serangan: jangan buang cooldown 60s
             if known and st.plays >= CFG.parry.minPlays and st.hits / st.plays < CFG.parry.minChance then return end
             if (not known) and not CFG.parry.fireUnknown then return end
             if known and CFG.parry.skipHopeless and d < -CFG.parry.slack then
@@ -1445,7 +1199,6 @@ local function watchKiller(k)
                 return
             end
 
-            -- pre-equip: dagger udah di tangan sebelum waktunya kirim, jadi equip ga makan waktu parry
             if CFG.parry.autoEquip and entry.near and parryReady(t0)
                 and threatens(k, math.clamp(hit + Net.rtt * 0.5, CFG.parry.lead, 0.45)) then
                 local tool, equipped = findDagger()
@@ -1459,11 +1212,10 @@ local function watchKiller(k)
             local sent, seen = false, false
             while alive() and CFG.parry.enabled and track.IsPlaying and os.clock() < untilT do
                 local now = os.clock()
-                -- Heartbeat terdekat ke target (bukan yang pertama LEWAT target): rata-rata error 0, bukan +0.5 frame
                 if now >= fireAt - Net.frameDt * 0.5 then
                     local left = math.max(t0 + hit - now, 0)
                     local lead = math.clamp(left + Net.rtt * 0.5, CFG.parry.lead, 0.45)
-                    if threatens(k, lead) then   -- posisi killer PAS kena, bukan pas animasi mulai (dia lunge)
+                    if threatens(k, lead) then
                         seen = true
                         sent = parryNow(entry, d)
                         break
@@ -1478,8 +1230,6 @@ local function watchKiller(k)
         end)
     end
     keep(animator.AnimationPlayed:Connect(onTrack))
-    -- cadangan: track yang ga kebaca lewat AnimationPlayed (dedupe pakai seenTrack)
-    -- v10: ~25 Hz (dulu tiap frame + bikin closure pcall tiap frame); track baru masih ketangkep karena TimePosition < 0.3
     task.spawn(function()
         while alive() and animator.Parent do
             if CFG.parry.enabled then
@@ -1495,13 +1245,11 @@ local function watchKiller(k)
     end)
 end
 
--- belajar dari damage: damage dicatat ke SEMUA animasi killer yang baru main, soalnya serangan bisa dua animasi
--- (aba-aba dulu, baru ayunan). Animasi yang muncul duluan jadi isyarat lebih awal buat parry.
 local function hookHealth()
     local hum = myHum()
     if not hum or Parry.hpHum == hum then return end
     Parry.hpHum = hum
-    Parry.cdUntil = 0   -- karakter baru = item baru, cooldown lama ga berlaku
+    Parry.cdUntil = 0
     local last = hum.Health
     keep(hum.HealthChanged:Connect(function(h)
         local drop = last - h
@@ -1515,10 +1263,7 @@ local function hookHealth()
             if age >= 0.04 and e.near and not e.landed and not e.hit then
                 e.hit = now
                 local hs = Parry.hits[e.key]
-                if not hs then
-                    hs = {}
-                    Parry.hits[e.key] = hs
-                end
+                if not hs then hs = {}; Parry.hits[e.key] = hs end
                 hs[#hs + 1] = age
                 if #hs > 5 then table.remove(hs, 1) end
                 local st = statOf(e.key)
@@ -1535,15 +1280,11 @@ task.spawn(function()
     pcall(function()
         local pd = RS:WaitForChild("Remotes", 20):WaitForChild("Items", 20):WaitForChild("Parrying Dagger", 20)
         Parry.remote = pd:WaitForChild("parry", 10)
-        -- sengaja ga didaftarin ke Spy: parry ga boleh lewat hook, biar sama persis kayak script lama
-        -- args asli game: (success, cooldown, permanent, chained, character)
         keep(pd:WaitForChild("parryResult", 10).OnClientEvent:Connect(function(success, cooldown, permanent, chained)
             local cd = tonumber(cooldown)
             if cd and cd > 0 then Parry.cdUntil = os.clock() + cd end
-            -- parry sukses: item nunggu sampai killer mukul (permanent) -> jangan kirim parry lagi, server pasti nolak
-            -- v10: dibatasi 30 detik (dulu math.huge: kalau killer ga mukul, jalur remote nyangkut sampai respawn)
             if permanent == true then Parry.cdUntil = os.clock() + 30 end
-            if chained == true then Parry.cdUntil = 0 end   -- parry nyambung: game ngehapus cooldown
+            if chained == true then Parry.cdUntil = 0 end
             log("PARRY", "result success=" .. tostring(success) .. " cd=" .. tostring(cooldown)
                 .. (permanent and " permanent" or "") .. (chained == true and " chained" or ""))
         end))
@@ -1558,7 +1299,7 @@ task.spawn(function()
     end
 end)
 
------------------------------------------------------------------- 2) GUN: MANUAL AIM + AUTO TRIGGER
+------------------------------------------------------------------ GUN (survivor)
 local NO_AIM_FLAGS = { "isVaulting", "isSliding", "isDroppingPallet", "isRepairing", "isHealing", "isUnhooking", "isExiting" }
 
 local function equippedGun()
@@ -1589,13 +1330,9 @@ local function tuning()
     return TuningMod or nil
 end
 
--- v8.9: catat tuning gun dari game ke log (diagnosa aim). Kalau ada kecepatan peluru -> dipakai buat prediksi waktu tempuh.
 local function dumpTune()
     local T = tuning()
-    if not T then
-        log("TUNE", "TwistoffateTuning ga kebaca")
-        return
-    end
+    if not T then log("TUNE", "TwistoffateTuning ga kebaca") return end
     local parts, speed, speedKey = {}, nil, nil
     for k, v in pairs(T) do
         local tv = type(v)
@@ -1619,10 +1356,7 @@ local function dumpTune()
     table.sort(parts)
     local line = ""
     for _, p in ipairs(parts) do
-        if #line + #p > 230 then
-            log("TUNE", line)
-            line = ""
-        end
+        if #line + #p > 230 then log("TUNE", line); line = "" end
         line = line .. (line == "" and "" or " | ") .. p
     end
     if line ~= "" then log("TUNE", line) end
@@ -1643,7 +1377,6 @@ task.spawn(function()
     if alive() then pcall(dumpTune) end
 end)
 
--- (waktu charge, batas jam kalau ada peluru, batas macet kalau peluru habis) buat step n
 local function stepInfo(n)
     local T = tuning()
     local s = T and T.STEPS and T.STEPS[n]
@@ -1654,7 +1387,6 @@ local function stepInfo(n)
     return d[1], d[2], d[3]
 end
 
--- arah tembak PERSIS yang bakal dipakai game kalau kamu nembak sekarang (muzzle -> titik yang diliat kamera)
 local function gameAimDir()
     local cam = workspace.CurrentCamera
     if EffectsMod == nil then
@@ -1668,7 +1400,6 @@ local function gameAimDir()
     return cam.CFrame.LookVector
 end
 
--- killer yang lagi kena crosshair (jarak peluru-ke-badan <= hitRadius)
 local function findTarget()
     local origin = muzzleOrigin()
     if not origin then return nil end
@@ -1695,7 +1426,6 @@ local function findTarget()
     return best, bestMiss
 end
 
--- kebalikan syarat game buat nembak (return nil = aman, string = alasan nahan)
 local function whyNoShoot(tool, jam, empty)
     local c, hum, root = myChar(), myHum(), myRoot()
     if not (c and hum and root) or hum.Health <= 0 then return "karakter belum siap" end
@@ -1726,17 +1456,14 @@ local function whyNoShoot(tool, jam, empty)
     return nil
 end
 
--- filter handler: cuma script gun
-local function gunFilter(name)
-    return name:find("TwistoffateClient", 1, true) ~= nil
-end
+local function gunFilter(name) return name:find("TwistoffateClient", 1, true) ~= nil end
 
 local function gunTiers()
     local t = {}
     if getconnections then t[#t + 1] = "owner" end
     if VIM then t[#t + 1] = "vim" end
     if getconnections then t[#t + 1] = "all" end
-    if Gun.fire and Gun.template then t[#t + 1] = "remote" end   -- baru ada setelah 1 tembakan asli kamu ketangkep
+    if Gun.fire and Gun.template then t[#t + 1] = "remote" end
     return t
 end
 
@@ -1757,7 +1484,6 @@ local function gunEscalate(why)
     log("TRIG", string.format("tier %s gagal (%s) -> pindah ke %s", cur, why, list[Gun.tierIdx] or "?"))
 end
 
--- tier terakhir: kirim remote tembak langsung pakai format tembakan asli yang udah ketangkep, arah = ke target
 local function fireRemote(tool, part)
     if not (Gun.fire and Gun.template) then return false, "format remote belum ketangkep (tembak manual sekali)" end
     local origin = muzzleOrigin()
@@ -1829,7 +1555,6 @@ local function fireTrigger(tool, part)
     end)
 end
 
--- v8.8: toleransi sudut buat auto fire ngecil sesuai jarak (sudut yang ditempati hitRadius), dibatasi 1 .. fireTol derajat
 local function fireTolFor(part)
     local cam = workspace.CurrentCamera
     local dist = cam and (part.Position - cam.CFrame.Position).Magnitude or 0
@@ -1858,7 +1583,6 @@ local function gunStep()
     local now = os.clock()
     if now < Gun.holdoff then return end
 
-    -- step: auto (0) = step tertinggi yang waktu charge-nya udah kecapai
     local charged = now - Gun.chargeStart
     local margin = CFG.gun.chargeMargin
     local r
@@ -1886,7 +1610,6 @@ local function gunStep()
         return
     end
 
-    -- target: kalau kamera udah nempel ke target lock -> tembak. kalau belum, cek crosshair manual
     local part, miss
     local lt = Gun.lockTarget
     if CFG.gun.aimLock and lt and lt.Parent and Gun.lockAng <= fireTolFor(lt) then
@@ -1898,7 +1621,6 @@ local function gunStep()
         Gun.status = CFG.gun.aimLock and "siap - nunggu killer masuk jangkauan lock" or "siap - arahkan crosshair ke killer"
         return
     end
-    -- v9.1: nunggu killer lurus (arah + kecepatan stabil) biar prediksi lead akurat; maksimal steadyWait detik
     local rootMe = myRoot()
     local closeRange = rootMe ~= nil and (part.Position - rootMe.Position).Magnitude <= (CFG.gun.steadyMinDist or 0)
     if CFG.gun.steady and part.Parent and not closeRange then
@@ -1933,13 +1655,7 @@ task.spawn(function()
     end
 end)
 
------------------------------------------------------------------- 2a) GUN BELAJAR (v9.1)
--- Server nyiarin garis peluru lewat Remotes.Items["Twist of Fate"].VisualizeBullet(origin, titikAkhir, speed, nama, tool).
--- Dari origin + titik akhir itu script tahu tembakannya kena atau meleset berapa stud, lalu mengoreksi sendiri:
---   killer gerak       -> leadAdj (lead tambahan / kurangan, detik)
---   killer diem, lewat -> biasR / biasU (koreksi arah kecil)
---   kamu gerak         -> originLag (posisi kamu di server ketinggalan berapa detik)
--- Kalau server ga ngirim ke penembak, listener ini diem (aman). Bungkus do...end biar ga nambah local di chunk utama.
+------------------------------------------------------------------ GUN BELAJAR
 do
     local function flat(v) return Vector3.new(v.X, 0, v.Z) end
 
@@ -1994,7 +1710,6 @@ do
                 Gun.biasU = math.clamp(Gun.biasU + 0.35 * (mu / dist), -0.06, 0.06)
                 note = string.format(" | bias %+.3f %+.3f", Gun.biasR, Gun.biasU)
             end
-            -- origin server vs origin lokal (kita udah geser pakai originLag): selisih sepanjang arah gerak kamu = sisa lag
             if mySpd >= 6 then
                 local diff = flat(s.origin - o)
                 local along = diff:Dot(s.my.Unit)
@@ -2033,7 +1748,7 @@ do
     end)
 end
 
------------------------------------------------------------------- 2b) AIM LOCK (kamera nempel ke killer, cuma pas aim)
+------------------------------------------------------------------ AIM LOCK (survivor gun)
 local function blockedByAction(c)
     local ci = c:FindFirstChild("CheckInterractable")
     if ci then
@@ -2058,7 +1773,7 @@ local function pickLockTarget(origin, camCF)
             if dist <= CFG.gun.maxDist and dist > 1 then
                 local ang = math.deg(math.acos(math.clamp(look:Dot(to.Unit), -1, 1)))
                 local isCur = (part == cur)
-                local score = ang - (isCur and 8 or 0)          -- target lama dikasih bonus biar ga loncat-loncat
+                local score = ang - (isCur and 8 or 0)
                 if ang <= CFG.gun.lockFov * (isCur and 1.4 or 1) and (not bestScore or score < bestScore)
                     and ((not CFG.gun.needLOS) or visibleFrom(origin, part)) then
                     best, bestScore, bestAng = part, score, ang
@@ -2079,7 +1794,7 @@ local function aimLockStep(dt)
     local tool = c and equippedGun()
     if not (CFG.gun.aimLock and tool and aimingNow() and amSurvivor())
         or not hum or hum.Health <= 0 or blockedByAction(c) then
-        Gun.lockTarget, Gun.lockAng, lockNameSeen = nil, 180, nil     -- ga aim = lepas total, kamera 100% balik ke kamu
+        Gun.lockTarget, Gun.lockAng, lockNameSeen = nil, 180, nil
         return
     end
     local cam = workspace.CurrentCamera
@@ -2115,7 +1830,266 @@ RunService:BindToRenderStep("DP3_AimLock", Enum.RenderPriority.Camera.Value + 1,
     end
 end)
 
------------------------------------------------------------------- 3) AUTO SKILL CHECK
+------------------------------------------------------------------ VEIL SPEAR ASSIST (killer)
+-- Killer-side. Aimbot camera ke survivor + spear prediction (Track EMA + ping lead + gravitasi).
+-- Projectile tracker: kalibrasi speed spear dari lemparan sendiri + cooldown dari jeda lemparan. Murni client.
+local Veil = nil
+do
+    Veil = {
+        tracked = {}, trailParts = {}, lockTarget = nil, lockChar = nil, aimHeld = false,
+        cdEndsAt = 0, lastThrowAt = 0, lastGap = nil, trailFolder = nil, marker = nil, gui = nil,
+    }
+    ENV.DP3_VEIL = Veil
+
+    local oldGui = ENV.DP3_VEIL_GUI
+    if oldGui then pcall(function() oldGui:Destroy() end) end
+    local oldTrail = ENV.DP3_VEIL_TRAIL
+    if oldTrail then pcall(function() oldTrail:Destroy() end) end
+
+    Veil.trailFolder = Instance.new("Folder")
+    Veil.trailFolder.Name = "DP3_VeilTrail"
+    Veil.trailFolder.Parent = workspace
+    ENV.DP3_VEIL_TRAIL = Veil.trailFolder
+
+    local parent = (gethui and gethui()) or game:GetService("CoreGui")
+    Veil.gui = Instance.new("ScreenGui")
+    Veil.gui.Name = "DP3_VeilGui"
+    Veil.gui.ResetOnSpawn = false
+    Veil.gui.IgnoreGuiInset = true
+    Veil.gui.DisplayOrder = 9997
+    Veil.gui.Parent = parent
+    ENV.DP3_VEIL_GUI = Veil.gui
+
+    Veil.marker = Instance.new("Frame")
+    Veil.marker.AnchorPoint = Vector2.new(0.5, 0.5)
+    Veil.marker.Size = UDim2.fromOffset(14, 14)
+    Veil.marker.BackgroundColor3 = Color3.fromRGB(80, 255, 140)
+    Veil.marker.BackgroundTransparency = 0.2
+    Veil.marker.BorderSizePixel = 0
+    Veil.marker.Visible = false
+    Veil.marker.Parent = Veil.gui
+    local uic = Instance.new("UICorner")
+    uic.CornerRadius = UDim.new(1, 0)
+    uic.Parent = Veil.marker
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(255, 255, 255)
+    stroke.Thickness = 1
+    stroke.Transparency = 0.3
+    stroke.Parent = Veil.marker
+
+    local function veilAimPart(char)
+        if CFG.veil.autoHeadshot then
+            return char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
+        end
+        return char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Head")
+    end
+
+    local function veilPredictPos(part, origin)
+        local base = (CFG.veil.leadPing > 0) and (Net.rtt * CFG.veil.leadPing) or 0
+        local pos = part.Position
+        if part.Name == "HumanoidRootPart" then
+            pos = pos + Vector3.new(0, 0.3, 0)
+        end
+        local tr = Track[part.Parent]
+        if not tr then return pos end
+        local vel = tr.vel
+        if tr.grounded then vel = Vector3.new(vel.X, 0, vel.Z) end
+        if vel.Magnitude > 70 then vel = vel.Unit * 70 end
+        if base <= 0 and vel.Magnitude < 1 then return pos end
+        local speed = math.max(CFG.veil.spearSpeed, 30)
+        local g = CFG.veil.spearGravity
+        local t = base + (pos - origin).Magnitude / speed
+        for _ = 1, 4 do
+            local future = pos + vel * t + Vector3.new(0, 0.5 * g * t * t, 0)
+            t = base + (future - origin).Magnitude / speed
+        end
+        return pos + vel * t + Vector3.new(0, 0.5 * g * t * t, 0)
+    end
+
+    local function veilPickTarget(cam)
+        local origin = cam.CFrame.Position
+        local look = cam.CFrame.LookVector
+        local fovDeg = CFG.veil.fovDeg
+        local best, bestAng, bestPart
+        for _, s in ipairs(survivors()) do
+            local part = veilAimPart(s.char)
+            if part then
+                local dist = (part.Position - origin).Magnitude
+                if dist <= CFG.veil.maxDist then
+                    local to = (part.Position - origin).Unit
+                    local ang = math.deg(math.acos(math.clamp(look:Dot(to), -1, 1)))
+                    if ang <= fovDeg and (not bestAng or ang < bestAng) then
+                        if (not CFG.veil.requireVisible) or visibleFrom(origin, part) then
+                            best, bestAng, bestPart = s, ang, part
+                        end
+                    end
+                end
+            end
+        end
+        return best, bestPart, bestAng
+    end
+
+    local errAt = 0
+    local function veilAimStep(dt)
+        if not alive() then
+            pcall(function() RunService:UnbindFromRenderStep("DP3_VeilAim") end)
+            return
+        end
+        if not (CFG.veil.enabled and CFG.veil.aimbot and amKiller() and Veil.aimHeld) then
+            if Veil.marker then Veil.marker.Visible = false end
+            Veil.lockTarget, Veil.lockChar = nil, nil
+            return
+        end
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+        local target, part = veilPickTarget(cam)
+        if not target or not part then
+            Veil.lockTarget, Veil.lockChar = nil, nil
+            if Veil.marker then Veil.marker.Visible = false end
+            return
+        end
+        Veil.lockTarget, Veil.lockChar = part, target.char
+        local origin = cam.CFrame.Position
+        local aimPoint = veilPredictPos(part, origin)
+        local sp, on = cam:WorldToViewportPoint(aimPoint)
+        if Veil.marker then
+            if on then
+                Veil.marker.Visible = true
+                Veil.marker.Position = UDim2.fromOffset(sp.X, sp.Y)
+            else
+                Veil.marker.Visible = false
+            end
+        end
+        local goal = CFrame.lookAt(origin, aimPoint)
+        local alpha = 1 - math.clamp(CFG.veil.smoothing, 0, 0.99)
+        cam.CFrame = cam.CFrame:Lerp(goal, alpha)
+    end
+
+    pcall(function() RunService:UnbindFromRenderStep("DP3_VeilAim") end)
+    RunService:BindToRenderStep("DP3_VeilAim", Enum.RenderPriority.Camera.Value + 2, function(dt)
+        local ok, err = pcall(veilAimStep, dt)
+        if not ok and os.clock() - errAt > 4 then
+            errAt = os.clock()
+            log("VEIL", "aim error: " .. tostring(err))
+        end
+    end)
+
+    keep(UIS.InputBegan:Connect(function(i, gp)
+        if not alive() or gp then return end
+        if i.UserInputType == CFG.veil.holdKey then Veil.aimHeld = true end
+    end))
+    keep(UIS.InputEnded:Connect(function(i)
+        if i.UserInputType == CFG.veil.holdKey then Veil.aimHeld = false end
+    end))
+
+    local function looksLikeSpear(inst)
+        if not inst:IsA("BasePart") then return false end
+        if inst:GetAttribute("VeilSpearId") ~= nil or inst:GetAttribute("VeilSpearPhase") ~= nil then return true end
+        local n = inst.Name:lower()
+        if n == "spearprojectile" then return true end
+        if n:find("spear", 1, true) and not inst:FindFirstAncestorOfClass("Humanoid") then
+            for _, plr in ipairs(Players:GetPlayers()) do
+                if plr.Character and inst:IsDescendantOf(plr.Character) then return false end
+            end
+            return true
+        end
+        return false
+    end
+
+    local function addTrail(a, b, color, now)
+        local seg = b - a
+        local len = seg.Magnitude
+        if len < 0.05 or len > 50 then return end
+        local p = Instance.new("Part")
+        p.Anchored, p.CanCollide, p.CanQuery, p.CanTouch, p.CastShadow = true, false, false, false, false
+        p.Material, p.Color, p.Transparency = Enum.Material.Neon, color, 0.25
+        p.Size = Vector3.new(0.12, 0.12, len)
+        p.CFrame = CFrame.lookAt((a + b) / 2, b)
+        p.Parent = Veil.trailFolder
+        table.insert(Veil.trailParts, { part = p, born = now })
+        while #Veil.trailParts > CFG.veil.maxTrails do
+            local old = table.remove(Veil.trailParts, 1)
+            if old then old.part:Destroy() end
+        end
+    end
+
+    local function onSpear(inst)
+        if not alive() or Veil.tracked[inst] then return end
+        if not looksLikeSpear(inst) then return end
+        local me = myRoot()
+        local mine = false
+        if me and (inst.Position - me.Position).Magnitude < 20 then
+            mine = true
+            local now = os.clock()
+            if Veil.lastThrowAt > 0 then
+                local gap = now - Veil.lastThrowAt
+                if gap > 2 and gap < 30 then
+                    CFG.veil.cooldownSeconds = math.clamp(gap, 3, 30)
+                    log("VEIL", string.format("cooldown: %.1fs (dari jeda lemparan)", CFG.veil.cooldownSeconds))
+                end
+                Veil.lastGap = gap
+            end
+            Veil.lastThrowAt = now
+            Veil.cdEndsAt = now + CFG.veil.cooldownSeconds
+            log("VEIL", "lemparan terdeteksi, CD " .. CFG.veil.cooldownSeconds .. "s")
+        end
+        Veil.tracked[inst] = { part = inst, last = inst.Position, t0 = os.clock(), p0 = inst.Position, mine = mine, calibrated = false }
+    end
+
+    keep(Workspace.DescendantAdded:Connect(function(d)
+        if alive() then task.defer(onSpear, d) end
+    end))
+    for _, d in ipairs(Workspace:GetDescendants()) do onSpear(d) end
+
+    local hbErrAt = 0
+    keep(RunService.Heartbeat:Connect(function()
+        if not alive() then return end
+        local ok, err = pcall(function()
+            if not (CFG.veil.enabled and CFG.veil.tracker) then return end
+            local now = os.clock()
+            for inst, rec in pairs(Veil.tracked) do
+                if not inst.Parent then
+                    Veil.tracked[inst] = nil
+                else
+                    local cur = inst.Position
+                    local col = rec.mine and Color3.fromRGB(120, 200, 255) or Color3.fromRGB(255, 120, 120)
+                    addTrail(rec.last, cur, col, now)
+                    rec.last = cur
+                    if rec.mine and not rec.calibrated then
+                        local el = now - rec.t0
+                        if el > 0.15 and el < 0.6 then
+                            local v = (cur - rec.p0).Magnitude / el
+                            if v > 20 and v < 600 then
+                                local old = CFG.veil.spearSpeed
+                                CFG.veil.spearSpeed = CFG.veil.spearSpeed * 0.7 + v * 0.3
+                                if math.abs(CFG.veil.spearSpeed - old) > 1 then
+                                    log("VEIL", string.format("spear speed: %.0f -> %.0f stud/s", old, CFG.veil.spearSpeed))
+                                end
+                                rec.calibrated = true
+                            end
+                        end
+                    end
+                end
+            end
+            for i = #Veil.trailParts, 1, -1 do
+                local e = Veil.trailParts[i]
+                local age = now - e.born
+                if age > CFG.veil.trailLifetime then
+                    e.part:Destroy()
+                    table.remove(Veil.trailParts, i)
+                else
+                    e.part.Transparency = 0.25 + 0.75 * (age / CFG.veil.trailLifetime)
+                end
+            end
+        end)
+        if not ok and os.clock() - hbErrAt > 5 then
+            hbErrAt = os.clock()
+            log("VEIL", "tracker error: " .. tostring(err))
+        end
+    end))
+end
+
+------------------------------------------------------------------ AUTO SKILL CHECK
 local Skill = {
     active = false, lastDump = "(belum ada dump)", tune = CFG.skill.latency,
     pressClock = -10, lastResult = -10, lastEvent = -10, cur = nil, gen = 0, w0 = nil,
@@ -2125,13 +2099,9 @@ local Skill = {
     pressTier = nil, pressRung = 0, echoFor = nil,
     gameFns = {}, gameScanAt = -10,
     snapAt = nil, snapDelta = nil,
-    syncTier = { game = true, down = true, btn = true, owner = true, all = true },   -- tier yang jalan sinkron (frame-snap aman)
+    syncTier = { game = true, down = true, btn = true, owner = true, all = true },
 }
 
--- v10: kecepatan jarum dari kode game (tweenLineRotation, Line.Rotation 0 -> 360 linear):
---   Generator (Skillcheck-gen)   : durasi max(1.3 x skillcheckspeed, 0.4) detik, skillcheckspeed = atribut karakter (default 1)
---   Healing   (Skillcheck-player): durasi 1.55 detik (x1.4 kalau perk ambitiousmedic; sample asli menggantikan seed setelah 3 frame)
--- Jenisnya dibaca dari teks event ("Generator event args..." / "Healing event args..."). Selain itu nil (cuma pakai pengukuran).
 function Skill.seedOmega(info)
     if type(info) ~= "string" then return nil end
     if info:find("^Generator") then
@@ -2246,7 +2216,6 @@ local function snapshot(tag, extra)
     if writefile then pcall(writefile, "dp3_skillcheck_dump.txt", Skill.lastDump) end
 end
 
--- semua pasangan (Check, Line=jarum, Goal=zona) di GUI keyboard dan gamepad, tampil atau nggak
 local function skillPairs()
     local out = {}
     local pg = LP:FindFirstChildOfClass("PlayerGui")
@@ -2260,7 +2229,6 @@ local function skillPairs()
     return out
 end
 
--- tombol aksi mobile (Survivor-mob.Controls.action). Dicari ulang kalau GUI-nya diganti.
 local function findActionButton()
     local a = Skill.actBtn
     if a and a.Parent and a.AbsoluteSize.X > 0 then return a end
@@ -2276,7 +2244,7 @@ local function findActionButton()
             return act
         end
     end
-    for _, d in ipairs(pg:GetDescendants()) do   -- nama GUI beda: cari Controls.action di mana pun
+    for _, d in ipairs(pg:GetDescendants()) do
         if d.Name == "action" and d:IsA("GuiObject") and d.Parent and d.Parent.Name == "Controls" and d.AbsoluteSize.X > 0 then
             Skill.actBtn = d
             return d
@@ -2285,7 +2253,6 @@ local function findActionButton()
     return nil
 end
 
--- titik tekan buat tier "tap"/"click": tengah tombol aksi mobile (koordinat layar = koordinat GUI + inset atas)
 local function tapTarget()
     local obj = findActionButton()
     if obj then
@@ -2315,9 +2282,8 @@ local function tapAt(x, y, hold, mode)
     return true, "mouse"
 end
 
-local VIM_RUNG = { tap = true, click = true, vim = true }   -- diproses game di frame berikutnya (butuh jendela verifikasi lebih lama)
+local VIM_RUNG = { tap = true, click = true, vim = true }
 
--- tembak satu signal. firesignal kalau ada, kalau nggak getconnections + :Fire(). return jumlah yang ditembak
 local function fireSig(sig, ...)
     local args = table.pack(...)
     if firesignal then
@@ -2336,8 +2302,6 @@ local function fireSig(sig, ...)
     return 0
 end
 
--- tier "btn": nembak signal tombol langsung, TANPA lewat sistem input (ga kena overlay, ga butuh VIM).
--- target: tombol aksi + isinya, dan tombol di dalam GUI skill check kalau ada.
 local function fireBtn()
     if not (firesignal or getconnections) then return false, "firesignal/getconnections ga ada" end
     local targets = {}
@@ -2364,11 +2328,11 @@ local function fireBtn()
     local down, up = newInput("touch", nil, pos), newInput("touch", nil, pos)
     up.UserInputState = Enum.UserInputState.End
     local n = 0
-    for _, t in ipairs(targets) do   -- tekan
+    for _, t in ipairs(targets) do
         n = n + fireSig(t.InputBegan, down)
         if t:IsA("GuiButton") then n = n + fireSig(t.MouseButton1Down, cx, cy) end
     end
-    for _, t in ipairs(targets) do   -- lepas
+    for _, t in ipairs(targets) do
         n = n + fireSig(t.InputEnded, up)
         if t:IsA("GuiButton") then
             n = n + fireSig(t.MouseButton1Up, cx, cy)
@@ -2384,8 +2348,6 @@ local function fireBtn()
     return n > 0, string.format("%d signal ke %d tombol", n, #targets)
 end
 
--- tier "game": panggil handleSkillCheck milik game langsung (Skillcheck-gen / Skillcheck-player). Fungsi itu yang
--- ngitung zona, nembak SkillCheckResultEvent dan beresin UI, jadi ga perlu simulasi input sama sekali.
 local function scriptOfFn(f)
     if getfenv then
         local ok, env = pcall(getfenv, f)
@@ -2397,7 +2359,7 @@ local function scriptOfFn(f)
     return nil
 end
 
-local function gameFnLive(f)   -- script skill check di game nempel ke character yang lagi dipakai
+local function gameFnLive(f)
     local sc = scriptOfFn(f)
     if sc then
         local c = myChar()
@@ -2409,7 +2371,7 @@ end
 local function refreshGameFns(force)
     local ok0 = #Skill.gameFns > 0
     for _, f in ipairs(Skill.gameFns) do
-        if not gameFnLive(f) then ok0 = false break end
+        if not gameFnLive(f) then ok0 = false; break end
     end
     if ok0 and not force then return end
     local now = os.clock()
@@ -2442,19 +2404,16 @@ local function fireGameHandlers()
     for _, f in ipairs(Skill.gameFns) do
         if gameFnLive(f) then
             n = n + 1
-            task.spawn(pcall, f, "success")   -- game sendiri yang nentuin success/neutral/fail dari posisi jarum
+            task.spawn(pcall, f, "success")
         end
     end
     if n == 0 then return false, "game: ga ada handler hidup" end
     return true, string.format("game %d handler", n)
 end
 
--- tier "down": MouseButton1Down tombol aksi tanpa argumen (handler skill check ga butuh koordinat)
 local function fireActionDown()
     local act = findActionButton()
     if not act or not act:IsA("GuiButton") then return false, "tombol aksi (GuiButton) ga ketemu" end
-    -- v10: jalur 1 = cuma handler milik script Skillcheck-gen / Skillcheck-player. firesignal manggil SEMUA handler tombol aksi
-    -- (repair, interaksi, dll), jadi bisa ikut nyetop repair / nge-trigger aksi lain pas skill check.
     if getconnections then
         local okc, conns = pcall(getconnections, act.MouseButton1Down)
         local n = 0
@@ -2489,7 +2448,6 @@ local function sendTier(tier, raw)
     return press(raw, 0.06, tier, skillFilter)
 end
 
--- urutan cara input. Dibikin pas check muncul (jeda ~0.5s sebelum jarum nyampe), bukan pas mau nekan.
 local function buildLadder()
     local list = {}
     local function add(t) if not indexOf(list, t) then list[#list + 1] = t end end
@@ -2503,7 +2461,6 @@ local function buildLadder()
     if #Skill.gameFns > 0 then add("game") end
     if act and act:IsA("GuiButton") and (firesignal or getconnections) then add("down") end
     if isMobile() then
-        -- HP: skill check dipencet lewat tombol aksi, bukan Space
         if haveBtn then add("btn") end
         if VIM and act then add("tap"); add("click") end
         if haveOwner then add("owner") end
@@ -2515,7 +2472,7 @@ local function buildLadder()
         if VIM and act then add("click"); add("tap") end
     end
     if getconnections and CFG.skill.allowAll then add("all") end
-    local first = Skill.tierName       -- cara yang udah terbukti masuk selalu duluan
+    local first = Skill.tierName
     local at = first and indexOf(list, first)
     if at then
         table.remove(list, at)
@@ -2524,21 +2481,17 @@ local function buildLadder()
     return list
 end
 
--- lead tekan (detik sebelum jarum di tengah zona). cara VIM diproses di frame berikutnya, jadi + 1 frame.
--- selisihnya dipelajari otomatis per cara (tuneDelta) dari hasil game.
 local function curTune(frame)
     local t = Skill.tierName or (Skill.ladder and Skill.ladder[1]) or "?"
     local base = CFG.skill.latency + (VIM_RUNG[t] and frame or 0)
     return base + (Skill.tuneDelta[t] or 0)
 end
 
--- tangga: coba cara input satu-satu di check yang SAMA. Tiap cara dikasih jendela singkat buat dibuktiin
--- (game ngirim Result/Fail). Ga ada hasil = cara berikutnya langsung, ga nunggu check berikutnya.
 local function pressLadder()
     local raw = getBind("kb_skillcheck", "Space")
     local list = Skill.ladder or buildLadder()
     Skill.ladder = nil
-    if #Skill.gameFns > 0 and not indexOf(list, "game") then table.insert(list, 1, "game") end   -- scan baru kelar setelah ladder dibikin
+    if #Skill.gameFns > 0 and not indexOf(list, "game") then table.insert(list, 1, "game") end
     if #list == 0 then
         log("SKILL", "ga ada cara kirim input (VIM/firesignal/getconnections ga ada)")
         return nil
@@ -2546,8 +2499,8 @@ local function pressLadder()
     local first = list[1]
     for idx, tier in ipairs(list) do
         local n0 = Skill.resultN
-        local ln0 = Skill.cur and Skill.cur.line      -- v10: buat verifikasi mandiri (jarum berhenti = game nerima tekanan)
-        if idx == 1 then Skill.snap(tier) end           -- v10: frame-snap cuma di tekanan pertama (yang tepat waktu)
+        local ln0 = Skill.cur and Skill.cur.line
+        if idx == 1 then Skill.snap(tier) end
         Skill.pressClock, Skill.pressTier, Skill.pressRung = os.clock(), tier, idx
         local ok, how = sendTier(tier, raw)
         log("SKILL", string.format("rung %d/%d %s: %s", idx, #list, tier, tostring(how)))
@@ -2557,8 +2510,6 @@ local function pressLadder()
             local prev, still, frozen = (ln0 and ln0.Parent) and ln0.Rotation or nil, 0, false
             while alive() and Skill.resultN == n0 and os.clock() < deadline do
                 RunService.Heartbeat:Wait()
-                -- v10: verifikasi ga cuma lewat hook FireServer. Handler game ngebatalin tween jarum begitu nerima tekanan,
-                -- jadi Line.Rotation berhenti berubah (tween normal geser 3-7 derajat per frame).
                 if ln0 and ln0.Parent then
                     local rr = ln0.Rotation
                     if prev and math.abs(angDiff(rr, prev)) < 0.001 then still = still + 1 else still = 0 end
@@ -2587,7 +2538,6 @@ local function pressLadder()
     return nil
 end
 
--- diagnosa tombol aksi: siapa yang ada di atasnya, handler apa yang nempel. Jalan otomatis sekali per sesi + tombol Probe.
 local function skillProbe()
     local pg = LP:FindFirstChildOfClass("PlayerGui")
     local ins = GuiService:GetGuiInset()
@@ -2644,8 +2594,6 @@ local function skillProbe()
     end
 end
 
--- diagnosa: input kita (VIM) yang sampai ke game dicatat sekali per tekanan ("echo"). Input manual kamu pas check
--- dicatat bareng objek GUI yang kena (nunjukin tombol aslinya).
 keep(UIS.InputBegan:Connect(function(i, gp)
     if not alive() then return end
     local ut = i.UserInputType
@@ -2673,15 +2621,9 @@ keep(UIS.InputBegan:Connect(function(i, gp)
         kb and tostring(i.KeyCode.Name) or "", i.Position.X, i.Position.Y,
         tostring(gp), table.concat(names, ", ")))
 end))
-log("SKILL", string.format("env: mobile=%s VIM=%s getconnections=%s firesignal=%s", tostring(isMobile()), tostring(VIM ~= nil),
-    tostring(getconnections ~= nil), tostring(firesignal ~= nil)))
 
--- tengah zona sukses relatif ke Goal.Rotation (kode game: 102 <= Line.Rotation - Goal.Rotation <= 116)
 local function zoneMid() return (CFG.skill.zoneLo + CFG.skill.zoneHi) / 2 end
 
--- v10: frame-snap. Zona sukses cuma 14 derajat (~50 ms di kecepatan normal). Di 20-30 FPS satu frame bisa lompat lewat zona, jadi
--- sesaat sebelum handler game dipanggil (sinkron), Line.Rotation dirapihin ke tengah zona KALAU jarum tinggal <= snapFrames frame
--- dari tengah (geser maksimal ~1.5 frame, ga kelihatan). Tier async (vim/tap/click) ga di-snap: frame berikutnya tween nimpa lagi.
 function Skill.snap(tier)
     local C = CFG.skill
     local c = Skill.cur
@@ -2691,7 +2633,7 @@ function Skill.snap(tier)
     local dir = (w >= 0) and 1 or -1
     local frame = math.clamp(Net.frameDt, 1 / 120, 1 / 15)
     local target = c.goal.Rotation + zoneMid()
-    local delta = angDiff(target, c.line.Rotation) * dir      -- > 0 = jarum belum sampai tengah
+    local delta = angDiff(target, c.line.Rotation) * dir
     local span = math.abs(w) * frame
     if delta < -span or delta > span * C.snapFrames or math.abs(delta) < 0.4 then return end
     local okS = pcall(function() c.line.Rotation = target end)
@@ -2701,7 +2643,6 @@ function Skill.snap(tier)
     end
 end
 
--- regresi linear: kecepatan sudut (deg/s) dari sample (waktu, sudut kontinu)
 local function slope(samples)
     local n = #samples
     if n < 2 then return nil end
@@ -2716,7 +2657,6 @@ local function slope(samples)
     return (n * sxy - sx * sy) / den
 end
 
--- true = ditangani (ditekan / selesai / ga muncul, trace ditulis ke log), false = GUI skill check ga ada -> metode lama
 local function skillTrackNamed(evtInfo, gen)
     local P = skillPairs()
     if #P == 0 then return false end
@@ -2733,7 +2673,7 @@ local function skillTrackNamed(evtInfo, gen)
     end
     local act, samples, moved = nil, {}, false
     local lastRot
-    local seedW = Skill.seedOmega(evtInfo)     -- v10: kecepatan jarum dari game, ga nunggu regresi 3 sample
+    local seedW = Skill.seedOmega(evtInfo)
 
     while os.clock() - t0 < 5 and alive() and CFG.skill.enabled and Skill.gen == gen do
         local dtf = RunService.RenderStepped:Wait()
@@ -2741,7 +2681,7 @@ local function skillTrackNamed(evtInfo, gen)
 
         local cur
         for _, p in ipairs(P) do
-            if p.chk.Parent and p.chk.Visible and p.gui.Enabled ~= false then cur = p break end
+            if p.chk.Parent and p.chk.Visible and p.gui.Enabled ~= false then cur = p; break end
         end
 
         if now - lastTr >= 0.12 then
@@ -2762,8 +2702,7 @@ local function skillTrackNamed(evtInfo, gen)
             end
             local raw = act.line.Rotation
             local a = raw
-            if #samples > 0 then a = samples[#samples][2] + angDiff(raw, samples[#samples][2]) end   -- kontinu (anti wrap)
-            -- sample baru cuma kalau jarum beneran gerak (game update per frame, jangan dobel)
+            if #samples > 0 then a = samples[#samples][2] + angDiff(raw, samples[#samples][2]) end
             if (not lastRot) or math.abs(angDiff(raw, lastRot)) > 0.01 then
                 samples[#samples + 1] = { now, a }
                 if #samples > 5 then table.remove(samples, 1) end
@@ -2784,8 +2723,8 @@ local function skillTrackNamed(evtInfo, gen)
                 local last = samples[#samples]
                 local zone = act.goal.Rotation + zoneMid() + CFG.skill.offset
                 local dir = (w >= 0) and 1 or -1
-                local rem = ((zone - last[2]) * dir) % 360          -- sisa sudut ke tengah zona, searah jarum
-                rem = rem - w * dir * (now - last[1]) * 0 + 0       -- sample udah terbaru (per frame)
+                local rem = ((zone - last[2]) * dir) % 360
+                rem = rem - w * dir * (now - last[1]) * 0 + 0
                 local frame = math.clamp(dtf, 1 / 120, 1 / 20)
                 if rem > 360 - math.abs(w) * frame * 0.5 then rem = 0 end
                 local T = rem / math.abs(w)
@@ -2798,7 +2737,7 @@ local function skillTrackNamed(evtInfo, gen)
                 end
             end
         elseif act then
-            break      -- tadinya tampil, sekarang ketutup: check selesai
+            break
         end
     end
 
@@ -2811,8 +2750,6 @@ local function skillTrackNamed(evtInfo, gen)
     return true
 end
 
--- hook ngirim: game ngirim hasil skill check (Result ATAU Fail): ukur seberapa meleset, lalu tune per cara input.
--- resultN dipakai tangga input buat tau apakah tekanan barusan MASUK ke game.
 SkillHook.judged = function(args, name)
     Skill.resultN = Skill.resultN + 1
     Skill.lastResult = os.clock()
@@ -2823,7 +2760,7 @@ SkillHook.judged = function(args, name)
     local dir = (w >= 0) and 1 or -1
     local err = angDiff(c.line.Rotation, c.goal.Rotation + zoneMid() + CFG.skill.offset) * dir
     if Skill.snapAt and Skill.snapDelta and os.clock() - Skill.snapAt < 0.3 then
-        err = -Skill.snapDelta   -- rotasi udah dirapihin frame-snap: belajar dari selisih SEBELUM dirapihin
+        err = -Skill.snapDelta
     end
     Skill.snapAt = nil
     local errT = (math.abs(w) > 1) and (err / math.abs(w)) or 0
@@ -2831,7 +2768,6 @@ SkillHook.judged = function(args, name)
     log("SKILL", string.format("HASIL %s %s %s | err=%+.1f deg (%+.0f ms %s) | tekan->hasil %.0f ms | %s",
         tostring(name), tostring(args[1]), tostring(args[2]), err, errT * 1000, errT > 0 and "telat" or "kecepatan",
         since * 1000, mine and ("tekanan skrip via " .. tostring(Skill.pressTier)) or "BUKAN dari tekanan skrip"))
-    -- belajar cuma dari tekanan di rung pertama (rung berikutnya telat by design, bakal ngerusak tune)
     if mine and CFG.skill.learn and math.abs(errT) < 0.25 and Skill.pressRung == 1 then
         local k = Skill.pressTier or "?"
         Skill.tuneDelta[k] = math.clamp((Skill.tuneDelta[k] or 0) + 0.5 * errT, -0.08, 0.25)
@@ -2955,7 +2891,7 @@ local function skillTrack(evtInfo, gen)
     local ok, handled = pcall(skillTrackNamed, evtInfo, gen)
     if not ok then log("SKILL", "named error: " .. tostring(handled)) end
     if ok and handled then return end
-    if Skill.gen ~= gen then return end   -- udah ada event baru
+    if Skill.gen ~= gen then return end
     log("SKILL", "Line/Goal ga ketemu -> metode lama")
     skillTrackLegacy(evtInfo, gen)
 end
@@ -2969,9 +2905,9 @@ end
 
 local function runSkillCheck(info)
     if not CFG.skill.enabled then return end
-    Skill.gen = Skill.gen + 1          -- event baru selalu menang: tracker lama berhenti sendiri
+    Skill.gen = Skill.gen + 1
     Skill.lastEvent = os.clock()
-    unhideChecks()                     -- Check yang tadi kita sembunyiin (nyangkut) dibalikin, game yang atur sisanya
+    unhideChecks()
     local gen = Skill.gen
     Skill.active = true
     task.spawn(function() pcall(refreshGameFns) end)
@@ -2982,8 +2918,6 @@ local function runSkillCheck(info)
     end)
 end
 
--- SkillCheckEvent ga ada di lobby (remote dibuat pas ronde). Jadi dipantau terus, bukan WaitForChild lalu nyerah,
--- dan dipasang ulang kalau remote-nya diganti. Remote Result/Fail juga didaftarin ke Spy dari sini.
 local function hookSkillEvents(folder)
     task.spawn(function()
         local conn, cur
@@ -3033,12 +2967,10 @@ end
 hookSkillEvents("Generator")
 hookSkillEvents("Healing")
 
--- cadangan kalau event ga ke-hook: tracker jalan sendiri pas GUI Check muncul (tepi hidden -> visible).
--- Kalau tracker dari event udah jalan (Skill.active) ga dobel.
 task.spawn(function()
     local was = setmetatable({}, { __mode = "k" })
     while alive() do
-        task.wait(0.03)   -- v10: ~30 Hz (dulu tiap frame + FindFirstChild berantai); event asli tetap yang utama
+        task.wait(0.03)
         if CFG.skill.enabled then
             for _, p in ipairs(skillPairs()) do
                 local vis = p.chk.Parent ~= nil and p.chk.Visible and p.gui.Enabled ~= false
@@ -3051,7 +2983,6 @@ task.spawn(function()
     end
 end)
 
--- watchdog: Check yang tampil tapi jarumnya diem >1.2s padahal ga ada event baru = UI nyangkut -> sembunyiin
 task.spawn(function()
     while alive() do
         task.wait(0.4)
@@ -3079,20 +3010,15 @@ task.spawn(function()
     end
 end)
 
------------------------------------------------------------------- 4) SEMBUNYIIN UI SKILL CHECK
--- pas Auto Skill Check ON: jarum, zona, tombol Space, dll di SkillCheckPromptGui dibikin transparan tiap frame.
--- Visible / Enabled / rotasi sengaja ga disentuh, jadi game dan tracker skill check tetep jalan normal.
-local hideOrig = setmetatable({}, { __mode = "k" })   -- [objek] = { prop = nilai asli }
+------------------------------------------------------------------ HIDE UI SKILL CHECK
+local hideOrig = setmetatable({}, { __mode = "k" })
 local hideWasOn, hideErrAt = false, 0
 
 local function forceT(d, prop)
     local cur = d[prop]
     if cur ~= 1 then
         local o = hideOrig[d]
-        if not o then
-            o = {}
-            hideOrig[d] = o
-        end
+        if not o then o = {}; hideOrig[d] = o end
         if o[prop] == nil then o[prop] = cur end
         d[prop] = 1
     end
@@ -3133,12 +3059,8 @@ local function hideStep()
         return
     end
     hideWasOn = true
-    -- v10: daftar objek GUI skill check di-cache 0.25 detik (dulu GetDescendants + tabel baru tiap frame render)
     local H = Skill.hideList
-    if not H then
-        H = { t = -1, list = {} }
-        Skill.hideList = H
-    end
+    if not H then H = { t = -1, list = {} }; Skill.hideList = H end
     local now = os.clock()
     if now - H.t > 0.25 then
         H.t = now
@@ -3168,11 +3090,7 @@ RunService:BindToRenderStep("DP3_HideSkillUI", Enum.RenderPriority.Last.Value, f
     end
 end)
 
------------------------------------------------------------------- BELAJAR TERSIMPAN (v10)
--- Hasil belajar disimpan ke dp10_learn.json (writefile) biar ga mulai dari nol tiap ronde / reload. Yang disimpan: waktu "animasi ->
--- kena" per animasi parry, koreksi parry, lead / bias / originLag gun, range parry, tuning skill check per tier.
--- Statistik muncul/kena (buat buang animasi bukan serangan) SENGAJA ga disimpan: data ronde yang salah bisa bikin animasi serangan
--- dibuang permanen. Hapus file itu (atau tombol Wipe) buat reset belajar. Dibungkus do...end biar ga nambah local di chunk utama.
+------------------------------------------------------------------ BELAJAR TERSIMPAN
 do
     local HttpService = game:GetService("HttpService")
     local FILE = "dp10_learn.json"
@@ -3225,8 +3143,14 @@ do
                 if type(k) == "string" and x then Skill.tuneDelta[k] = x end
             end
         end
-        log("BELAJAR", string.format("dimuat: %d animasi parry | lead %+.0f ms | originLag %.0f ms | range %.1f",
-            nHit, Gun.leadAdj * 1000, (CFG.gun.originLag or 0) * 1000, CFG.parry.range))
+        -- v11: veil data
+        if type(d.veil) == "table" then
+            CFG.veil.spearSpeed = num(d.veil.spearSpeed, 30, 400) or CFG.veil.spearSpeed
+            CFG.veil.spearGravity = num(d.veil.spearGravity, -50, 200) or CFG.veil.spearGravity
+            CFG.veil.cooldownSeconds = num(d.veil.cooldownSeconds, 1, 60) or CFG.veil.cooldownSeconds
+        end
+        log("BELAJAR", string.format("dimuat: %d animasi parry | lead %+.0f ms | originLag %.0f ms | range %.1f | spear %.0f stud/s | cd %.1fs",
+            nHit, Gun.leadAdj * 1000, (CFG.gun.originLag or 0) * 1000, CFG.parry.range, CFG.veil.spearSpeed, CFG.veil.cooldownSeconds))
     end
 
     function Skill.saveLearn()
@@ -3239,8 +3163,9 @@ do
             if type(k) == "string" then shift[k] = v end
         end
         local data = {
-            v = 10, hits = hits, shift = shift, range = CFG.parry.range, tune = Skill.tuneDelta,
+            v = 11, hits = hits, shift = shift, range = CFG.parry.range, tune = Skill.tuneDelta,
             gun = { leadAdj = Gun.leadAdj, biasR = Gun.biasR, biasU = Gun.biasU, originLag = CFG.gun.originLag },
+            veil = { spearSpeed = CFG.veil.spearSpeed, spearGravity = CFG.veil.spearGravity, cooldownSeconds = CFG.veil.cooldownSeconds },
         }
         local ok, js = pcall(function() return HttpService:JSONEncode(data) end)
         if not ok then return false end
@@ -3255,9 +3180,10 @@ do
         Parry.hits, Parry.shift = {}, {}
         Gun.leadAdj, Gun.biasR, Gun.biasU = 0, 0, 0
         Skill.tuneDelta = {}
+        CFG.veil.spearSpeed, CFG.veil.spearGravity, CFG.veil.cooldownSeconds = 120, 0, 8
         lastJson = ""
         pcall(Skill.saveLearn)
-        log("BELAJAR", "dihapus: parry / gun / skill mulai belajar dari nol")
+        log("BELAJAR", "dihapus: parry / gun / veil mulai dari nol")
     end
 
     pcall(loadLearn)
@@ -3277,15 +3203,16 @@ local function resetAll()
     Skill.tierName, Skill.tierGood, Skill.retried, Skill.tierFail = nil, {}, false, {}
     Skill.tuneDelta, Skill.ladder = {}, nil
     Skill.gen = Skill.gen + 1
+    if Veil then
+        Veil.lockTarget, Veil.lockChar = nil, nil
+        Veil.cdEndsAt = 0
+    end
     unhideChecks()
     pcall(function() RunService:UnbindFromRenderStep("DP3_CamLock") end)
-    notify("Reset: state gun/skill dibersihin")
+    notify("Reset: state gun/skill/veil dibersihin")
 end
 
------------------------------------------------------------------- 4) ESP (v9.0)
--- Murni sisi client. Highlight + BillboardGui ditaruh di folder gethui/CoreGui (ga bisa dibaca script game, ga kereplikasi).
--- Ga ada remote yang ditembak dan ga ada objek game yang diubah.
--- v8.8: outline juga buat objek, mode teks full/mini/off, bar progress/HP, jatah Highlight (batas Roblox ~31).
+------------------------------------------------------------------ ESP
 local ESP = { entries = {}, folder = nil, errAt = 0, tPlayers = 0, tObjs = 0, tMap = 0, nameHits = {} }
 
 local function espFolder()
@@ -3321,8 +3248,6 @@ local function espClear()
     end
 end
 
--- kind: "player" | "gen" | "pallet" | "hook" | "exit"
--- Highlight dibuat malas (lazy) di espUpdate sesuai jatah, jadi espMake cuma bikin label + bar.
 local function espMake(key, adornee, kind)
     local f = espFolder()
     if not f then return nil end
@@ -3348,7 +3273,6 @@ local function espMake(key, adornee, kind)
     l.Text = ""
     l.Parent = bb
 
-    -- bar tipis: progress generator / HP survivor
     local back = Instance.new("Frame")
     back.AnchorPoint = Vector2.new(0.5, 0)
     back.Position = UDim2.new(0.5, 0, 0, 31)
@@ -3404,14 +3328,12 @@ end
 
 local ESP_PLAYER = { player = true }
 local ESP_OBJ = { gen = true, pallet = true, hook = true, exit = true }
-local ESP_PRIO = { player = 1, gen = 1, exit = 2, hook = 3, pallet = 3 }   -- jatah Highlight: kecil = duluan
+local ESP_PRIO = { player = 1, gen = 1, exit = 2, hook = 3, pallet = 3 }
 
--- v9.0: generator dicari lewat 3 jalur sekaligus (folder Map.newGenerators, tag "GeneratorPoint", part "GeneratorBody").
--- Semua disimpan di tabel ESP biar ga nambah variabel local di chunk utama (batas Lua 200).
 ESP.gen = { found = {}, bodies = {}, tScan = -10, tBody = -10, sig = "", tLog = 0, busy = false }
 ESP.genProgNames = { "RepairProgress", "Progress", "repairProgress", "GeneratorProgress" }
 
-function ESP.genTop(inst)   -- model generator dari GeneratorBody / GeneratorPoint
+function ESP.genTop(inst)
     local p = inst.Parent
     if p and p ~= workspace and p:IsA("Model") and not Players:GetPlayerFromCharacter(p) then return p end
     return inst
@@ -3422,7 +3344,7 @@ function ESP.genScan()
     if now - G.tScan < CFG.esp.scanGens then return G.found end
     G.tScan = now
     local found, via = {}, { folder = 0, tag = 0, body = 0 }
-    local function dup(inst)   -- udah ada dia / induknya (<= 4 tingkat) di daftar
+    local function dup(inst)
         local up = inst
         for _ = 1, 4 do
             if not up or up == workspace then return false end
@@ -3449,7 +3371,6 @@ function ESP.genScan()
             if pt:IsDescendantOf(workspace) then add(ESP.genTop(pt), "tag") end
         end
     end)
-    -- cadangan: part "GeneratorBody" (nama dipakai kode game). Discan bertahap di thread sendiri biar ga lag.
     if CFG.esp.genBodyScan and via.folder == 0 and now - G.tBody >= CFG.esp.scanBody and not G.busy then
         G.tBody, G.busy = now, true
         task.spawn(function()
@@ -3474,10 +3395,7 @@ function ESP.genScan()
     if sig ~= G.sig or (total == 0 and now - G.tLog > 20) then
         G.sig, G.tLog = sig, now
         local first
-        for m in pairs(found) do
-            first = m
-            break
-        end
+        for m in pairs(found) do first = m; break end
         log("ESP", string.format("generator ketemu: folder %d, tag %d, body %d%s", via.folder, via.tag, via.body,
             first and (" | contoh: " .. first:GetFullName())
             or (" | KOSONG (Map=" .. tostring(map ~= nil) .. ", newGenerators=" .. tostring(ng ~= nil) .. ")")))
@@ -3490,7 +3408,7 @@ function ESP.genAdornee(m)
     return m:FindFirstChild("GeneratorBody", true) or m:FindFirstChild("HitBox", true) or espAdornee(m)
 end
 
-function ESP.genProg(e)   -- nil = progress ga ketemu di attribute mana pun
+function ESP.genProg(e)
     for _, o in ipairs({ e.model, e.adornee }) do
         if o then
             for _, n in ipairs(ESP.genProgNames) do
@@ -3530,7 +3448,6 @@ end
 local function espScanObjects()
     local C = CFG.esp
     local seen = {}
-    -- v9.0: generator lewat genScan (folder + tag + GeneratorBody), ga lagi bergantung ke Map.newGenerators doang
     if C.objects and C.gens then
         local okG, errG = pcall(function()
             for m in pairs(ESP.genScan()) do
@@ -3574,22 +3491,18 @@ local function espScanObjects()
             end
         end
     end
-    -- hook / exit: dicari lewat nama (jarang berubah, jadi discan lebih jarang)
     if map and C.objects and (C.hooks or C.exits) and os.clock() - ESP.tMap >= C.scanMap then
         ESP.tMap = os.clock()
         local gens, pals = map:FindFirstChild("newGenerators"), map:FindFirstChild("Pallets")
         local hits, matched, scanN = {}, {}, 0
         for _, d in ipairs(map:GetDescendants()) do
             scanN = scanN + 1
-            if scanN % 2500 == 0 then task.wait() end   -- v10: nyicil, GetDescendants Map bisa puluhan ribu objek (freeze di map gede)
+            if scanN % 2500 == 0 then task.wait() end
             if d:IsA("Model") or d:IsA("BasePart") then
                 local up, skip = d.Parent, false
                 for _ = 1, 4 do
                     if not up or up == map then break end
-                    if matched[up] then
-                        skip = true
-                        break
-                    end
+                    if matched[up] then skip = true; break end
                     up = up.Parent
                 end
                 if not skip and not (gens and d:IsDescendantOf(gens)) and not (pals and d:IsDescendantOf(pals)) then
@@ -3629,6 +3542,7 @@ local ESP_COL = {
     exit = Color3.fromRGB(140, 255, 140), lock = Color3.fromRGB(255, 255, 255),
     genLo = Color3.fromRGB(255, 70, 70), genHi = Color3.fromRGB(80, 255, 120),
     genUnk = Color3.fromRGB(255, 200, 60),
+    veilLock = Color3.fromRGB(80, 255, 140),
 }
 
 local function espUpdate()
@@ -3638,9 +3552,10 @@ local function espUpdate()
     local from = (me and me.Position) or (cam and cam.CFrame.Position)
     local mode = C.text
     local lockedChar = Gun.lockTarget and Gun.lockTarget.Parent
-    local want = {}   -- kandidat Highlight, dijatah setelah loop
+    local veilLockChar = Veil and Veil.lockChar or nil
+    local iAmKiller = amKiller()
+    local want = {}
 
-    -- v8.9: satu entry error ga boleh bikin entry lain (mis. generator) ga ke-update
     local function one(key, e)
         local ad = e.adornee
         if not (ad and ad.Parent) or (e.hum and e.hum.Health <= 0) then
@@ -3655,7 +3570,12 @@ local function espUpdate()
 
         if e.kind == "player" then
             local ch = e.hum.Parent
-            col = e.isK and ESP_COL.killer or ESP_COL.survivor
+            if iAmKiller then
+                -- killer side: survivor = target (red-ish), killer lain = teman (biru)
+                col = e.isK and ESP_COL.survivor or ESP_COL.killer
+            else
+                col = e.isK and ESP_COL.killer or ESP_COL.survivor
+            end
             local state
             if ch then
                 if ch:GetAttribute("IsHooked") then state = "HOOK"
@@ -3663,18 +3583,24 @@ local function espUpdate()
                 elseif ch:GetAttribute("Trapped") then state = "TRAP" end
             end
             if state and not e.isK then col = ESP_COL.bad end
-            locked = e.isK and lockedChar ~= nil and lockedChar == ch
-            if locked then col = ESP_COL.lock end
-            title = (e.isK and "KILLER " or "") .. (C.names and e.p.DisplayName or "")
+            -- gun lock (survivor side)
+            if e.isK and lockedChar ~= nil and lockedChar == ch then
+                col = ESP_COL.lock
+                locked = true
+            end
+            -- veil lock (killer side)
+            if iAmKiller and not e.isK and veilLockChar == ch then
+                col = ESP_COL.veilLock
+                locked = true
+            end
+            title = (e.isK and "KILLER " or "SURV ") .. (C.names and e.p.DisplayName or "")
             if locked then title = "[LOCK] " .. title end
             if state then title = title .. " [" .. state .. "]" end
-            if C.hp and not e.isK and e.hum.MaxHealth > 0 then
+            if C.hp and e.hum.MaxHealth > 0 then
                 sub = string.format("%d%%", math.floor(e.hum.Health / e.hum.MaxHealth * 100 + 0.5))
             end
-            if (not e.isK) and e.hum.MaxHealth > 0 then
-                frac = e.hum.Health / e.hum.MaxHealth
-            end
-            mini = state or (locked and "LOCK") or (e.isK and "KILLER") or ""
+            if e.hum.MaxHealth > 0 then frac = e.hum.Health / e.hum.MaxHealth end
+            mini = state or (locked and "LOCK") or (e.isK and "KILLER") or "SURV"
         elseif e.kind == "gen" then
             local prog = ESP.genProg(e)
             local known = prog ~= nil
@@ -3701,8 +3627,6 @@ local function espUpdate()
             mini = "EXIT"
         end
 
-        -- teks: off = kosong, mini = satu baris pendek, full = nama + info + jarak
-        -- generator, exit, dan pemain TETAP ada teks di jarak berapa pun; cuma pallet / hook yang kena batas textDistObjs
         local isPlayer = e.kind == "player"
         local textOk = mode ~= "off"
         local farOnly = (e.kind == "pallet" or e.kind == "hook")
@@ -3724,7 +3648,7 @@ local function espUpdate()
                 if distTxt then text = (text ~= "" and (text .. "\n") or "") .. distTxt end
             end
         end
-        local fade = math.clamp((dist - 60) / 240, 0, 0.4)   -- makin jauh makin pudar (maks 40%)
+        local fade = math.clamp((dist - 60) / 240, 0, 0.4)
 
         local showBar = show and C.bars and frac ~= nil
         e.bb.Enabled = show and (text ~= "" or showBar)
@@ -3739,12 +3663,11 @@ local function espUpdate()
             e.barFill.BackgroundColor3 = col
         end
 
-        -- outline: kandidat jatah Highlight
         local hlWanted = show and e.hlTarget and e.hlTarget.Parent
             and ((isPlayer and C.outline) or ((not isPlayer) and C.objOutline))
         if hlWanted then
             want[#want + 1] = { e = e, col = col, dist = dist, locked = locked,
-                near = (e.isK == true and dist <= CFG.parry.range),   -- v9.0: killer di dalam cincin parry -> isi lebih tebel
+                near = (e.isK == true and dist <= CFG.parry.range),
                 prio = locked and 0 or (ESP_PRIO[e.kind] or 3) }
         elseif e.hl then
             e.hl.Enabled = false
@@ -3759,7 +3682,6 @@ local function espUpdate()
         end
     end
 
-    -- jatah Highlight: lock > pemain/generator > exit > hook/pallet, dalam kelompok yang paling deket duluan
     local okB, errB = pcall(function()
         table.sort(want, function(a, b)
             if a.prio ~= b.prio then return a.prio < b.prio end
@@ -3807,7 +3729,7 @@ local function espStep()
 end
 
 task.spawn(function()
-    local old = ENV.DP3_ESPFOLDER   -- sisa instance sebelumnya (reload)
+    local old = ENV.DP3_ESPFOLDER
     if old then pcall(function() old:Destroy() end) end
     while alive() do
         task.wait(0.1)
@@ -3825,12 +3747,7 @@ task.spawn(function()
     espClear()
 end)
 
------------------------------------------------------------------- 5) CINCIN + GARIS HIT KILLER (v9.1)
--- Cincin di tanah ngelilingin kamu = jangkauan kamu kena hit = jangkauan parry (CFG.parry.range, satu angka).
--- Dari tiap killer keluar dua garis putih ke depan (tepi kerucut serang) sepanjang jangkauan itu, plus garis killer -> kamu kalau deket.
--- Kamu masuk kerucut + jangkauan = garis jadi merah. Muncul tanpa harus pegang dagger.
--- Murni visual client (CylinderHandleAdornment / BoxHandleAdornment di folder gethui/CoreGui), ga ada objek game yang disentuh.
--- Dibungkus do...end biar ga nambah variabel local di chunk utama.
+------------------------------------------------------------------ RING / CONE
 do
     local R = { folder = nil, ring = nil, killers = {}, lastHum = nil, lastHp = 0, readyAt = -10, ready = true }
     local FLAT = 0.06
@@ -3864,7 +3781,7 @@ do
         return bx
     end
 
-    do   -- sisa instance sebelumnya (reload)
+    do
         local old = ENV.DP3_RINGFOLDER
         if old then pcall(function() old:Destroy() end) end
     end
@@ -3885,7 +3802,6 @@ do
                 if not f then return end
                 local now = os.clock()
 
-                -- belajar jangkauan: kena hit -> jarak killer terdekat (<= 20 stud) dicatat, range naik kalau perlu
                 if R.lastHum ~= hum then R.lastHum, R.lastHp = hum, hum.Health end
                 if C.learnRange and hum.Health < R.lastHp - 0.9 then
                     local best
@@ -3904,7 +3820,6 @@ do
                 local drop = (hum.HipHeight > 0 and hum.HipHeight or 2) + me.Size.Y / 2 - 0.08
                 local onTop = C.onTop == true
 
-                -- killer: dua garis tepi kerucut + garis penghubung
                 local near = false
                 local seen = {}
                 for _, k in ipairs(killers()) do
@@ -3963,14 +3878,13 @@ do
                     end
                 end
 
-                -- cincin kamu: siap / cooldown dibaca 10x per detik (ga perlu tiap frame)
                 if now - R.readyAt >= 0.1 then
                     R.readyAt = now
                     if findDagger() ~= nil then
                         local okR, rd = pcall(parryReady, now)
                         R.ready = okR and rd == true
                     else
-                        R.ready = true   -- ga punya dagger: cincin tetap tampil (teal)
+                        R.ready = true
                     end
                 end
                 local ring = R.ring
@@ -4034,7 +3948,7 @@ local function buildUI()
     panel = Instance.new("Frame")
     panel.Size = UDim2.fromOffset(238, 0)
     panel.AutomaticSize = Enum.AutomaticSize.Y
-    panel.Position = UDim2.new(0, 60, 0.5, -315)
+    panel.Position = UDim2.new(0, 60, 0.5, -380)
     panel.BackgroundColor3 = Color3.fromRGB(16, 16, 20)
     panel.BackgroundTransparency = 0.08
     panel.Visible = false
@@ -4060,10 +3974,7 @@ local function buildUI()
             b.Text = txt
             b.BackgroundColor3 = (on == false) and Color3.fromRGB(70, 35, 35) or Color3.fromRGB(35, 60, 45)
         end
-        b.MouseButton1Click:Connect(function()
-            onClick()
-            refresh()
-        end)
+        b.MouseButton1Click:Connect(function() onClick(); refresh() end)
         refresh()
         return b
     end
@@ -4084,6 +3995,22 @@ local function buildUI()
         l.Parent = row
         return row
     end
+    local function mkSection(label)
+        local f = Instance.new("Frame")
+        f.Size, f.BackgroundTransparency = UDim2.new(1, 0, 0, 18), 1
+        f.Parent = panel
+        local t = Instance.new("TextLabel")
+        t.BackgroundTransparency = 1
+        t.Size = UDim2.new(1, 0, 1, 0)
+        t.Font, t.TextSize = Enum.Font.GothamBold, 10
+        t.TextColor3 = Color3.fromRGB(160, 130, 220)
+        t.TextXAlignment = Enum.TextXAlignment.Left
+        t.Text = label
+        t.Parent = f
+        return f
+    end
+
+    mkSection("SURVIVOR")
 
     local r1 = mkRow()
     mkBtn(r1, function() return "Parry: " .. onoff(CFG.parry.enabled), CFG.parry.enabled end,
@@ -4111,31 +4038,41 @@ local function buildUI()
         function() CFG.skill.hideUI = not CFG.skill.hideUI end, 0.5)
 
     local r4 = mkRow()
-    mkBtn(r4, function() return "Step: " .. (CFG.gun.fireStep == 0 and "auto" or CFG.gun.fireStep), true end,
-        function() CFG.gun.fireStep = cycle({ 0, 3, 2, 1 }, CFG.gun.fireStep) end, 0.5)
-    mkBtn(r4, function() return "Radius: " .. CFG.gun.hitRadius, true end,
-        function() CFG.gun.hitRadius = cycle({ 1.6, 2.2, 2.8, 4.0 }, CFG.gun.hitRadius) end, 0.5)
-
-    local r5 = mkRow()
-    mkBtn(r5, function() return "Lock FOV: " .. CFG.gun.lockFov, true end,
-        function() CFG.gun.lockFov = cycle({ 30, 60, 90, 180 }, CFG.gun.lockFov) end, 0.5)
-    mkBtn(r5, function() return "Smooth: " .. CFG.gun.lockSmooth, true end,
-        function() CFG.gun.lockSmooth = cycle({ 0.25, 0.6, 0.85, 1 }, CFG.gun.lockSmooth) end, 0.5)
-
-    local r6 = mkRow()
-    mkBtn(r6, function() return "Skill: " .. onoff(CFG.skill.enabled), CFG.skill.enabled end,
+    mkBtn(r4, function() return "Skill: " .. onoff(CFG.skill.enabled), CFG.skill.enabled end,
         function() CFG.skill.enabled = not CFG.skill.enabled end, 0.32)
-    mkBtn(r6, function() return "Reset", true end, resetAll, 0.32)
-    mkBtn(r6, function() return "Probe", true end, function()
+    mkBtn(r4, function() return "Reset", true end, resetAll, 0.32)
+    mkBtn(r4, function() return "Probe", true end, function()
         notify("Probe tombol aksi: liat log (Copy Log)")
         task.spawn(function() pcall(skillProbe) end)
     end, 0.32)
 
-    local r7 = mkRow()
-    mkBtn(r7, function() return string.format("Zona -2 (%d)", CFG.skill.offset), true end,
-        function() CFG.skill.offset = CFG.skill.offset - 2 end, 0.5)
-    mkBtn(r7, function() return string.format("Zona +2 (%d)", CFG.skill.offset), true end,
-        function() CFG.skill.offset = CFG.skill.offset + 2 end, 0.5)
+    mkSection("KILLER / VEIL")
+
+    local rV1 = mkRow()
+    mkBtn(rV1, function() return "Veil: " .. onoff(CFG.veil.enabled), CFG.veil.enabled end,
+        function() CFG.veil.enabled = not CFG.veil.enabled end, 0.5)
+    mkBtn(rV1, function() return "Head: " .. onoff(CFG.veil.autoHeadshot), CFG.veil.autoHeadshot end,
+        function() CFG.veil.autoHeadshot = not CFG.veil.autoHeadshot end, 0.5)
+
+    local rV2 = mkRow()
+    mkBtn(rV2, function() return "Spear Ast: " .. onoff(CFG.veil.spearAssist), CFG.veil.spearAssist end,
+        function() CFG.veil.spearAssist = not CFG.veil.spearAssist end, 0.5)
+    mkBtn(rV2, function() return "Tracker: " .. onoff(CFG.veil.tracker), CFG.veil.tracker end,
+        function() CFG.veil.tracker = not CFG.veil.tracker end, 0.5)
+
+    local rV3 = mkRow()
+    mkBtn(rV3, function() return string.format("Spd: %.0f", CFG.veil.spearSpeed), true end,
+        function() CFG.veil.spearSpeed = cycle({ 80, 100, 120, 150, 180, 220 }, math.floor(CFG.veil.spearSpeed)) end, 0.34)
+    mkBtn(rV3, function() return string.format("G: %.0f", CFG.veil.spearGravity), true end,
+        function() CFG.veil.spearGravity = cycle({ 0, 10, 20, 40, 80 }, CFG.veil.spearGravity) end, 0.33)
+    mkBtn(rV3, function()
+        local remain = (Veil and Veil.cdEndsAt or 0) - os.clock()
+        return remain > 0 and string.format("CD:%.1f", remain) or "CD:ok"
+    end, true end, function()
+        if Veil then Veil.cdEndsAt = 0 end
+    end, 0.33)
+
+    mkSection("ESP / VISUAL")
 
     local r9 = mkRow()
     mkBtn(r9, function() return "ESP: " .. onoff(CFG.esp.enabled), CFG.esp.enabled end,
@@ -4159,49 +4096,43 @@ local function buildUI()
         function() CFG.esp.bars = not CFG.esp.bars end, 0.5)
 
     local r12 = mkRow()
-    mkBtn(r12, function() return "Line Obj: " .. onoff(CFG.esp.objOutline), CFG.esp.objOutline end,
-        function() CFG.esp.objOutline = not CFG.esp.objOutline end, 0.5)
-    mkBtn(r12, function() return "Lead: " .. CFG.gun.leadPing, CFG.gun.leadPing > 0 end,
-        function() CFG.gun.leadPing = cycle({ 0, 0.5, 1, 1.5 }, CFG.gun.leadPing) end, 0.5)
+    mkBtn(r12, function() return "Ring: " .. onoff(CFG.ring.enabled), CFG.ring.enabled end,
+        function() CFG.ring.enabled = not CFG.ring.enabled end, 0.34)
+    mkBtn(r12, function() return "Cone: " .. onoff(CFG.ring.cone), CFG.ring.cone end,
+        function() CFG.ring.cone = not CFG.ring.cone end, 0.33)
+    mkBtn(r12, function() return string.format("Rng:%.0f", CFG.parry.range), true end,
+        function() CFG.parry.range = cycle({ 8, 10, 12, 14, 16, 20 }, math.floor(CFG.parry.range + 0.5)) end, 0.33)
+
+    mkSection("BELAJAR / TOOLS")
 
     local r13 = mkRow()
-    mkBtn(r13, function() return "Ring: " .. onoff(CFG.ring.enabled), CFG.ring.enabled end,
-        function() CFG.ring.enabled = not CFG.ring.enabled end, 0.32)
-    mkBtn(r13, function() return "Cone: " .. onoff(CFG.ring.cone), CFG.ring.cone end,
-        function() CFG.ring.cone = not CFG.ring.cone end, 0.32)
-    mkBtn(r13, function() return string.format("Range: %.0f", CFG.parry.range), true end,
-        function() CFG.parry.range = cycle({ 8, 10, 12, 14, 16, 20 }, math.floor(CFG.parry.range + 0.5)) end, 0.32)
-
-    local r14 = mkRow()
-    mkBtn(r14, function() return "Learn: " .. onoff(CFG.gun.learn), CFG.gun.learn end,
+    mkBtn(r13, function() return "Learn: " .. onoff(CFG.gun.learn), CFG.gun.learn end,
         function()
             CFG.gun.learn = not CFG.gun.learn
             if not CFG.gun.learn then Gun.leadAdj, Gun.biasR, Gun.biasU = 0, 0, 0 end
         end, 0.5)
-    mkBtn(r14, function() return "Steady: " .. onoff(CFG.gun.steady), CFG.gun.steady end,
-        function() CFG.gun.steady = not CFG.gun.steady end, 0.5)
-
-    local r15 = mkRow()
-    mkBtn(r15, function() return "Snap Zona: " .. onoff(CFG.skill.frameSnap), CFG.skill.frameSnap end,
-        function() CFG.skill.frameSnap = not CFG.skill.frameSnap end, 0.34)
-    mkBtn(r15, function() return "Simpan", true end, function()
+    mkBtn(r13, function() return "Simpan", true end, function()
         notify(pcall(Skill.saveLearn) and "Belajar disimpan (dp10_learn.json)" or "writefile ga ada")
-    end, 0.32)
-    mkBtn(r15, function() return "Wipe", true end, function()
+    end, 0.5)
+
+    local r14 = mkRow()
+    mkBtn(r14, function() return "Wipe", true end, function()
         Skill.wipeLearn()
         notify("Belajar dihapus")
-    end, 0.32)
-
-    local r8 = mkRow()
-    mkBtn(r8, function() return "Copy Log", true end, function()
+    end, 0.5)
+    mkBtn(r14, function() return "Copy Log", true end, function()
         notify(copy(table.concat(LOG, "\n")) and "Log disalin" or "setclipboard ga ada")
     end, 0.5)
-    mkBtn(r8, function() return "Copy Dump", true end, function()
+
+    local r15 = mkRow()
+    mkBtn(r15, function() return "Copy Dump", true end, function()
         notify(copy(Skill.lastDump) and "Dump disalin" or "setclipboard ga ada")
     end, 0.5)
+    mkBtn(r15, function() return "Lead: " .. CFG.gun.leadPing, CFG.gun.leadPing > 0 end,
+        function() CFG.gun.leadPing = cycle({ 0, 0.5, 1, 1.5 }, CFG.gun.leadPing) end, 0.5)
 
     statusLabel = Instance.new("TextLabel")
-    statusLabel.Size = UDim2.new(1, 0, 0, 44)
+    statusLabel.Size = UDim2.new(1, 0, 0, 52)
     statusLabel.BackgroundColor3 = Color3.new(0, 0, 0)
     statusLabel.BackgroundTransparency = 0.35
     statusLabel.TextColor3 = Color3.fromRGB(255, 220, 120)
@@ -4224,7 +4155,6 @@ local function buildUI()
     logLabel.Parent = panel
     corner(logLabel, 6)
 
-    -- tombol bulat bisa digeser; tap = buka/tutup panel
     local dragging, moved, dragStart, startPos = false, false, nil, nil
     fab.InputBegan:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
@@ -4237,7 +4167,7 @@ local function buildUI()
             if d.Magnitude > 8 then moved = true end
             if moved then
                 fab.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
-                panel.Position = UDim2.new(fab.Position.X.Scale, fab.Position.X.Offset + 50, fab.Position.Y.Scale, fab.Position.Y.Offset - 240)
+                panel.Position = UDim2.new(fab.Position.X.Scale, fab.Position.X.Offset + 50, fab.Position.Y.Scale, fab.Position.Y.Offset - 260)
             end
         end
     end))
@@ -4255,8 +4185,14 @@ local function buildUI()
             task.wait(0.25)
             if panel.Visible then
                 if statusLabel then
-                    statusLabel.Text = string.format("gun: %s\nping %.0f ms | fps %.0f | lead %.0f ms | rung %s | hit %d/%d", tostring(Gun.status),
-                        Net.rtt * 1000, 1 / Net.frameDt, leadTime(50) * 1000, tostring(Skill.tierName or "-"), Gun.hits, Gun.shots)
+                    local veilCd = (Veil and Veil.cdEndsAt or 0) - os.clock()
+                    local veilTxt = veilCd > 0 and string.format("%.1fs", veilCd) or "ready"
+                    local role = amKiller() and "KILLER" or (amSurvivor() and "survivor" or "?")
+                    statusLabel.Text = string.format(
+                        "[%s] gun: %s | veil CD: %s\nping %.0f ms | fps %.0f | lead %.0f ms | rung %s | hit %d/%d",
+                        role, tostring(Gun.status), veilTxt,
+                        Net.rtt * 1000, 1 / Net.frameDt, leadTime(50) * 1000, tostring(Skill.tierName or "-"), Gun.hits, Gun.shots
+                    )
                 end
                 if logDirty and logLabel then
                     logDirty = false
@@ -4299,9 +4235,12 @@ keep(UIS.InputBegan:Connect(function(i, gp)
     elseif k == CFG.keys.text then
         CFG.esp.text = ({ full = "mini", mini = "off", off = "full" })[CFG.esp.text] or "full"
         notify("ESP teks: " .. CFG.esp.text:upper())
+    elseif k == CFG.keys.veil then
+        CFG.veil.enabled = not CFG.veil.enabled
+        notify("Veil Assist: " .. (CFG.veil.enabled and "ON" or "OFF"))
     elseif k == CFG.keys.panel and panel then
         panel.Visible = not panel.Visible
     end
 end))
 
-notify("v10.0 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap tombol DP buat panel")
+notify("v11 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap DP buat panel")
