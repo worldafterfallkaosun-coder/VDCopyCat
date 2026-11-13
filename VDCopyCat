@@ -1,5 +1,5 @@
 --[[
-    Distrik Pembantai v8.5  (PlaceId 93978595733734)  -  Delta / Luau
+    Distrik Pembantai v8.6  (PlaceId 93978595733734)  -  Delta / Luau
 
     Fitur
       1. Auto Parry        : Parrying Dagger, delay dipelajari otomatis (sama kayak v6)
@@ -10,6 +10,21 @@
       4. Auto Skill Check  : jarum + zona dari GUI, tekan di tengah zona, ada verifikasi + auto-unstick UI
 
     Kontrol : tombol bulat "DP" (geser bebas)  |  F1 parry  F2 snap  F3 skill  F4 panel  F5 trigger
+
+    v8.6  (perbaikan dari v8.5, dicocokin ke ParryClient di dump game 20261113)
+      - PARRY, akar animasi + cooldown UI: v8.5 nembak remote "parry" langsung. Itu ngelewatin objek ParryClient milik game,
+        jadi (1) animasi parry ga pernah main (parryTrack:Play ada di ParryClient.Parry), (2) pas server bales parryResult,
+        handler game DIABAIKAN karena isParryResolving belum true -> gradient cooldown di UI ga jalan dan tombol item
+        keliatan masih siap, padahal server udah cooldown.
+        Sekarang via = "game" (default): script nyari objek ParryClient asli lewat getgc dan manggil :Parry() miliknya.
+        Hasilnya sama persis kayak pemain beneran: animasi dagger main + replikasi ke pemain lain, badan madep kamera,
+        slow, tag "doing action", gradient cooldown di UI (PC & HP), ikon abu-abu, dan parry nyangkut permanent juga ikut.
+      - PARRY: status siap/cooldown sekarang dibaca dari objek game (isParryOnCooldown / isParryResolving / isSilenced /
+        HP < 50% / lagi action lain), bukan hitungan sendiri. Kalau UI game masih cooldown, script ga nembak.
+      - PARRY: kalau ParryClient belum ketemu, otomatis turun ke "input" (tekan tombol item, tetap lewat game), terakhir
+        "remote" (cara lama, TANPA animasi, dikasih peringatan di log). Tombol Via di panel muter game > input > remote.
+      - PARRY: objek ParryClient dicari di background (hanya pas dagger ada), bukan pas parry, jadi ga ada lag spike
+        getgc di tengah timing. Cari ulang kalau dagger ganti / ronde baru, jeda cari makin panjang kalau ga ketemu.
 
     v8.5  (perbaikan dari v8.4, dicocokin ke dump game 20261113)
       - SKILL CHECK, akar #1: zona sukses di game = Line.Rotation antara Goal.Rotation+102 .. +116 (tengah +109),
@@ -109,7 +124,7 @@ local CFG = {
 
     parry = {
         enabled      = true,
-        via          = "remote",   -- "remote" | "input"
+        via          = "game",     -- "game" (manggil ParryClient asli: animasi + cooldown UI ikut) | "input" | "remote" (tanpa animasi)
         range        = 13,
         frontDot     = 0.35,
         hitGuess     = 0.16,       -- detik: tebakan "animasi mulai -> kena" buat animasi yang belum pernah kena kamu
@@ -229,7 +244,7 @@ end
 
 local function notify(msg)
     pcall(function()
-        StarterGui:SetCore("SendNotification", { Title = "DP v8.5", Text = msg, Duration = 2.5 })
+        StarterGui:SetCore("SendNotification", { Title = "DP v8.6", Text = msg, Duration = 2.5 })
     end)
     log("INFO", msg)
 end
@@ -702,13 +717,127 @@ local function findDagger()
     return t, false
 end
 
+------------------------------------------------------------------ PARRY CLIENT GAME (v8.6)
+-- ReplicatedStorage.Modules.Items.ParryingDagger.ParryClient dibikin oleh LocalScript di dagger: ParryClient.new{tool, animationId}.
+-- Objeknya (tabel dengan field tool/parryEvent/parryTrack/isParryOnCooldown/...) cuma dipegang upvalue koneksi game, jadi dicari
+-- lewat getgc. :Parry() miliknya ngelakuin semuanya: FireServer, madep kamera, parryTrack:Play(), slow, tag "doing action", dan
+-- state isParryResolving yang bikin handler parryResult game ngejalanin tween cooldown di UI.
+local PG = { inst = nil, class = nil, scanAt = 0, gap = 1.5, lastTool = nil, noGc = false, whyAt = 0, missAt = 0 }
+
+local function pgClass()
+    if PG.class == nil then
+        local ok, m = pcall(function() return require(RS.Modules.Items.ParryingDagger.ParryClient) end)
+        PG.class = (ok and type(m) == "table" and m) or false
+    end
+    return PG.class or nil
+end
+
+-- 3 = dagger di karakter, 2 = di backpack, 0 = ga kepakai (karakter lama / tool udah dihancurin)
+local function pgScore(t)
+    local ch = myChar()
+    if not ch or rawget(t, "character") ~= ch then return 0 end
+    local tool = rawget(t, "tool")
+    if typeof(tool) ~= "Instance" then return 0 end
+    if tool:IsDescendantOf(ch) then return 3 end
+    if tool:IsDescendantOf(LP) then return 2 end
+    return 0
+end
+
+local function pgIsClient(t)
+    local ok, res = pcall(function()
+        if typeof(rawget(t, "parryEvent")) ~= "Instance" or typeof(rawget(t, "tool")) ~= "Instance" then return false end
+        if rawget(t, "player") ~= LP then return false end
+        local cls = pgClass()
+        if cls and getmetatable(t) ~= cls then return false end
+        return type(t.Parry) == "function" and type(t.CanUse) == "function"
+    end)
+    return ok and res == true
+end
+
+local function pgScan()
+    PG.scanAt = os.clock()
+    if not getgc then
+        PG.noGc = true
+        return nil, 0
+    end
+    local ok, list = pcall(getgc, true)
+    if not ok or type(list) ~= "table" then return nil, 0 end
+    local best, bestScore, n = nil, 0, 0
+    for i = 1, #list do
+        local t = list[i]
+        -- cek murah dulu (rawget ga bisa error di tabel), baru pcall yang mahal buat kandidat
+        if type(t) == "table" and rawget(t, "parryEvent") ~= nil and pgIsClient(t) then
+            n = n + 1
+            local sc = pgScore(t)
+            if sc > bestScore then best, bestScore = t, sc end
+        end
+    end
+    return best, n
+end
+
+local function pgCached()
+    local c = PG.inst
+    if c then
+        local ok, sc = pcall(pgScore, c)
+        if ok and sc >= 2 then return c end
+        PG.inst = nil
+    end
+    return nil
+end
+
+-- dipanggil dari loop background (bukan dari jalur parry): cari objek game cuma kalau dagger ada
+local function pgPrewarm()
+    if CFG.parry.via ~= "game" or not CFG.parry.enabled or PG.noGc then return end
+    local tool = findDagger()
+    if tool ~= PG.lastTool then
+        PG.lastTool = tool
+        PG.inst = nil
+        PG.gap, PG.scanAt = 1.5, 0
+    end
+    if not tool or pgCached() then return end
+    local now = os.clock()
+    if now - PG.scanAt < PG.gap then return end
+    local c, n = pgScan()
+    if c then
+        PG.inst, PG.gap = c, 1.5
+        log("PARRY", "ParryClient game ketemu: animasi + cooldown UI sekarang ikut game")
+    else
+        PG.gap = math.min(PG.gap * 1.6, 10)
+        if now - PG.missAt > 8 then
+            PG.missAt = now
+            log("PARRY", string.format("ParryClient game belum ketemu (kandidat %d, cari lagi %.0fs) -> sementara pakai input", n, PG.gap))
+        end
+    end
+end
+
+-- kenapa game bakal nolak parry sekarang? nil = boleh. ignoreEquip = true buat nentuin perlu pre-equip atau nggak
+local function pgBlock(c, ignoreEquip)
+    if c.isSilenced then return "kena silence" end
+    if c.isParryLocked then return "parry nyangkut permanent, nunggu killer mukul (UI game cooldown)" end
+    if c.isParryOnCooldown then return "masih cooldown di UI game" end
+    if c.isParryResolving then return "game masih nunggu hasil parry dari server" end
+    local ok, low = pcall(c._isLowHealth, c)
+    if ok and low then return "HP < 50% (ParryClient._isLowHealth)" end
+    local ok2, busy = pcall(c._isBusy, c)
+    if ok2 and busy then return "karakter lagi action lain (vault/repair/heal/dll)" end
+    if not ignoreEquip then
+        local ok3, eq = pcall(c._isEquipped, c)
+        if ok3 and not eq then return "dagger belum di-equip" end
+    end
+    return nil
+end
+
 -- boleh kirim parry sekarang? (dipakai buat nentuin perlu pre-equip dagger atau nggak)
 local function parryReady(now)
     if not CFG.parry.enabled then return false end
     if now - Parry.last < CFG.parry.spacing then return false end
-    if CFG.parry.useServerCd and now < Parry.cdUntil then return false end
     local hum = myHum()
     if not hum or hum.Health <= 0 or hum.Health < hum.MaxHealth * 0.5 then return false end
+    if CFG.parry.via == "game" then
+        local c = pgCached()
+        if c then return pgBlock(c, true) == nil end
+    end
+    if CFG.parry.useServerCd and now < Parry.cdUntil then return false end
     return true
 end
 
@@ -717,21 +846,42 @@ local function parryNow(entry, plan)
     if not CFG.parry.enabled then return false end
     local now = os.clock()
     if now - Parry.last < CFG.parry.spacing then return false end
-    if CFG.parry.useServerCd and now < Parry.cdUntil then
-        if now - parryCdAt > 2 then
-            parryCdAt = now
-            log("PARRY", string.format("parry masih cooldown %.1fs lagi, ga dikirim", Parry.cdUntil - now))
-        end
-        return false
-    end
     local hum, char = myHum(), myChar()
     if not hum or hum.Health <= 0 or not char then return false end
-    if hum.Health < hum.MaxHealth * 0.5 then   -- client game nolak parry kalau HP < 50%
-        if now - parryHpAt > 3 then
-            parryHpAt = now
-            log("PARRY", "HP < 50%: game nolak parry (ParryClient._isLowHealth)")
+
+    -- jalur: game (ParryClient asli) > input (tombol item, tetap lewat game) > remote (cara lama, tanpa animasi)
+    local via = CFG.parry.via
+    local gcl = nil
+    if via == "game" then
+        gcl = pgCached()
+        if not gcl then via = "input" end
+    end
+
+    if gcl then
+        -- status diambil dari objek game: kalau UI game masih cooldown, kita ga nembak
+        local why = pgBlock(gcl, true)
+        if why then
+            if now - parryCdAt > 2 then
+                parryCdAt = now
+                log("PARRY", "ga dikirim: " .. why)
+            end
+            return false
         end
-        return false
+    else
+        if CFG.parry.useServerCd and now < Parry.cdUntil then
+            if now - parryCdAt > 2 then
+                parryCdAt = now
+                log("PARRY", string.format("parry masih cooldown %.1fs lagi, ga dikirim", Parry.cdUntil - now))
+            end
+            return false
+        end
+        if hum.Health < hum.MaxHealth * 0.5 then   -- client game nolak parry kalau HP < 50%
+            if now - parryHpAt > 3 then
+                parryHpAt = now
+                log("PARRY", "HP < 50%: game nolak parry (ParryClient._isLowHealth)")
+            end
+            return false
+        end
     end
 
     local tool, equipped = findDagger()
@@ -750,11 +900,34 @@ local function parryNow(entry, plan)
         repeat RunService.Heartbeat:Wait() until (select(2, findDagger())) or os.clock() - t1 > 0.12
     end
 
+    if gcl then
+        -- cek ulang lengkap (termasuk equip) persis kayak ParryClient:CanUse()
+        local why = pgBlock(gcl, false)
+        if why then
+            if now - parryCdAt > 2 then
+                parryCdAt = now
+                log("PARRY", "ga dikirim: " .. why)
+            end
+            return false
+        end
+    end
+
     Parry.last = os.clock()
     entry.fired = Parry.last
     local before = char:GetAttribute("ParryLands") or 0
 
-    if CFG.parry.via == "input" then
+    if gcl then
+        -- ParryClient:Parry() nge-yield sampai animasi selesai / parry kena -> jalanin di thread sendiri.
+        -- FireServer ada di baris pertama sebelum yield pertama, jadi timing kirimnya sama kayak sebelumnya.
+        task.spawn(function()
+            local okp, err = pcall(gcl.Parry, gcl)
+            if not okp then log("PARRY", "ParryClient:Parry error: " .. tostring(err)) end
+        end)
+    elseif via == "input" then
+        if CFG.parry.via == "game" and now - parryWhyAt > 3 then
+            parryWhyAt = now
+            log("PARRY", "pakai input tombol item dulu (ParryClient belum ketemu)")
+        end
         local ok = press(getBind("kb_item", "MouseButton2"), 0.04, "vim")
         if not ok then press(getBind("kb_item", "MouseButton2"), 0.04, "all") end
     else
@@ -771,10 +944,14 @@ local function parryNow(entry, plan)
             log("PARRY", "remote parry ga ketemu")
             return false
         end
+        if now - parryWhyAt > 6 then
+            parryWhyAt = now
+            log("PARRY", "PERINGATAN: via remote = tanpa animasi & UI cooldown game ga ikut. Pakai Via: GAME.")
+        end
         ev:FireServer(char)
     end
-    log("PARRY", string.format("kirim parry [%s] delay %.2f (%.0f ms setelah animasi mulai, ping %.0f ms, fps %.0f)",
-        shortKey(entry.key), plan or 0, (Parry.last - entry.t0) * 1000, Net.rtt * 1000, 1 / Net.frameDt))
+    log("PARRY", string.format("kirim parry [%s] via %s delay %.2f (%.0f ms setelah animasi mulai, ping %.0f ms, fps %.0f)",
+        shortKey(entry.key), gcl and "GAME" or via:upper(), plan or 0, (Parry.last - entry.t0) * 1000, Net.rtt * 1000, 1 / Net.frameDt))
 
     task.delay(0.9, function()
         if not alive() then return end
@@ -959,6 +1136,7 @@ task.spawn(function()
     end)
     while alive() do
         pcall(hookHealth)
+        pcall(pgPrewarm)
         if CFG.parry.enabled then
             for _, k in ipairs(killers()) do watchKiller(k) end
         end
@@ -2393,7 +2571,11 @@ local function buildUI()
     mkBtn(r1, function() return "Parry: " .. onoff(CFG.parry.enabled), CFG.parry.enabled end,
         function() CFG.parry.enabled = not CFG.parry.enabled end, 0.5)
     mkBtn(r1, function() return "Via: " .. CFG.parry.via:upper(), true end,
-        function() CFG.parry.via = (CFG.parry.via == "remote") and "input" or "remote" end, 0.5)
+        function()
+            local nxt = { game = "input", input = "remote", remote = "game" }
+            CFG.parry.via = nxt[CFG.parry.via] or "game"
+            if CFG.parry.via == "game" then PG.scanAt, PG.gap = 0, 1.5 end
+        end, 0.5)
 
     local r2 = mkRow()
     mkBtn(r2, function() return "Auto Fire: " .. onoff(CFG.gun.trigger), CFG.gun.trigger end,
@@ -2542,4 +2724,4 @@ UIS.InputBegan:Connect(function(i, gp)
     end
 end)
 
-notify("v8.5 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap tombol DP buat panel")
+notify("v8.6 loaded. hook=" .. tostring(Gun.hookOK) .. " | tap tombol DP buat panel")
