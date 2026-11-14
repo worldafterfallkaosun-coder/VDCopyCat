@@ -1,5 +1,54 @@
 --!nonstrict
 --[[
+  v13.0 (UI rapi + ANTI-LAG ADAPTIF YANG NGIKUTIN OBJEK ESP)
+    ESP v2 (ditulis ulang)
+      - Objek ditemukan lewat TAG milik game (dari dump): GeneratorPoint, HookPoint, pallet (+ atribut PalletState), BearTrap.
+        Event-driven + rekonsiliasi murah. Scan seluruh Map tiap 5 detik (sumber lag utama v12) dihapus. Scan nama (exit, atau hook
+        cadangan) jalan di background dengan jeda makin panjang. Folder lama (Map.newGenerators / Map.Pallets) jadi cadangan.
+      - BARU: ESP jebakan Butcher (BearTrap), status survivor DOWN (atribut / tag Knocked), generator "(turun)" kalau Regressing.
+      - Anti-lag adaptif: tiap objek yang digambar punya biaya (Highlight, label, update). Total biaya dibanding CFG.esp.costBudget
+        -> makin banyak objek di ESP, makin banyak yang dipangkas (paling jauh dan paling ga penting duluan). Ditambah kontrol FPS
+        (turun cepat kalau FPS di bawah targetFps, naik pelan kalau aman). Skala kualitas ngatur: jatah Highlight, jumlah objek,
+        laju update, mode teks objek, bar, jeda scan. Pemain, generator, dan target lock ga pernah dipangkas habis.
+      - Hemat penulisan: properti cuma ditulis kalau berubah. Billboard dan Highlight di-pool. LOD per jarak. Objek di luar
+        pandangan ga dapat jatah Highlight.
+      - Tombol manual: esp.tier = auto | full | light | eco | min. Statistik hidup di tab ESP dan Beranda.
+    UI hub (disusun ulang)
+      - 6 tab: Beranda | Combat | ESP | Anti-lag | Opsi | Setelan. Tab ESP baru (beban, anti-lag adaptif, tampilan, jarak).
+      - Efek dekorasi (aurora, partikel, scanline, glitch, bar HP, layar pembuka) dibuang. Jendela pakai Frame biasa, bukan CanvasGroup.
+      - Anti-lag dikelompokkan jadi bagian yang bisa dilipat.
+    Inti DP (parry, gun, skill check, Veil, cincin) tidak diubah dari v12.1.
+]]
+--[[
+  v12.1 (upgrade dari v12.0: Veil lag + lock, gun meleset, parry telat)
+    VEIL
+      - AKAR MELESET: SpearMath game punya Gravity = Vector3(0, -98.1, 0) dan Speed = 165. Pembaca konstanta v12.0 cuma nerima angka,
+        jadi gravitasi Vector3 DILEWATIN -> busur lurus (g = 0). Di 100 stud spear jatuh ~18 stud, bidikan jauh di bawah target.
+        Sekarang Vector3 dibaca (g = 98.1), konstanta game dipercaya penuh (kalibrasi lemparan cuma dicatat, ga menimpa), default 165 / 98.1.
+        Catatan: kecepatan asli spear tergantung charge (SpearMath.power). Bidikan dihitung buat charge PENUH, tahan sampai penuh.
+      - AKAR LAG: tiap frame v12.0 nulis ulang 180 adornment jejak (CFrame + Transparency + Visible), 14 adornment busur, dan teks / ukuran HUD.
+        Sekarang jejak + busur di-anchor ke Terrain (diam, ditulis sekali), fade 10 Hz, busur + HUD ~15 Hz dan cuma nulis kalau nilainya berubah.
+        Pemilihan target 20 Hz, antar pilih cuma hitung ulang titik bidik (murah). Kecepatan survivor di-smooth lebih halus (tau 0.12s).
+      - AKAR LOCK GA NEMPEL / GA JALAN:
+          1) lock ikut mati kalau HUD gagal dibuat (v12.0 butuh hud.gui). Sekarang lock jalan sendiri, HUD cuma tambahan.
+          2) RMB sering sudah dipakai game (gp = true) -> v12.0 membuang inputnya. Sekarang gp diabaikan.
+          3) tombol LOCK / RMB bisa nyangkut ON (input lepas di luar tombol). Sekarang dicek state input asli + IsMouseButtonPressed.
+          4) cek halangan pakai aturan sendiri (CanCollide); game pakai SpearWorld.ignore (Transparency >= 0.05, tag TrueInvis, Plant,
+             model Humanoid, CanCollide ga dicek). Sekarang aturannya SAMA persis, jadi target ga hilang gara-gara kaca / part tembus.
+          5) target hilang 1 frame (LOS / FOV) = lock lepas. Sekarang ada grace 0.3 detik (CFG.veil.graceTime).
+          6) kamera di-bind di prioritas Last (setelah semua script kamera game), nempel penuh kalau sudah <= 0.6 derajat (ga ngekor).
+          7) deteksi "aku Veil" ditambah cadangan: atribut string apa pun yang isinya veil.
+      - Mode lock default di HP (tanpa keyboard) = toggle: ketuk LOCK sekali, ketuk lagi buat lepas. PC tetap hold RMB.
+    GUN
+      - Prediksi pakai kecepatan target yang lebih halus (tau 0.12s) khusus buat bidikan. Parry tetap pakai kecepatan cepat (tau 0.06s).
+      - Aim lock nempel penuh kalau sudah <= 0.6 derajat dari target.
+    PARRY
+      - arriveLead 0.16 -> 0.30, slack 0.25 -> 0.35. Window parry game 0.8 detik: parry nyampe 0.3 detik sebelum kena = toleransi telat 0.3s
+        dan toleransi kecepetan 0.5s (v12.0: 0.16s vs 0.64s, jadi ping jitter sedikit saja sudah telat).
+    Hasil belajar lama (dp10_learn.json) berisi gravitasi / kecepatan Veil hasil kalibrasi yang salah. Aman: dengan konstanta game
+    dipercaya, nilai itu ga dipakai. Kalau mau bersih total, tombol Wipe atau hapus file itu.
+]]
+--[[
   DISTRIK PEMBANTAI v12.0  (PlaceId 93978595733734)  -  Delta / Luau
 
   Gabungan:
@@ -312,8 +361,8 @@ local CFG = {
         range        = 12,
         frontDot     = 0.15,
         hitGuess     = 0.16,       -- detik: tebakan "animasi mulai -> kena" buat animasi yang belum pernah kena kamu
-        arriveLead   = 0.16,       -- detik: parry harus nyampe server segini SEBELUM kena (ping & fps dihitung otomatis)
-        slack        = 0.25,       -- detik: telat <= segini tetap dikirim langsung (window parry 0.8s), lebih telat = dibuang
+        arriveLead   = 0.30,       -- detik: parry harus nyampe server segini SEBELUM kena (ping & fps dihitung otomatis)
+        slack        = 0.35,       -- detik: telat <= segini tetap dikirim langsung (window parry 0.8s), lebih telat = dibuang
         skipHopeless = true,       -- true = parry ga dikirim kalau ping bikin bener-bener mustahil kekejar (cd 60s ga kebuang)
         fireUnknown  = true,       -- true = animasi yang belum pernah kena kamu tetap dicoba (pakai hitGuess)
         minChance    = 0.15,       -- animasi yang udah dikenal: parry cuma kalau (kena / muncul deket) >= ini
@@ -415,6 +464,16 @@ local CFG = {
         scanGens    = 1,          -- v9.0: detik antar scan generator (folder + tag, murah)
         scanBody    = 8,          -- v9.0: detik antar scan part "GeneratorBody" di Workspace (cadangan, cuma jalan kalau folder kosong)
         genBodyScan = true,       -- v9.0: false = matiin jalur cadangan GeneratorBody
+        -- v13.0: ESP adaptif (anti-lag ngikutin objek ESP)
+        traps       = true,       -- jebakan Butcher (tag BearTrap)
+        adaptive    = true,       -- kualitas ESP naik turun otomatis ngikutin FPS dan jumlah objek di ESP
+        tier        = "auto",     -- "auto" | "full" | "light" | "eco" | "min" (kunci kualitas)
+        targetFps   = 45,         -- FPS yang dijaga (di bawah ini ESP dipangkas)
+        costBudget  = 200,        -- anggaran beban ESP. Makin banyak objek di ESP, makin banyak yang dipangkas
+        minScale    = 0.25,       -- skala kualitas terendah (0.1 - 1)
+        objMax      = 40,         -- maks objek (pallet / hook / exit / trap) yang digambar bareng pada kualitas penuh
+        updateHz    = 12,         -- update ESP per detik pada kualitas penuh (turun sendiri kalau berat)
+        cullView    = true,       -- objek di luar pandangan kamera ga dapat jatah Highlight
     },
 
     ring = {                      -- v9.1: cincin jangkauan hit/parry + garis jangkauan hit killer
@@ -433,14 +492,18 @@ local CFG = {
 
     veil = {                      -- v11: Veil Assist (cuma kerja pas kamu killer Veil)
         enabled     = true,
+        trustMath   = true,       -- v12.1: konstanta SpearMath (Speed / Gravity) dari game dipercaya penuh, kalibrasi lemparan ga menimpa
+        graceTime   = 0.3,        -- v12.1: detik target lama ditahan kalau LOS / FOV putus sebentar
+        stickSnapDeg = 0.6,       -- v12.1: kamera nempel penuh kalau sudah segini dekat (derajat)
+        hudRate     = 15,         -- v12.1: Hz update HUD / busur (kamera tetap tiap frame)
         forceVeil   = false,      -- true = abaikan cek identitas "aku Veil" (kalau atribut KillerName dll ga kebaca)
         aim         = true,       -- kamera nempel ke survivor
-        mode        = "hold",     -- "hold" (tahan RMB / tombol LOCK) | "toggle" (tap) | "auto" (nempel terus kalau ada target di FOV)
+        mode        = (game:GetService("UserInputService").TouchEnabled and not game:GetService("UserInputService").KeyboardEnabled) and "toggle" or "hold",     -- "hold" (tahan RMB / tombol LOCK) | "toggle" (tap) | "auto" (nempel terus kalau ada target di FOV)
         part        = "auto",     -- "auto" (kepala kalau kelihatan, jauh + lari = badan) | "head" | "body"
         priority    = "cross",    -- "cross" (paling dekat crosshair) | "near" (paling dekat kamu) | "lowhp" (HP paling rendah)
         fov         = 25,         -- derajat dari crosshair (v1 pakai pixel)
         maxDist     = 220,        -- stud
-        smooth      = 0.8,        -- 1 = keras, makin kecil makin halus (sama kayak gun.lockSmooth; v1 kebalikan: 0 = snap)
+        smooth      = 0.6,        -- 1 = keras, makin kecil makin halus (sama kayak gun.lockSmooth; v1 kebalikan: 0 = snap)
         needLOS     = true,
         skipHooked  = true,       -- jangan kunci survivor yang digantung / digendong
         stickBonus  = 7,          -- derajat: bonus buat target yang lagi dikunci biar ga loncat-loncat
@@ -452,8 +515,8 @@ local CFG = {
         unsteadyScale = 0.75,     -- lead dikali ini kalau survivor lagi belok / ganti kecepatan
         steady      = true,       -- dipakai buat lead + auto lempar
         aimFrom     = "cam",      -- "cam" kamera -> titik bidik | "spawn" arah dari titik spawn spear (kalau game pakai LookVector kamera)
-        speed       = 120,        -- studs/s awal. Ditimpa nilai SpearMath, lalu kalibrasi lemparanmu
-        gravity     = 0,          -- studs/s^2 awal (0 = lurus). Ditimpa SpearMath / kalibrasi
+        speed       = 165,        -- studs/s awal. Ditimpa nilai SpearMath, lalu kalibrasi lemparanmu
+        gravity     = 98.1,          -- studs/s^2 awal (0 = lurus). Ditimpa SpearMath / kalibrasi
         cooldown    = 8,          -- detik awal (tebakan). Dipelajari dari jeda lemparan paling pendek
         learn       = true,       -- koreksi lead / tinggi bidikan dari hasil lemparan (KENA / MELESET)
         hitRadius   = 3.4,        -- stud: spear lewat segini dekat ke survivor = KENA
@@ -559,7 +622,7 @@ local function notify(msg)
     if ENV.DP_TOAST and not inHook then shown = pcall(ENV.DP_TOAST, msg) end
     if not shown then
         pcall(function()
-            StarterGui:SetCore("SendNotification", { Title = "DP v12.0", Text = msg, Duration = 2.5 })
+            StarterGui:SetCore("SendNotification", { Title = "DP v13.0", Text = msg, Duration = 2.5 })
         end)
     end
     log("INFO", msg)
@@ -907,9 +970,13 @@ keep(RunService.Heartbeat:Connect(function()
             if dt > 0.003 then
                 if dt > 0.4 or (pos - tr.pos).Magnitude > 40 then
                     tr.vel = Vector3.new(0, 0, 0)               -- respawn / teleport: jangan dihitung sebagai kecepatan
+                    tr.vs = Vector3.new(0, 0, 0)
                 else
+                    local raw = (pos - tr.pos) / dt
                     local a = 1 - math.exp(-dt / 0.06)
-                    tr.vel = tr.vel:Lerp((pos - tr.pos) / dt, a)
+                    tr.vel = tr.vel:Lerp(raw, a)
+                    -- v12.1: kecepatan LEBIH HALUS khusus bidikan (lead 0.1-0.7s ngalikan noise); parry tetap pakai tr.vel yang cepat
+                    tr.vs = (tr.vs or tr.vel):Lerp(raw, 1 - math.exp(-dt / 0.12))
                 end
                 tr.pos, tr.t = pos, now
                 tr.grounded = k.hum.FloorMaterial ~= Enum.Material.Air
@@ -958,7 +1025,7 @@ local function predictPos(part, origin)
     local G = CFG.gun
     local base = (G.leadPing > 0) and (Net.rtt * G.leadPing + G.leadBase + Gun.leadAdj) or 0
     if base <= 0 and G.lead <= 0 then return pos end
-    local v = tr.vel
+    local v = tr.vs or tr.vel
     if tr.grounded then v = Vector3.new(v.X, 0, v.Z) end      -- lagi napak tanah: ga usah nebak naik/turun
     if v.Magnitude > 70 then v = v.Unit * 70 end              -- batas kecepatan masuk akal (dash), glitch ga bikin tembakan nyasar
     local t = base
@@ -2210,6 +2277,7 @@ local function aimLockStep(dt)
 
     local goal = (predictPos(part, origin) - cf.Position).Unit
     local a = 1 - (1 - math.clamp(CFG.gun.lockSmooth, 0.02, 1)) ^ (math.clamp(dt, 0, 0.1) * 60)
+    if cf.LookVector:Dot(goal) > 0.99995 then a = 1 end   -- v12.1: udah <= ~0.6 derajat = nempel penuh, ga ngekor
     local nl = cf.LookVector:Lerp(goal, a)
     if nl.Magnitude < 0.01 then nl = goal end
     cam.CFrame = CFrame.lookAt(cf.Position, cf.Position + nl.Unit)
@@ -2332,6 +2400,13 @@ do
                 local v = h:GetAttribute(key)
                 if type(v) == "string" and v:lower() == "veil" then return true end
             end
+            -- v12.1: cadangan kalau nama atribut berubah: atribut string apa pun yang isinya persis "veil"
+            local ok, at = pcall(function() return h:GetAttributes() end)
+            if ok and type(at) == "table" then
+                for _, v in pairs(at) do
+                    if type(v) == "string" and v:lower() == "veil" then return true end
+                end
+            end
             return false
         end
 
@@ -2386,7 +2461,7 @@ do
                         if dt > 0.4 or (pos - tr.pos).Magnitude > 40 then
                             tr.vel = ZERO
                         else
-                            tr.vel = tr.vel:Lerp((pos - tr.pos) / dt, 1 - math.exp(-dt / 0.06))
+                            tr.vel = tr.vel:Lerp((pos - tr.pos) / dt, 1 - math.exp(-dt / 0.12))
                         end
                         tr.pos, tr.t = pos, now
                         tr.grounded = k.hum.FloorMaterial ~= Enum.Material.Air
@@ -2418,8 +2493,12 @@ do
         end
 
         ---------------------------------------------------------------- PREDIKSI (lead ping + waktu terbang + busur gravitasi)
-        function V.speed() return V.calibSpeed or V.seedSpeed or C.speed end
+        function V.speed()
+            if V.trustMath and V.seedSpeed then return V.seedSpeed end
+            return V.calibSpeed or V.seedSpeed or C.speed
+        end
         function V.grav()
+            if V.trustMath and V.seedG ~= nil then return V.seedG end
             if V.calibG ~= nil then return V.calibG end
             if V.seedG ~= nil then return V.seedG end
             return C.gravity
@@ -2491,16 +2570,36 @@ do
             local mc = myChar()
             if mc then ign[#ign + 1] = mc end
             ign[#ign + 1] = ch
-            for _, s in ipairs(survivors()) do ign[#ign + 1] = s.char end   -- kena survivor lain tetap kena, bukan halangan
+            for _, sv in ipairs(survivors()) do ign[#ign + 1] = sv.char end   -- kena survivor lain tetap kena, bukan halangan
             local o, dir = origin, point - origin
             local left = dir.Magnitude
             if left < 0.5 then return true end
-            for _ = 1, 6 do
+            local terrain = Workspace.Terrain
+            for _ = 1, 12 do
                 rp.FilterDescendantsInstances = ign
                 local res = Workspace:Raycast(o, dir, rp)
                 if not res then return true end
                 local inst = res.Instance
-                if inst.CanCollide and inst.Transparency < 0.95 then return false end   -- part tembus (CanCollide off / transparan) dilewatin
+                -- v12.1: aturan SAMA kayak SpearWorld.ignore di game. Part tembus kalau Transparency >= 0.05 (kecuali tag TrueInvis),
+                -- bernama "Plant", atau bagian model Humanoid. CanCollide TIDAK dicek game: part kelihatan tapi CanCollide=false tetap nahan spear.
+                local passes = false
+                if inst ~= terrain then
+                    if inst.Name == "Plant" then
+                        passes = true
+                    elseif inst.Transparency >= 0.05 then
+                        passes = not inst:HasTag("TrueInvis")
+                    else
+                        local a = inst.Parent
+                        while a and a ~= Workspace do
+                            if a:IsA("Model") and a:FindFirstChildOfClass("Humanoid") then
+                                passes = true
+                                break
+                            end
+                            a = a.Parent
+                        end
+                    end
+                end
+                if not passes then return false end
                 ign[#ign + 1] = inst
                 local adv = (res.Distance or 0) + 0.05
                 left = left - adv
@@ -2580,6 +2679,22 @@ do
             return best
         end
 
+        -- v12.1: antar pemilihan target (20 Hz) cuma titik bidik target yang SAMA yang dihitung ulang tiap frame
+        local function refreshBest(b, origin, camCF)
+            local k = b.k
+            if not (k.char.Parent and k.root.Parent) or k.hum.Health <= 0 then return nil end
+            local point = k.root.Position + b.off
+            local T, dir, flight, reach = V.solve(origin, k, point)
+            local P = origin + dir * (T - origin).Magnitude
+            local to = P - camCF.Position
+            if to.Magnitude > 0.1 then
+                b.ang = math.deg(math.acos(math.clamp(camCF.LookVector:Dot(to.Unit), -1, 1)))
+            end
+            b.T, b.dir, b.flight, b.reach, b.P = T, dir, flight, reach, P
+            b.dist = (k.root.Position - origin).Magnitude
+            return b
+        end
+
         ---------------------------------------------------------------- OVERLAY GAMBAR (adornment di gethui/CoreGui, ga nyentuh objek game)
         local AD = { folder = nil, pool = {}, trail = {}, arc = {} }
         do
@@ -2602,6 +2717,7 @@ do
             ENV.DP3_VEILFOLDER = f
             return f
         end
+        local TERR = Workspace.Terrain
         local function acquireBox()
             local bx = table.remove(AD.pool)
             if bx and bx.Parent then return bx end
@@ -2610,6 +2726,7 @@ do
             bx = Instance.new("BoxHandleAdornment")
             bx.ZIndex = 1
             bx.AlwaysOnTop = true
+            bx.Adornee = TERR   -- v12.1: Terrain diam -> CFrame dunia ditulis SEKALI, ga perlu update tiap frame (v12.0: 180 adornment x 3 properti x tiap frame)
             bx.Parent = f
             return bx
         end
@@ -2631,34 +2748,39 @@ do
             if not bx then return end
             bx.Color3 = col
             bx.Size = Vector3.new(0.14, 0.14, len)
-            AD.trail[#AD.trail + 1] = { bx = bx, cf = CFrame.lookAt((a + b) / 2, b), born = os.clock() }
+            bx.CFrame = TERR.CFrame:ToObjectSpace(CFrame.lookAt((a + b) / 2, b))
+            bx.Transparency = 0.2
+            bx.Visible = true
+            AD.trail[#AD.trail + 1] = { bx = bx, born = os.clock(), tr = 0.2 }
         end
 
-        local function drawTrails(me, now)
+        -- fade jejak ~10 Hz, cuma nulis kalau transparansinya berubah > 0.04
+        local function drawTrails(now)
             for i = #AD.trail, 1, -1 do
                 local e = AD.trail[i]
                 local age = now - e.born
                 if age > C.trail then
                     releaseBox(e.bx)
                     table.remove(AD.trail, i)
-                elseif me then
-                    if e.bx.Adornee ~= me then e.bx.Adornee = me end
-                    e.bx.CFrame = me.CFrame:ToObjectSpace(e.cf)
-                    e.bx.Transparency = 0.2 + 0.8 * (age / C.trail)
-                    e.bx.Visible = true
                 else
-                    e.bx.Visible = false
+                    local tr = 0.2 + 0.8 * (age / C.trail)
+                    if tr - e.tr > 0.04 then
+                        e.tr = tr
+                        e.bx.Transparency = tr
+                    end
                 end
             end
         end
 
         local ARC_N = 14
         local function hideArc()
+            if AD.arcShown == false then return end
             for _, bx in ipairs(AD.arc) do bx.Visible = false end
+            AD.arcShown = false
         end
-        -- busur lempar yang diprediksi: dari titik spawn sampai titik target (garis lurus kalau gravitasi 0)
-        local function drawArc(me, origin, dir, S, g, flight, col)
-            if not (C.arc and me and origin and flight and flight > 0) then
+        -- busur lempar yang diprediksi: dari titik spawn sampai titik target. g positif = turun (SpearMath.Gravity = (0, -g, 0))
+        local function drawArc(origin, dir, S, g, flight, col)
+            if not (C.arc and origin and flight and flight > 0) then
                 hideArc()
                 return
             end
@@ -2667,8 +2789,11 @@ do
             while #arc < ARC_N do
                 local bx = acquireBox()
                 if not bx then return end
+                bx.Transparency = 0.45
+                AD.arcCol = nil
                 arc[#arc + 1] = bx
             end
+            local tcf = TERR.CFrame
             local v0 = dir * S
             local prev = origin
             for i = 1, ARC_N do
@@ -2677,17 +2802,19 @@ do
                 local bx = arc[i]
                 local len = (p - prev).Magnitude
                 if len > 0.05 then
-                    if bx.Adornee ~= me then bx.Adornee = me end
                     bx.Size = Vector3.new(0.1, 0.1, len)
-                    bx.CFrame = me.CFrame:ToObjectSpace(CFrame.lookAt((prev + p) / 2, p))
-                    bx.Color3 = col
-                    bx.Transparency = 0.45
+                    bx.CFrame = tcf:ToObjectSpace(CFrame.lookAt((prev + p) / 2, p))
                     bx.Visible = true
                 else
                     bx.Visible = false
                 end
                 prev = p
             end
+            if AD.arcCol ~= col then
+                AD.arcCol = col
+                for _, bx in ipairs(arc) do bx.Color3 = col end
+            end
+            AD.arcShown = true
         end
 
         ---------------------------------------------------------------- HUD (cincin FOV, marker, bar cooldown, tombol LOCK, peringatan)
@@ -2774,13 +2901,11 @@ do
             round(btn)
             btn.InputBegan:Connect(function(i)
                 if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-                    if C.mode == "toggle" then V.toggled = not V.toggled else V.heldBtn = true end
+                    if C.mode == "toggle" then V.toggled = not V.toggled else V.heldBtn, V.btnInput = true, i end
                 end
             end)
             btn.InputEnded:Connect(function(i)
-                if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-                    V.heldBtn = false
-                end
+                if i == V.btnInput then V.heldBtn, V.btnInput = false, nil end
             end)
             hud.btn = btn
         end
@@ -3076,43 +3201,88 @@ do
                 best.dist, errStuds, ok and "OK" or "GAGAL", tostring(why)))
         end
 
-        ---------------------------------------------------------------- LOOP RENDER: HUD, kunci kamera
+        ---------------------------------------------------------------- LOOP RENDER: kunci kamera + HUD (v12.1)
         local function lockWanted()
             if C.mode == "auto" then return true end
             if C.mode == "toggle" then return V.toggled end
+            -- v12.1: tombol yang nyangkut ON dilepas otomatis (input lepas di luar tombol LOCK, window hilang fokus)
+            if V.heldBtn then
+                local bi = V.btnInput
+                local st = bi and bi.UserInputState
+                if not bi or st == Enum.UserInputState.End or st == Enum.UserInputState.Cancel then
+                    V.heldBtn, V.btnInput = false, nil
+                end
+            end
+            if V.heldKey and (C.holdKey == Enum.UserInputType.MouseButton1 or C.holdKey == Enum.UserInputType.MouseButton2) then
+                local okp, down = pcall(UIS.IsMouseButtonPressed, UIS, C.holdKey)
+                if okp and not down then V.heldKey = false end
+            end
             return V.heldKey or V.heldBtn
         end
 
-        local errAt = 0
+        local errAt, X = 0, { hudAt = 0, selAt = 0, trailAt = 0 }
         local function frame(dt)
             local now = os.clock()
             local me, hum = myRoot(), myHum()
             local cam = Workspace.CurrentCamera
             local alive2 = me ~= nil and hum ~= nil and hum.Health > 0
-            drawTrails(alive2 and me or nil, now)
+            -- v12.1: lock jalan walau HUD gagal dibuat (v12.0 ikut mati kalau hud.gui nil)
+            local hasHud = hud.gui ~= nil and hud.gui.Parent ~= nil
+            local hudTick = hasHud and (now - X.hudAt >= 1 / math.max(C.hudRate or 15, 4))
+            if hudTick then X.hudAt = now end
+
+            if now - X.trailAt >= 0.1 then
+                X.trailAt = now
+                drawTrails(now)
+            end
 
             -- peringatan spear (survivor)
-            if hud.warn then
+            if hudTick and hud.warn then
                 if V.warnT and C.warn and alive2 then
+                    local txt = string.format("!! SPEAR  %.1fs !!", V.warnT)
                     hud.warn.Visible = true
-                    hud.warn.Text = string.format("!! SPEAR  %.1fs !!", V.warnT)
+                    if hud.warn.Text ~= txt then hud.warn.Text = txt end
                     hud.warn.TextTransparency = (math.floor(now * 8) % 2 == 0) and 0 or 0.35
-                else
+                elseif hud.warn.Visible then
                     hud.warn.Visible = false
                 end
             end
 
             local isV = C.enabled and amVeil()
             V.isVeil = isV
-            if not (isV and alive2 and cam and hud.gui) then
-                V.targetChar, V.lockedNow, V.snap, V.steadyAt = nil, false, nil, nil
-                hideArc()
-                hudHide()
+            if not (isV and alive2 and cam) then
+                V.targetChar, V.lockedNow, V.snap, V.steadyAt, V.cache = nil, false, nil, nil, nil
+                if not V.hidden then
+                    V.hidden = true
+                    hideArc()
+                    if hasHud then
+                        hudHide()
+                        hud.mOn, hud.cdKey, hud.btnOn = false, nil, nil
+                    end
+                end
                 return
             end
+            V.hidden = false
 
             local origin = spawnOrigin()
-            local best = origin and pickTarget(origin, cam) or nil
+            local camCF = cam.CFrame
+            -- pilih target ~20 Hz; antar pilih cuma titik bidik target yang sama dihitung ulang. Grace: LOS / FOV putus sebentar = target lama ditahan
+            local best
+            if origin then
+                local cached = V.cache
+                if cached and now - X.selAt < 0.05 then
+                    best = refreshBest(cached, origin, camCF)
+                else
+                    X.selAt = now
+                    best = pickTarget(origin, cam)
+                    if best then
+                        V.cacheOkAt = now
+                    elseif cached and now - (V.cacheOkAt or 0) < (C.graceTime or 0.3) then
+                        best = refreshBest(cached, origin, camCF)
+                    end
+                end
+            end
+            V.cache = best
             V.targetChar = best and best.k.char or nil
 
             local want = C.aim and lockWanted()
@@ -3121,72 +3291,102 @@ do
             local errStuds
             if locked then
                 local cf = cam.CFrame
-                local goal = (C.aimFrom == "spawn") and best.dir or (best.P - cf.Position).Unit
-                local a = 1 - (1 - math.clamp(C.smooth, 0.02, 1)) ^ (math.clamp(dt, 0, 0.1) * 60)
-                local nl = cf.LookVector:Lerp(goal, a)
-                if nl.Magnitude < 0.01 then nl = goal end
-                nl = nl.Unit
-                cam.CFrame = CFrame.lookAt(cf.Position, cf.Position + nl)
-                errStuds = (best.T - origin).Magnitude * math.tan(math.acos(math.clamp(nl:Dot(goal), -1, 1)))
-                V.snap = { t = now, k = best.k, off = best.off, dist = best.dist }
-                if V.lastLockChar ~= best.k.char then
-                    V.lastLockChar = best.k.char
-                    log("VEIL", string.format("nempel ke %s (%s, %.0f stud, terbang %.2fs, lead %.0f ms)", best.k.player.DisplayName,
-                        best.kind, best.dist, best.flight, leadTime() * 1000))
+                local gv = (C.aimFrom == "spawn") and best.dir or (best.P - cf.Position)
+                if gv.Magnitude > 0.05 then
+                    local goal = gv.Unit
+                    local look = cf.LookVector
+                    local a = 1 - (1 - math.clamp(C.smooth, 0.02, 1)) ^ (math.clamp(dt, 0, 0.1) * 60)
+                    if look:Dot(goal) > math.cos(math.rad(C.stickSnapDeg or 0.6)) then a = 1 end   -- udah deket banget: nempel penuh, ga ngekor
+                    local nl = look:Lerp(goal, a)
+                    if nl.Magnitude < 0.01 then nl = goal end
+                    nl = nl.Unit
+                    cam.CFrame = CFrame.lookAt(cf.Position, cf.Position + nl)
+                    errStuds = (best.T - origin).Magnitude * math.tan(math.acos(math.clamp(nl:Dot(goal), -1, 1)))
+                    V.snap = { t = now, k = best.k, off = best.off, dist = best.dist }
+                    if V.lastLockChar ~= best.k.char then
+                        V.lastLockChar = best.k.char
+                        log("VEIL", string.format("nempel ke %s (%s, %.0f stud, terbang %.2fs, lead %.0f ms)", best.k.player.DisplayName,
+                            best.kind, best.dist, best.flight, leadTime() * 1000))
+                    end
+                    if C.autoThrow then autoThrow(now, best, errStuds) end
                 end
-                if C.autoThrow then autoThrow(now, best, errStuds) end
             else
                 V.snap, V.steadyAt, V.lastLockChar = nil, nil, nil
             end
 
-            -- HUD
+            if not hasHud then return end
+
+            -- marker ngikut tiap frame (1 properti), sisanya HUD ~15 Hz dan cuma nulis kalau berubah
+            if best then
+                local sp, on = cam:WorldToViewportPoint(best.T)
+                if on ~= hud.mOn then
+                    hud.mOn = on
+                    hud.marker.Visible = on
+                end
+                if on then hud.marker.Position = UDim2.fromOffset(sp.X, sp.Y) end
+            elseif hud.mOn then
+                hud.mOn = false
+                hud.marker.Visible = false
+            end
+
+            if not hudTick then return end
             local vp = cam.ViewportSize
             local R = math.tan(math.rad(math.clamp(C.fov, 1, 80))) / math.tan(math.rad(cam.FieldOfView / 2)) * (vp.Y / 2)
             hud.ring.Visible = C.aim
-            hud.ring.Size = UDim2.fromOffset(R * 2, R * 2)
+            if hud.R ~= R then
+                hud.R = R
+                hud.ring.Size = UDim2.fromOffset(R * 2, R * 2)
+            end
 
             local ready = V.cdLeft(now) <= 0.05
             if best then
-                local sp, on = cam:WorldToViewportPoint(best.P)
-                hud.marker.Visible = on
-                hud.marker.Position = UDim2.fromOffset(sp.X, sp.Y)
-                hud.marker.BackgroundColor3 = (not best.reach) and Color3.fromRGB(255, 80, 80)
+                local col = (not best.reach) and Color3.fromRGB(255, 80, 80)
                     or (ready and Color3.fromRGB(80, 255, 140) or Color3.fromRGB(255, 190, 70))
-                hud.mlabel.Text = string.format("%s %s\n%.0fst  %.2fs%s", best.k.player.DisplayName, best.kind, best.dist, best.flight,
+                if hud.marker.BackgroundColor3 ~= col then hud.marker.BackgroundColor3 = col end
+                local txt = string.format("%s %s\n%.0fst  %.2fs%s", best.k.player.DisplayName, best.kind, best.dist, best.flight,
                     best.reach and "" or "  JAUH")
-                drawArc(me, origin, best.dir, V.speed(), V.grav(), best.flight, hud.marker.BackgroundColor3)
+                if hud.mlabel.Text ~= txt then hud.mlabel.Text = txt end
+                drawArc(origin, best.dir, V.speed(), V.grav(), best.flight, col)
             else
-                hud.marker.Visible = false
                 hideArc()
             end
 
             hud.cdBack.Visible = C.cdBar
             if C.cdBar then
                 local rem = V.cdLeft(now)
-                if rem > 0 then
-                    hud.cdFill.Size = UDim2.fromScale(math.clamp(1 - rem / V.cdTotal(), 0, 1), 1)
-                    hud.cdFill.BackgroundColor3 = Color3.fromRGB(255, 170, 60)
-                    hud.cdText.Text = string.format("Spear: %.1fs", rem)
-                else
-                    hud.cdFill.Size = UDim2.fromScale(1, 1)
-                    hud.cdFill.BackgroundColor3 = Color3.fromRGB(70, 200, 110)
-                    hud.cdText.Text = "Spear: siap"
-                end
                 local extra = cdAttrs(now)
-                if extra ~= "" then hud.cdText.Text = hud.cdText.Text .. "  [" .. extra .. "]" end
+                local key = (rem > 0 and math.floor(rem * 10) or -1) .. "|" .. extra
+                if hud.cdKey ~= key then
+                    hud.cdKey = key
+                    if rem > 0 then
+                        hud.cdFill.Size = UDim2.fromScale(math.clamp(1 - rem / V.cdTotal(), 0, 1), 1)
+                        hud.cdFill.BackgroundColor3 = Color3.fromRGB(255, 170, 60)
+                        hud.cdText.Text = string.format("Spear: %.1fs", rem)
+                    else
+                        hud.cdFill.Size = UDim2.fromScale(1, 1)
+                        hud.cdFill.BackgroundColor3 = Color3.fromRGB(70, 200, 110)
+                        hud.cdText.Text = "Spear: siap"
+                    end
+                    if extra ~= "" then hud.cdText.Text = hud.cdText.Text .. "  [" .. extra .. "]" end
+                end
             end
 
-            hud.btn.Visible = C.button and C.aim and C.mode ~= "auto"
-            if hud.btn.Visible then
-                local on = (C.mode == "toggle") and V.toggled or (V.heldBtn or V.heldKey)
-                hud.btn.BackgroundColor3 = on and Color3.fromRGB(40, 140, 80) or Color3.fromRGB(90, 40, 40)
-                hud.btn.Text = on and "LOCK\nON" or "LOCK"
+            local showBtn = C.button and C.aim and C.mode ~= "auto"
+            if hud.btn.Visible ~= showBtn then hud.btn.Visible = showBtn end
+            if showBtn then
+                local on = ((C.mode == "toggle") and V.toggled or (V.heldBtn or V.heldKey)) and true or false
+                if hud.btnOn ~= on then
+                    hud.btnOn = on
+                    hud.btn.BackgroundColor3 = on and Color3.fromRGB(40, 140, 80) or Color3.fromRGB(90, 40, 40)
+                    hud.btn.Text = on and "LOCK\nON" or "LOCK"
+                end
             end
         end
 
         pcall(function() RunService:UnbindFromRenderStep("DP3_VeilAim") end)
         pcall(buildHud)
-        RunService:BindToRenderStep("DP3_VeilAim", Enum.RenderPriority.Camera.Value + 2, function(dt)
+        -- v12.1: prioritas Last = setelah semua script kamera game (v12.0: Camera + 2, bisa kalah sama bind game di Camera + 1)
+        RunService:BindToRenderStep("DP3_VeilAim", Enum.RenderPriority.Last.Value, function(dt)
             if not alive() then
                 pcall(function() RunService:UnbindFromRenderStep("DP3_VeilAim") end)
                 if hud.gui then pcall(function() hud.gui:Destroy() end) end
@@ -3202,13 +3402,15 @@ do
 
         ---------------------------------------------------------------- INPUT
         keep(UIS.InputBegan:Connect(function(i, gp)
-            if not alive() or gp then return end
+            if not alive() then return end
+            -- v12.1: gp sengaja diabaikan. RMB sering sudah "diproses" aksi game -> v12.0 membuang inputnya, lock kadang ga pernah nyala
             if i.UserInputType == C.holdKey then
                 if C.mode == "toggle" then V.toggled = not V.toggled else V.heldKey = true end
             end
         end))
         keep(UIS.InputEnded:Connect(function(i)
             if i.UserInputType == C.holdKey then V.heldKey = false end
+            if V.btnInput and i == V.btnInput then V.heldBtn, V.btnInput = false, nil end
         end))
 
         ---------------------------------------------------------------- SPEARMATH (nilai konstanta dibaca langsung dari modul game) + SpearState
@@ -3270,6 +3472,11 @@ do
                     elseif l:find("grav", 1, true) and v >= 0 and v <= 600 and not gKey then
                         g, gKey = v, name
                     end
+                elseif typeof(v) == "Vector3" and l:find("grav", 1, true) and not gKey then
+                    -- v12.1: SpearMath.Gravity = Vector3(0, -98.1, 0). v12.0 melewatinya (cuma baca angka) -> busur lurus, meleset jauh
+                    local gy = math.abs(v.Y)
+                    local gm = (gy > 0.01) and gy or v.Magnitude
+                    if gm > 0.01 and gm <= 600 then g, gKey = gm, name end
                 end
             end
             for kname, val in pairs(V.math) do
@@ -3283,6 +3490,9 @@ do
                 V.seedG = g
                 log("SPEARMATH", string.format("gravitasi awal dari %s = %.1f", gKey, g))
             end
+            V.trustMath = (C.trustMath ~= false) and V.seedSpeed ~= nil and V.seedG ~= nil
+            log("SPEARMATH", V.trustMath and "konstanta game dipercaya penuh (speed + gravitasi), kalibrasi lemparan cuma dicatat"
+                or "konstanta speed / gravitasi ga lengkap -> pakai kalibrasi + default CFG.veil")
             log("SPEARMATH", string.format("charge %s..%s | delay %s | umur %s | offset %s",
                 tostring(V.math.minCharge), tostring(V.math.maxCharge), tostring(V.math.throwDelay), tostring(V.math.maxLife),
                 tostring(V.math.spawnOffset)))
@@ -4524,439 +4734,682 @@ local function resetAll()
     notify("Reset: state gun/skill dibersihin")
 end
 
------------------------------------------------------------------- 4) ESP (v9.0)
+------------------------------------------------------------------ 4) ESP v2 (v13.0): ADAPTIF
 -- Murni sisi client. Highlight + BillboardGui ditaruh di folder gethui/CoreGui (ga bisa dibaca script game, ga kereplikasi).
 -- Ga ada remote yang ditembak dan ga ada objek game yang diubah.
--- v8.8: outline juga buat objek, mode teks full/mini/off, bar progress/HP, jatah Highlight (batas Roblox ~31).
-local ESP = { entries = {}, folder = nil, errAt = 0, tPlayers = 0, tObjs = 0, tMap = 0, nameHits = {} }
-
-local function espFolder()
-    if ESP.folder and ESP.folder.Parent then return ESP.folder end
-    local parent
-    pcall(function() parent = (gethui and gethui()) or game:GetService("CoreGui") end)
-    if not parent then parent = LP:FindFirstChildOfClass("PlayerGui") end
-    if not parent then return nil end
-    local old = parent:FindFirstChild("DP3_ESP")
-    if old then old:Destroy() end
-    local f = Instance.new("Folder")
-    f.Name = "DP3_ESP"
-    f.Parent = parent
-    ESP.folder = f
-    return f
-end
-
-local function espDrop(key)
-    local e = ESP.entries[key]
-    if not e then return end
-    ESP.entries[key] = nil
-    pcall(function()
-        e.bb:Destroy()
-        if e.hl then e.hl:Destroy() end
-    end)
-end
-
-local function espClear()
-    for key in pairs(ESP.entries) do espDrop(key) end
-    if ESP.folder then
-        pcall(function() ESP.folder:Destroy() end)
-        ESP.folder = nil
-    end
-end
-
--- kind: "player" | "gen" | "pallet" | "hook" | "exit"
--- Highlight dibuat malas (lazy) di espUpdate sesuai jatah, jadi espMake cuma bikin label + bar.
-local function espMake(key, adornee, kind)
-    local f = espFolder()
-    if not f then return nil end
-    local bb = Instance.new("BillboardGui")
-    bb.Name = "esp"
-    bb.Adornee = adornee
-    bb.AlwaysOnTop = true
-    bb.LightInfluence = 0
-    bb.ResetOnSpawn = false
-    bb.Size = UDim2.fromOffset(150, 40)
-    bb.StudsOffsetWorldSpace = Vector3.new(0, kind == "player" and 3.6 or 2.4, 0)
-    bb.Parent = f
-
-    local l = Instance.new("TextLabel")
-    l.BackgroundTransparency = 1
-    l.Position = UDim2.fromOffset(0, 0)
-    l.Size = UDim2.new(1, 0, 0, 28)
-    l.Font = Enum.Font.GothamMedium
-    l.TextSize = 12
-    l.TextYAlignment = Enum.TextYAlignment.Bottom
-    l.TextStrokeTransparency = 0.5
-    l.TextColor3 = Color3.new(1, 1, 1)
-    l.Text = ""
-    l.Parent = bb
-
-    -- bar tipis: progress generator / HP survivor
-    local back = Instance.new("Frame")
-    back.AnchorPoint = Vector2.new(0.5, 0)
-    back.Position = UDim2.new(0.5, 0, 0, 31)
-    back.Size = UDim2.fromOffset(70, 7)
-    back.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
-    back.BackgroundTransparency = 0
-    back.BorderColor3 = Color3.fromRGB(255, 255, 255)
-    back.BorderSizePixel = 1
-    back.Visible = false
-    back.Parent = bb
-    local fill = Instance.new("Frame")
-    fill.Size = UDim2.fromScale(0, 1)
-    fill.BorderSizePixel = 0
-    fill.Parent = back
-
-    local e = { kind = kind, adornee = adornee, bb = bb, lbl = l, bar = back, barFill = fill }
-    ESP.entries[key] = e
-    return e
-end
-
-local function espHighlight(e)
-    if e.hl and e.hl.Parent then return e.hl end
-    local f = ESP.folder
-    if not f then return nil end
-    local h = Instance.new("Highlight")
-    h.Name = "esp_hl"
-    h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-    h.OutlineTransparency = 0
-    h.Adornee = e.hlTarget
-    h.Parent = f
-    e.hl = h
-    return h
-end
-
-local function espAdornee(m)
-    if m:IsA("BasePart") then return m end
-    return m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart", true)
-end
-
-local function espVisible(m)
-    if not m then return false end
-    for _, d in ipairs(m:GetDescendants()) do
-        if d:IsA("BasePart") and d.Transparency < 0.95 then return true end
-    end
-    return false
-end
-
-local function espSweep(kinds, seen)
-    for key, e in pairs(ESP.entries) do
-        if kinds[e.kind] and not seen[key] then espDrop(key) end
-    end
-end
-
-local ESP_PLAYER = { player = true }
-local ESP_OBJ = { gen = true, pallet = true, hook = true, exit = true }
-local ESP_PRIO = { player = 1, gen = 1, exit = 2, hook = 3, pallet = 3 }   -- jatah Highlight: kecil = duluan
-
--- v9.0: generator dicari lewat 3 jalur sekaligus (folder Map.newGenerators, tag "GeneratorPoint", part "GeneratorBody").
--- Semua disimpan di tabel ESP biar ga nambah variabel local di chunk utama (batas Lua 200).
-ESP.gen = { found = {}, bodies = {}, tScan = -10, tBody = -10, sig = "", tLog = 0, busy = false }
+--
+-- v13.0, ANTI-LAG YANG NGIKUTIN OBJEK ESP
+--   Dulu: tiap 0.1 dtk SEMUA properti SEMUA entry ditulis ulang, pallet dicek lewat GetDescendants, dan seluruh Map di-scan tiap 5 dtk
+--   cuma buat nyari nama hook / exit. Makin banyak objek di ESP, makin berat. Sekarang:
+--   1) PENEMUAN OBJEK PAKAI TAG GAME (dari dump): GeneratorPoint, HookPoint, pallet (+ atribut PalletState), BearTrap. Event-driven
+--      (GetInstanceAddedSignal) + rekonsiliasi murah, jadi ga ada scan Map lagi. Scan nama (exit / hook cadangan) jalan di background
+--      dengan jeda yang makin panjang (backoff) dan dilepas begitu hasilnya stabil.
+--   2) MODEL BEBAN: tiap objek yang digambar punya biaya (Highlight 3-4, label 1.5, update 0.2). Total biaya "kalau semua digambar
+--      penuh" dibandingin sama CFG.esp.costBudget -> skala kualitas (scaleCap). Makin banyak objek di ESP, makin banyak yang dipangkas,
+--      yang paling jauh / paling ga penting duluan. Sedikit objek = ESP tetap penuh.
+--   3) KONTROL FPS (AIMD): FPS di bawah targetFps -> skala turun cepat, FPS aman -> naik pelan. Skala akhir = min(skala FPS, skala beban).
+--      Skala ngatur: jatah Highlight, jumlah objek yang digambar, laju update, mode teks objek, bar objek, jarak scan.
+--   4) HEMAT PENULISAN: tiap properti cuma ditulis kalau nilainya berubah (teks, warna, transparansi, bar, Enabled).
+--      Billboard di-pool, Highlight di-pool (jatah tetap, dioper ke objek yang menang urutan).
+--   5) LOD: update isi per entry makin jarang kalau makin jauh, objek di luar pandangan dilewat.
+--   Pemain (killer / survivor), generator, dan yang lagi di-lock tidak pernah dipangkas habis. Tombol manual: CFG.esp.tier.
+local ESP = {
+    entries = {}, bySrc = setmetatable({}, { __mode = "k" }), folder = nil, errAt = 0,
+    bbPool = {}, hlFree = {}, hlCount = 0,
+    nameHits = {}, nameBusy = false, nameAt = -100, nameEvery = 5, nameMap = nil, nameSig = "",
+    body = { list = {}, busy = false, at = -100 },
+    tPlayers = -10, tObjs = -10, cfgMask = -1,
+    hz = 12, scale = 1, scaleCap = 1, tierName = "Penuh", sig = "", sigAt = 0,
+    gov = { t0 = os.clock(), n = 0, worst = 0, fps = 60, hold = 0, scaleFps = 1 },
+    list = {}, hlList = {},
+    stat = {
+        fps = 60, hz = 12, scale = 1, scaleFps = 1, scaleCap = 1, tier = "Penuh", forced = false,
+        cost = 0, costBudget = 200, stepMs = 0,
+        players = 0, gens = 0, pallets = 0, hooks = 0, exits = 0, traps = 0,
+        bb = 0, hl = 0, hlBudget = 0, hlCap = 0, objShown = 0, objBudget = 0, objTotal = 0, culled = 0,
+    },
+}
 ESP.genProgNames = { "RepairProgress", "Progress", "repairProgress", "GeneratorProgress" }
 
-function ESP.genTop(inst)   -- model generator dari GeneratorBody / GeneratorPoint
-    local p = inst.Parent
-    if p and p ~= workspace and p:IsA("Model") and not Players:GetPlayerFromCharacter(p) then return p end
-    return inst
-end
+do
+    local E = ESP
+    local WHITE = Color3.new(1, 1, 1)
+    local COL = {
+        killer = Color3.fromRGB(255, 60, 60), survivor = Color3.fromRGB(90, 200, 255),
+        bad = Color3.fromRGB(255, 150, 40), pallet = Color3.fromRGB(255, 220, 90),
+        broken = Color3.fromRGB(150, 150, 150), hook = Color3.fromRGB(255, 140, 0),
+        exit = Color3.fromRGB(140, 255, 140), lock = Color3.fromRGB(255, 255, 255),
+        genLo = Color3.fromRGB(255, 70, 70), genHi = Color3.fromRGB(80, 255, 120),
+        genUnk = Color3.fromRGB(255, 200, 60), trap = Color3.fromRGB(255, 90, 160),
+        down = Color3.fromRGB(255, 110, 110),
+    }
+    local OBJ = { gen = true, pallet = true, hook = true, exit = true, trap = true }
+    local WEIGHT = { gen = 0.3, trap = 0.6, exit = 0.5, hook = 1, pallet = 1 }          -- skor urutan objek = jarak x bobot (kecil = duluan)
+    local COST_HL = { player = 4, gen = 3, trap = 3, exit = 3, hook = 3, pallet = 3 }   -- biaya Highlight per kind
+    local COST_BB, COST_UP = 1.5, 0.2                                                    -- label dan update Lua
+    local TIERS = { { 0.85, "Penuh" }, { 0.55, "Ringan" }, { 0.35, "Hemat" }, { 0, "Minimal" } }
+    local FORCED = { full = 1, light = 0.7, eco = 0.45, min = 0.25 }
+    local TAGS = {                                                                       -- tag CollectionService milik game (dari dump)
+        { kind = "gen", tag = "GeneratorPoint", cfg = "gens" },
+        { kind = "hook", tag = "HookPoint", cfg = "hooks" },
+        { kind = "pallet", tag = "pallet", cfg = "pallets" },
+        { kind = "trap", tag = "BearTrap", cfg = "traps" },
+    }
 
-function ESP.genScan()
-    local G, now = ESP.gen, os.clock()
-    if now - G.tScan < CFG.esp.scanGens then return G.found end
-    G.tScan = now
-    local found, via = {}, { folder = 0, tag = 0, body = 0 }
-    local function dup(inst)   -- udah ada dia / induknya (<= 4 tingkat) di daftar
-        local up = inst
-        for _ = 1, 4 do
-            if not up or up == workspace then return false end
-            if found[up] then return true end
-            up = up.Parent
+    local function clamp(v, a, b)
+        if v < a then return a elseif v > b then return b end
+        return v
+    end
+
+    local function bucket(d)   -- jarak dibulatkan makin kasar makin jauh, biar teks ga berubah tiap frame
+        if d < 50 then return math.floor(d + 0.5) end
+        if d < 150 then return math.floor(d / 2 + 0.5) * 2 end
+        return math.floor(d / 5 + 0.5) * 5
+    end
+
+    ---------------------------------------------------------------- folder, pool
+    function E.folderGet()
+        if E.folder and E.folder.Parent then return E.folder end
+        local parent
+        pcall(function() parent = (gethui and gethui()) or game:GetService("CoreGui") end)
+        if not parent then parent = LP:FindFirstChildOfClass("PlayerGui") end
+        if not parent then return nil end
+        local old = parent:FindFirstChild("DP3_ESP")
+        if old then old:Destroy() end
+        local f = Instance.new("Folder")
+        f.Name = "DP3_ESP"
+        f.Parent = parent
+        E.folder = f
+        -- folder baru = semua instance lama ikut hilang, buang referensi pool
+        E.bbPool, E.hlFree, E.hlCount = {}, {}, 0
+        for _, e in pairs(E.entries) do e.ui, e.hl = nil, nil end
+        return f
+    end
+
+    function E.uiGet(e)
+        if e.ui then return e.ui end
+        local f = E.folderGet()
+        if not f then return nil end
+        local u = table.remove(E.bbPool)
+        if not (u and u.bb and u.bb.Parent) then
+            local bb = Instance.new("BillboardGui")
+            bb.Name = "esp"
+            bb.AlwaysOnTop = true
+            bb.LightInfluence = 0
+            bb.ResetOnSpawn = false
+            bb.Active = false
+            bb.Size = UDim2.fromOffset(150, 40)
+            bb.Enabled = false
+
+            local l = Instance.new("TextLabel")
+            l.BackgroundTransparency = 1
+            l.Position = UDim2.fromOffset(0, 0)
+            l.Size = UDim2.new(1, 0, 0, 28)
+            l.Font = Enum.Font.GothamMedium
+            l.TextSize = 12
+            l.TextYAlignment = Enum.TextYAlignment.Bottom
+            l.TextStrokeTransparency = 0.5
+            l.TextColor3 = WHITE
+            l.Text = ""
+            l.Parent = bb
+
+            local back = Instance.new("Frame")
+            back.AnchorPoint = Vector2.new(0.5, 0)
+            back.Position = UDim2.new(0.5, 0, 0, 31)
+            back.Size = UDim2.fromOffset(70, 7)
+            back.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+            back.BorderColor3 = WHITE
+            back.BorderSizePixel = 1
+            back.Visible = false
+            back.Parent = bb
+
+            local fill = Instance.new("Frame")
+            fill.Size = UDim2.fromScale(0, 1)
+            fill.BorderSizePixel = 0
+            fill.Parent = back
+
+            bb.Parent = f
+            u = { bb = bb, lbl = l, bar = back, fill = fill }
+        end
+        u.bb.StudsOffsetWorldSpace = Vector3.new(0, e.kind == "player" and 3.6 or 2.4, 0)
+        u.bb.Adornee = e.adornee
+        e.ui = u
+        e.cText, e.cCol, e.cFade, e.cEn, e.cBar, e.cFrac, e.cSize, e.cBarCol = nil, nil, nil, nil, nil, nil, nil, nil
+        return u
+    end
+
+    function E.uiRelease(e)
+        local u = e.ui
+        if not u then return end
+        e.ui = nil
+        pcall(function()
+            u.bb.Enabled = false
+            u.bb.Adornee = nil
+        end)
+        if #E.bbPool < 48 and u.bb.Parent then
+            E.bbPool[#E.bbPool + 1] = u
+        else
+            pcall(function() u.bb:Destroy() end)
+        end
+    end
+
+    function E.hlAcquire(e, cap)
+        if e.hl then return e.hl end
+        local h = table.remove(E.hlFree)
+        if h and not h.Parent then
+            h = nil
+            E.hlCount = E.hlCount - 1
+        end
+        if not h then
+            if E.hlCount >= cap then return nil end
+            local f = E.folderGet()
+            if not f then return nil end
+            h = Instance.new("Highlight")
+            h.Name = "esp_hl"
+            h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+            h.OutlineTransparency = 0
+            h.Enabled = false
+            h.Parent = f
+            E.hlCount = E.hlCount + 1
+        end
+        e.hl = h
+        e.cHlT, e.cHlCol, e.cHlFill, e.cHlOn = nil, nil, nil, false
+        return h
+    end
+
+    function E.hlRelease(e)
+        local h = e.hl
+        if not h then return end
+        e.hl = nil
+        pcall(function()
+            h.Enabled = false
+            h.Adornee = nil
+        end)
+        E.hlFree[#E.hlFree + 1] = h
+    end
+
+    function E.drop(key)
+        local e = E.entries[key]
+        if not e then return end
+        E.entries[key] = nil
+        E.hlRelease(e)
+        E.uiRelease(e)
+        if e.src and E.bySrc[e.src] == key then E.bySrc[e.src] = nil end
+    end
+
+    function E.clear()
+        for key in pairs(E.entries) do E.drop(key) end
+        for _, u in ipairs(E.bbPool) do pcall(function() u.bb:Destroy() end) end
+        for _, h in ipairs(E.hlFree) do pcall(function() h:Destroy() end) end
+        E.bbPool, E.hlFree, E.hlCount, E.list = {}, {}, 0, {}
+        E.nameHits, E.cfgMask = {}, -1
+        if E.folder then
+            pcall(function() E.folder:Destroy() end)
+            E.folder = nil
+        end
+    end
+
+    ---------------------------------------------------------------- resolusi objek
+    local function adorneeOf(m)
+        if m:IsA("BasePart") then return m end
+        return m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart", true)
+    end
+
+    function E.genTop(inst)   -- model generator / hook dari part bertag (induknya, kalau Model dan bukan karakter)
+        local p = inst.Parent
+        if p and p ~= workspace and p:IsA("Model") and not Players:GetPlayerFromCharacter(p) then return p end
+        return inst
+    end
+
+    function E.smallTop(top, inst)   -- model kegedean (mis. satu Map utuh) -> pakai part-nya saja, jangan di-Highlight semua
+        if top == inst or not top:IsA("Model") then return top end
+        local n = 0
+        for _, d in ipairs(top:GetDescendants()) do
+            if d:IsA("BasePart") then
+                n = n + 1
+                if n > 80 then return inst end
+            end
+        end
+        return top
+    end
+
+    function E.genAdornee(m)
+        if m:IsA("BasePart") then return m end
+        return m:FindFirstChild("GeneratorBody", true) or m:FindFirstChild("HitBox", true) or adorneeOf(m)
+    end
+
+    function E.entryFor(key, kind, how)
+        local e = E.entries[key]
+        if not e then
+            e = { kind = kind, key = key, how = how, nextAt = 0, vAt = 0, w = {} }
+            E.entries[key] = e
+        end
+        e.how = how
+        return e
+    end
+
+    function E.addObj(kind, inst, how)
+        local top, ad, hlT = inst, nil, nil
+        if kind == "gen" then
+            top = E.genTop(inst)
+            ad, hlT = E.genAdornee(top), top
+        elseif kind == "hook" then
+            top = E.smallTop(E.genTop(inst), inst)
+            ad = inst:IsA("BasePart") and inst or adorneeOf(top)
+            hlT = top
+        elseif kind == "pallet" then
+            if not inst:IsA("Model") then
+                local p = inst.Parent
+                if p and p ~= workspace and p:IsA("Model") and not Players:GetPlayerFromCharacter(p) then
+                    top = E.smallTop(p, inst)
+                end
+            end
+            ad, hlT = adorneeOf(top), top
+        elseif kind == "trap" then
+            top = inst
+            ad = inst:IsA("Model") and (inst:FindFirstChild("hitbox") or inst.PrimaryPart) or inst
+            if ad and not ad:IsA("BasePart") then ad = adorneeOf(inst) end
+            hlT = inst
+        end
+        if not ad then return nil end
+        local e = E.entryFor(top, kind, how)
+        e.model, e.adornee, e.hlTarget, e.src = top, ad, hlT, inst
+        E.bySrc[inst] = top
+        return e
+    end
+
+    function E.genProg(e)   -- nil = progress ga ketemu di attribute mana pun. Nama yang pernah berhasil di-cache per entry.
+        local a, b, c = e.model, e.src, e.adornee
+        if e.progName then
+            local nm = e.progName
+            local v = (a and tonumber(a:GetAttribute(nm))) or (b and tonumber(b:GetAttribute(nm))) or (c and tonumber(c:GetAttribute(nm)))
+            if v then return v end
+            e.progName = nil
+        end
+        for _, o in ipairs({ a or false, b or false, c or false }) do
+            if o then
+                for _, nm in ipairs(E.genProgNames) do
+                    local v = tonumber(o:GetAttribute(nm))
+                    if v then
+                        e.progName = nm
+                        return v
+                    end
+                end
+            end
+        end
+        return nil
+    end
+
+    local function visibleParts(m)   -- cuma buat pallet cadangan (folder Map.Pallets, tanpa atribut PalletState)
+        for _, d in ipairs(m:GetDescendants()) do
+            if d:IsA("BasePart") and d.Transparency < 0.95 then return true end
         end
         return false
     end
-    local function add(m, how)
-        if m and m.Parent and not dup(m) then
-            found[m] = how
-            via[how] = via[how] + 1
+
+    function E.palletState(e, now)   -- "ok" | "broken" | nil
+        local st
+        if e.src and e.src.Parent then st = e.src:GetAttribute("PalletState") end
+        if st == nil and e.model then st = e.model:GetAttribute("PalletState") end
+        if type(st) == "string" then
+            return (st == "Broken") and "broken" or "ok"
+        end
+        if not e.legacy then return "ok" end
+        if now - (e.visAt or -10) > 1.5 then   -- jalur cadangan: Intact / Broken dilihat dari transparansi
+            e.visAt = now
+            local intact, broken = e.model:FindFirstChild("Intact"), e.model:FindFirstChild("Broken")
+            local s
+            if intact and visibleParts(intact) then s = "ok"
+            elseif broken and visibleParts(broken) then s = "broken" end
+            e.legacySt = s
+            local ad = adorneeOf(intact or broken or e.model)
+            if ad then e.adornee = ad end
+            e.hlTarget = (s == "ok") and intact or broken or e.model
+        end
+        return e.legacySt
+    end
+
+    ---------------------------------------------------------------- scan pemain
+    function E.scanPlayers()
+        local C = CFG.esp
+        local seen = {}
+        for _, p in ipairs(Players:GetPlayers()) do
+            local ch = p.Character
+            if p ~= LP and ch then
+                local tk = teamKind(p.Team)
+                local isK, isS = tk == "killer", tk == "survivor"
+                if (isK and C.killer) or (isS and C.survivors) then
+                    local hum = ch:FindFirstChildOfClass("Humanoid")
+                    local root = ch:FindFirstChild("HumanoidRootPart")
+                    if hum and root and hum.Health > 0 then
+                        local e = E.entryFor(ch, "player", "player")
+                        e.p, e.hum, e.root, e.isK, e.adornee, e.hlTarget, e.model = p, hum, root, isK, root, ch, ch
+                        seen[ch] = true
+                    end
+                end
+            end
+        end
+        for key, e in pairs(E.entries) do
+            if e.kind == "player" and not seen[key] then E.drop(key) end
         end
     end
-    local map = workspace:FindFirstChild("Map")
-    local ng = map and map:FindFirstChild("newGenerators")
-    if ng then
-        for _, m in ipairs(ng:GetChildren()) do
-            if m:IsA("Model") or m:IsA("BasePart") then add(m, "folder") end
-        end
-    end
-    pcall(function()
-        for _, pt in ipairs(CS:GetTagged("GeneratorPoint")) do
-            if pt:IsDescendantOf(workspace) then add(ESP.genTop(pt), "tag") end
-        end
-    end)
-    -- cadangan: part "GeneratorBody" (nama dipakai kode game). Discan bertahap di thread sendiri biar ga lag.
-    if CFG.esp.genBodyScan and via.folder == 0 and now - G.tBody >= CFG.esp.scanBody and not G.busy then
-        G.tBody, G.busy = now, true
+
+    ---------------------------------------------------------------- scan objek (tag + cadangan)
+    function E.bodyKick()   -- cadangan generator: part "GeneratorBody" di seluruh Workspace, nyicil di thread sendiri
+        local B = E.body
+        local now = os.clock()
+        if B.busy or now - B.at < CFG.esp.scanBody then return end
+        B.busy, B.at = true, now
         task.spawn(function()
             local list, n = {}, 0
             pcall(function()
                 for _, d in ipairs(workspace:GetDescendants()) do
                     n = n + 1
                     if d.Name == "GeneratorBody" and d:IsA("BasePart") then list[#list + 1] = d end
-                    if n % 4000 == 0 then task.wait() end
+                    if n % 3000 == 0 then task.wait() end
                 end
             end)
-            G.bodies, G.busy = list, false
+            B.list, B.busy = list, false
         end)
     end
-    for _, b in ipairs(G.bodies) do
-        if b.Parent and b:IsDescendantOf(workspace) then add(ESP.genTop(b), "body") end
-    end
-    G.found = found
 
-    local total = via.folder + via.tag + via.body
-    local sig = via.folder .. "/" .. via.tag .. "/" .. via.body
-    if sig ~= G.sig or (total == 0 and now - G.tLog > 20) then
-        G.sig, G.tLog = sig, now
-        local first
-        for m in pairs(found) do
-            first = m
-            break
+    function E.nameKick(map, wantHook)   -- exit (dan hook kalau tag HookPoint kosong) lewat nama. Background, nyicil, jeda makin panjang.
+        local C = CFG.esp
+        local now = os.clock()
+        if not map or E.nameBusy then return end
+        if E.nameMap ~= map then
+            E.nameMap, E.nameEvery, E.nameAt, E.nameHits, E.nameSig = map, C.scanMap, -100, {}, ""
         end
-        log("ESP", string.format("generator ketemu: folder %d, tag %d, body %d%s", via.folder, via.tag, via.body,
-            first and (" | contoh: " .. first:GetFullName())
-            or (" | KOSONG (Map=" .. tostring(map ~= nil) .. ", newGenerators=" .. tostring(ng ~= nil) .. ")")))
-    end
-    return found
-end
-
-function ESP.genAdornee(m)
-    if m:IsA("BasePart") then return m end
-    return m:FindFirstChild("GeneratorBody", true) or m:FindFirstChild("HitBox", true) or espAdornee(m)
-end
-
-function ESP.genProg(e)   -- nil = progress ga ketemu di attribute mana pun
-    for _, o in ipairs({ e.model, e.adornee }) do
-        if o then
-            for _, n in ipairs(ESP.genProgNames) do
-                local v = tonumber(o:GetAttribute(n))
-                if v then return v end
+        if now - E.nameAt < E.nameEvery then return end
+        E.nameBusy, E.nameAt = true, now
+        task.spawn(function()
+            local hits, matched, n, cnt = {}, {}, 0, 0
+            local gens, pals = map:FindFirstChild("newGenerators"), map:FindFirstChild("Pallets")
+            local wantExit = C.exits
+            pcall(function()
+                for _, d in ipairs(map:GetDescendants()) do
+                    n = n + 1
+                    if n % 1500 == 0 then task.wait() end
+                    if d:IsA("Model") or d:IsA("BasePart") then
+                        local nm = d.Name
+                        if #nm <= 24 then
+                            local ln = nm:lower()
+                            local kind
+                            if wantHook and nameHas(ln, C.hookNames) then kind = "hook"
+                            elseif wantExit and nameHas(ln, C.exitNames) then kind = "exit" end
+                            if kind then
+                                local up, skip = d.Parent, false
+                                for _ = 1, 4 do
+                                    if not up or up == map then break end
+                                    if matched[up] then
+                                        skip = true
+                                        break
+                                    end
+                                    up = up.Parent
+                                end
+                                if not skip and not (gens and d:IsDescendantOf(gens)) and not (pals and d:IsDescendantOf(pals)) then
+                                    matched[d] = true
+                                    hits[d] = kind
+                                    cnt = cnt + 1
+                                end
+                            end
+                        end
+                    end
+                end
+            end)
+            E.nameHits = hits
+            local sig = tostring(cnt)
+            if sig == E.nameSig then
+                E.nameEvery = math.min(60, E.nameEvery * 1.6)   -- hasil stabil -> makin jarang
+            else
+                E.nameSig, E.nameEvery = sig, C.scanMap
             end
-        end
+            E.nameBusy = false
+        end)
     end
-    return nil
-end
 
-local function espScanPlayers()
-    local C = CFG.esp
-    local seen = {}
-    for _, p in ipairs(Players:GetPlayers()) do
-        local ch = p.Character
-        if p ~= LP and ch then
-            local tn = p.Team and p.Team.Name:lower() or ""
-            local isK = tn:find("killer", 1, true) ~= nil
-            local isS = tn:find("surviv", 1, true) ~= nil
-            if (isK and C.killer) or (isS and C.survivors) then
-                local hum = ch:FindFirstChildOfClass("Humanoid")
-                local root = ch:FindFirstChild("HumanoidRootPart")
-                if hum and root and hum.Health > 0 then
-                    local e = ESP.entries[ch] or espMake(ch, root, "player")
-                    if e then
-                        e.p, e.hum, e.root, e.isK, e.adornee, e.hlTarget = p, hum, root, isK, root, ch
-                        seen[ch] = true
+    function E.reconcile()
+        local C = CFG.esp
+        local seen = {}
+        local n = { gen = 0, hook = 0, pallet = 0, trap = 0, exit = 0 }
+        local via = { tag = 0, folder = 0, body = 0, name = 0 }
+        local on = {
+            gen = C.objects and C.gens, hook = C.objects and C.hooks, pallet = C.objects and C.pallets,
+            trap = C.objects and C.traps, exit = C.objects and C.exits,
+        }
+        -- 1) tag game (utama)
+        for _, s in ipairs(TAGS) do
+            if on[s.kind] then
+                local okT, list = pcall(CS.GetTagged, CS, s.tag)
+                if okT then
+                    for _, inst in ipairs(list) do
+                        local k = E.bySrc[inst]
+                        if k and E.entries[k] then
+                            seen[k] = true
+                            n[s.kind] = n[s.kind] + 1
+                            via.tag = via.tag + 1
+                        elseif inst:IsDescendantOf(workspace) then
+                            local e = E.addObj(s.kind, inst, "tag")
+                            if e then
+                                seen[e.key] = true
+                                n[s.kind] = n[s.kind] + 1
+                                via.tag = via.tag + 1
+                            end
+                        end
                     end
                 end
             end
         end
-    end
-    espSweep(ESP_PLAYER, seen)
-end
-
-local function espScanObjects()
-    local C = CFG.esp
-    local seen = {}
-    -- v9.0: generator lewat genScan (folder + tag + GeneratorBody), ga lagi bergantung ke Map.newGenerators doang
-    if C.objects and C.gens then
-        local okG, errG = pcall(function()
-            for m in pairs(ESP.genScan()) do
-                if m.Parent then
-                    local ad = ESP.genAdornee(m)
+        local map = workspace:FindFirstChild("Map")
+        -- 2) generator cadangan: folder Map.newGenerators, lalu part GeneratorBody
+        if on.gen and n.gen == 0 then
+            local ng = map and map:FindFirstChild("newGenerators")
+            if ng then
+                for _, m in ipairs(ng:GetChildren()) do
+                    if m:IsA("Model") or m:IsA("BasePart") then
+                        local k = E.bySrc[m]
+                        if k and E.entries[k] then
+                            seen[k] = true
+                            n.gen = n.gen + 1
+                            via.folder = via.folder + 1
+                        else
+                            local e = E.addObj("gen", m, "folder")
+                            if e then
+                                seen[e.key] = true
+                                n.gen = n.gen + 1
+                                via.folder = via.folder + 1
+                            end
+                        end
+                    end
+                end
+            end
+            if n.gen == 0 and C.genBodyScan then
+                E.bodyKick()
+                for _, b in ipairs(E.body.list) do
+                    if b.Parent and b:IsDescendantOf(workspace) then
+                        local k = E.bySrc[b]
+                        if k and E.entries[k] then
+                            seen[k] = true
+                            n.gen = n.gen + 1
+                            via.body = via.body + 1
+                        else
+                            local e = E.addObj("gen", b, "body")
+                            if e then
+                                seen[e.key] = true
+                                n.gen = n.gen + 1
+                                via.body = via.body + 1
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        -- 3) pallet cadangan: folder Map.Pallets
+        if on.pallet and n.pallet == 0 and map then
+            local pals = map:FindFirstChild("Pallets")
+            if pals then
+                for _, m in ipairs(pals:GetChildren()) do
+                    if m:IsA("Model") then
+                        local k = E.bySrc[m]
+                        if k and E.entries[k] then
+                            seen[k] = true
+                            n.pallet = n.pallet + 1
+                            via.folder = via.folder + 1
+                        else
+                            local ad = adorneeOf(m)
+                            if ad then
+                                local e = E.entryFor(m, "pallet", "folder")
+                                e.model, e.adornee, e.hlTarget, e.src, e.legacy = m, ad, m, m, true
+                                E.bySrc[m] = m
+                                seen[m] = true
+                                n.pallet = n.pallet + 1
+                                via.folder = via.folder + 1
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        -- 4) exit (selalu lewat nama) dan hook cadangan (kalau tag HookPoint kosong)
+        local needHookName = on.hook and n.hook == 0
+        if map and (on.exit or needHookName) then E.nameKick(map, needHookName) end
+        for d, kind in pairs(E.nameHits) do
+            if d.Parent and ((kind == "exit" and on.exit) or (kind == "hook" and needHookName)) then
+                local k = E.bySrc[d]
+                if k and E.entries[k] then
+                    seen[k] = true
+                    n[kind] = n[kind] + 1
+                    via.name = via.name + 1
+                else
+                    local ad = adorneeOf(d)
                     if ad then
-                        local e = ESP.entries[m] or espMake(m, ad, "gen")
-                        if e then
-                            e.model, e.adornee, e.hlTarget = m, ad, m
-                            seen[m] = true
-                        end
-                    end
-                end
-            end
-        end)
-        if not okG and os.clock() - ESP.errAt > 5 then
-            ESP.errAt = os.clock()
-            log("ESP", "scan gen error: " .. tostring(errG))
-        end
-    end
-    local map = workspace:FindFirstChild("Map")
-    if map and C.objects then
-        local pals = map:FindFirstChild("Pallets")
-        if pals and C.pallets then
-            for _, m in ipairs(pals:GetChildren()) do
-                if m:IsA("Model") then
-                    local intact, broken = m:FindFirstChild("Intact"), m:FindFirstChild("Broken")
-                    local state
-                    if intact and espVisible(intact) then state = "ok"
-                    elseif broken and espVisible(broken) then state = "broken" end
-                    local ad = espAdornee(intact or broken or m)
-                    if ad and state then
-                        local e = ESP.entries[m] or espMake(m, ad, "pallet")
-                        if e then
-                            e.model, e.adornee, e.state = m, ad, state
-                            e.hlTarget = (state == "ok") and intact or broken
-                            seen[m] = true
-                        end
+                        local e = E.entryFor(d, kind, "name")
+                        e.model, e.adornee, e.hlTarget, e.src = d, ad, d, d
+                        E.bySrc[d] = d
+                        seen[d] = true
+                        n[kind] = n[kind] + 1
+                        via.name = via.name + 1
                     end
                 end
             end
         end
-    end
-    -- hook / exit: dicari lewat nama (jarang berubah, jadi discan lebih jarang)
-    if map and C.objects and (C.hooks or C.exits) and os.clock() - ESP.tMap >= C.scanMap then
-        ESP.tMap = os.clock()
-        local gens, pals = map:FindFirstChild("newGenerators"), map:FindFirstChild("Pallets")
-        local hits, matched, scanN = {}, {}, 0
-        for _, d in ipairs(map:GetDescendants()) do
-            scanN = scanN + 1
-            if scanN % 2500 == 0 then task.wait() end   -- v10: nyicil, GetDescendants Map bisa puluhan ribu objek (freeze di map gede)
-            if d:IsA("Model") or d:IsA("BasePart") then
-                local up, skip = d.Parent, false
-                for _ = 1, 4 do
-                    if not up or up == map then break end
-                    if matched[up] then
-                        skip = true
-                        break
-                    end
-                    up = up.Parent
-                end
-                if not skip and not (gens and d:IsDescendantOf(gens)) and not (pals and d:IsDescendantOf(pals)) then
-                    local ln = d.Name:lower()
-                    local kind
-                    if C.hooks and nameHas(ln, C.hookNames) then kind = "hook"
-                    elseif C.exits and nameHas(ln, C.exitNames) then kind = "exit" end
-                    if kind then
-                        matched[d] = true
-                        hits[d] = kind
-                    end
-                end
-            end
+        -- 5) sapu entry objek yang sudah ga ada / dimatikan
+        for key, e in pairs(E.entries) do
+            if OBJ[e.kind] and not seen[key] then E.drop(key) end
         end
-        ESP.nameHits = hits
-    end
-    for d, kind in pairs(ESP.nameHits) do
-        local isOn = (kind == "hook" and C.hooks) or (kind == "exit" and C.exits)
-        if d.Parent and isOn and C.objects then
-            local ad = espAdornee(d)
-            if ad then
-                local e = ESP.entries[d] or espMake(d, ad, kind)
-                if e then
-                    e.model, e.adornee, e.hlTarget = d, ad, d
-                    seen[d] = true
-                end
-            end
+        -- 6) log kalau jumlahnya berubah (buat diagnosa: Salin log)
+        local sig = string.format("gen %d | hook %d | pallet %d | trap %d | exit %d", n.gen, n.hook, n.pallet, n.trap, n.exit)
+        local now = os.clock()
+        if sig ~= E.sig or (n.gen + n.hook + n.pallet + n.exit == 0 and now - E.sigAt > 30) then
+            E.sig, E.sigAt = sig, now
+            log("ESP", string.format("objek: %s | via tag %d, folder %d, body %d, nama %d", sig, via.tag, via.folder, via.body, via.name))
         end
     end
-    espSweep(ESP_OBJ, seen)
-end
 
-local ESP_COL = {
-    killer = Color3.fromRGB(255, 60, 60), survivor = Color3.fromRGB(90, 200, 255),
-    bad = Color3.fromRGB(255, 150, 40), pallet = Color3.fromRGB(255, 220, 90),
-    broken = Color3.fromRGB(150, 150, 150), hook = Color3.fromRGB(255, 140, 0),
-    exit = Color3.fromRGB(140, 255, 140), lock = Color3.fromRGB(255, 255, 255),
-    genLo = Color3.fromRGB(255, 70, 70), genHi = Color3.fromRGB(80, 255, 120),
-    genUnk = Color3.fromRGB(255, 200, 60),
-}
+    -- event tag: objek baru langsung masuk tanpa nunggu rekonsiliasi
+    for _, s in ipairs(TAGS) do
+        keep(CS:GetInstanceAddedSignal(s.tag):Connect(function(inst)
+            if not alive() or not CFG.esp.enabled or not CFG.esp.objects or not CFG.esp[s.cfg] then return end
+            task.defer(function()
+                if not alive() then return end
+                pcall(function()
+                    if inst.Parent and not E.bySrc[inst] and inst:IsDescendantOf(workspace) then E.addObj(s.kind, inst, "tag") end
+                end)
+            end)
+        end))
+        keep(CS:GetInstanceRemovedSignal(s.tag):Connect(function(inst)
+            local k = E.bySrc[inst]
+            if k then
+                E.bySrc[inst] = nil
+                E.drop(k)
+            end
+        end))
+    end
 
-local function espUpdate()
-    local C = CFG.esp
-    local cam = workspace.CurrentCamera
-    local me = myRoot()
-    local from = (me and me.Position) or (cam and cam.CFrame.Position)
-    local mode = C.text
-    local lockedChar = Gun.lockTarget and Gun.lockTarget.Parent
-    local vChar = Veil.targetChar   -- v11: survivor yang lagi di-lock Veil Assist
-    local want = {}   -- kandidat Highlight, dijatah setelah loop
-
-    -- v8.9: satu entry error ga boleh bikin entry lain (mis. generator) ga ke-update
-    local function one(key, e)
-        local ad = e.adornee
-        if not (ad and ad.Parent) or (e.hum and e.hum.Health <= 0) then
-            espDrop(key)
-            return
-        end
-        local dist = from and (ad.Position - from).Magnitude or 0
-        local show = (C.maxDist <= 0) or dist <= C.maxDist
+    ---------------------------------------------------------------- isi per entry (teks, warna, bar)
+    -- Dipanggil cuma kalau entry "jatuh tempo" (LOD). Semua penulisan properti lewat cek perubahan.
+    function E.apply(e, w, C, modeP, modeO, S, now)
+        local kind = e.kind
+        local dist = w.dist
+        local show = true
         local title, mini, sub, frac = "", "", nil, nil
-        local col = Color3.new(1, 1, 1)
-        local locked = false
+        local col = WHITE
+        local locked = w.locked == true
+        local barsOk = true
+        local mode = modeP
+        e.hidden = false
 
-        if e.kind == "player" then
-            local ch = e.hum.Parent
-            col = e.isK and ESP_COL.killer or ESP_COL.survivor
+        if kind == "player" then
+            local ch = e.model
+            col = e.isK and COL.killer or COL.survivor
             local state
             if ch then
                 if ch:GetAttribute("IsHooked") then state = "HOOK"
                 elseif ch:GetAttribute("IsCarried") then state = "DIGENDONG"
-                elseif ch:GetAttribute("Trapped") then state = "TRAP" end
+                elseif ch:GetAttribute("Trapped") then state = "TRAP"
+                elseif (not e.isK) and (ch:GetAttribute("Knocked") or CS:HasTag(ch, "Knocked")) then state = "DOWN" end
             end
-            if state and not e.isK then col = ESP_COL.bad end
-            locked = (e.isK and lockedChar ~= nil and lockedChar == ch) or ((not e.isK) and vChar ~= nil and vChar == ch)
-            if locked then col = ESP_COL.lock end
+            if state and not e.isK then col = (state == "DOWN") and COL.down or COL.bad end
+            if locked then col = COL.lock end
             title = (e.isK and "KILLER " or "") .. (C.names and e.p.DisplayName or "")
             if locked then title = "[LOCK] " .. title end
             if state then title = title .. " [" .. state .. "]" end
             if C.hp and not e.isK and e.hum.MaxHealth > 0 then
                 sub = string.format("%d%%", math.floor(e.hum.Health / e.hum.MaxHealth * 100 + 0.5))
             end
-            if (not e.isK) and e.hum.MaxHealth > 0 then
-                frac = e.hum.Health / e.hum.MaxHealth
-            end
+            if (not e.isK) and e.hum.MaxHealth > 0 then frac = e.hum.Health / e.hum.MaxHealth end
             mini = state or (locked and "LOCK") or (e.isK and "KILLER") or ""
-        elseif e.kind == "gen" then
-            local prog = ESP.genProg(e)
+        elseif kind == "gen" then
+            local prog = E.genProg(e)
             local known = prog ~= nil
             prog = prog or 0
             if C.hideDoneGens and known and prog >= 99.9 then show = false end
-            col = known and ESP_COL.genLo:Lerp(ESP_COL.genHi, math.clamp(prog / 100, 0, 1)) or ESP_COL.genUnk
+            col = known and COL.genLo:Lerp(COL.genHi, clamp(prog / 100, 0, 1)) or COL.genUnk
             title = known and string.format("GEN %d%%", math.floor(prog + 0.5)) or "GEN"
-            local n = tonumber(e.model:GetAttribute("PlayersRepairingCount")) or 0
-            if n > 0 then title = title .. " x" .. n end
-            if e.model:GetAttribute("ProgressPaused") then title = title .. " (pause)" end
-            if known then frac = math.clamp(prog / 100, 0, 1) end
+            local m = e.model
+            local cnt = tonumber(m:GetAttribute("PlayersRepairingCount")) or 0
+            if cnt > 0 then title = title .. " x" .. cnt end
+            if m:GetAttribute("ProgressPaused") then title = title .. " (pause)" end
+            if m:GetAttribute("Regressing") then title = title .. " (turun)" end
+            if known then frac = clamp(prog / 100, 0, 1) end
             mini = known and string.format("%d%%", math.floor(prog + 0.5)) or "GEN"
-        elseif e.kind == "pallet" then
-            if e.state == "broken" then
+            if S < 0.3 and mode == "full" then mode = "mini" end
+        elseif kind == "pallet" then
+            mode = modeO
+            barsOk = false
+            if E.palletState(e, now) == "broken" then
                 if not C.showBroken then show = false end
-                col, title = ESP_COL.broken, "PALLET patah"
+                col, title = COL.broken, "PALLET patah"
             else
-                col, title = ESP_COL.pallet, "PALLET"
+                col, title = COL.pallet, "PALLET"
             end
-        elseif e.kind == "hook" then
-            col, title = ESP_COL.hook, "HOOK"
+        elseif kind == "hook" then
+            mode = modeO
+            barsOk = false
+            col, title = COL.hook, "HOOK"
+        elseif kind == "trap" then
+            mode = modeO
+            barsOk = false
+            col, title = COL.trap, "TRAP"
         else
-            col, title = ESP_COL.exit, (e.model and e.model.Name or "EXIT"):upper()
+            col, title = COL.exit, (e.model and e.model.Name or "EXIT"):upper()
             mini = "EXIT"
         end
 
         -- teks: off = kosong, mini = satu baris pendek, full = nama + info + jarak
-        -- generator, exit, dan pemain TETAP ada teks di jarak berapa pun; cuma pallet / hook yang kena batas textDistObjs
-        local isPlayer = e.kind == "player"
+        local isPlayer = kind == "player"
         local textOk = mode ~= "off"
-        local farOnly = (e.kind == "pallet" or e.kind == "hook")
-        if textOk and farOnly and C.textDistObjs > 0 and dist > C.textDistObjs then textOk = false end
+        local farOnly = (kind == "pallet" or kind == "hook" or kind == "trap")
+        local tLimit = C.textDistObjs
+        if S < 0.55 and tLimit <= 0 then tLimit = 150 elseif S < 0.55 and tLimit > 90 then tLimit = 90 end
+        if textOk and farOnly and tLimit > 0 and dist > tLimit then textOk = false end
         if textOk and isPlayer and C.textDistPlayers > 0 and dist > C.textDistPlayers then textOk = false end
-        local distTxt = C.dist and (math.floor(dist + 0.5) .. "m") or nil
+        local distTxt = C.dist and (bucket(dist) .. "m") or nil
         local text = ""
         if textOk then
             if mode == "mini" then
                 text = mini
-                if distTxt and (isPlayer or e.kind == "gen" or e.kind == "exit") then
+                if distTxt and (isPlayer or kind == "gen" or kind == "exit") then
                     text = (text ~= "" and (text .. " ") or "") .. distTxt
                 end
             else
@@ -4967,105 +5420,342 @@ local function espUpdate()
                 if distTxt then text = (text ~= "" and (text .. "\n") or "") .. distTxt end
             end
         end
-        local fade = math.clamp((dist - 60) / 240, 0, 0.4)   -- makin jauh makin pudar (maks 40%)
+        local fade = math.floor(clamp((dist - 60) / 240, 0, 0.4) * 10 + 0.5) / 10   -- makin jauh makin pudar (maks 40%)
 
-        local showBar = show and C.bars and frac ~= nil
-        e.bb.Enabled = show and (text ~= "" or showBar)
-        e.lbl.Text = text
-        e.lbl.TextColor3 = col
-        e.lbl.TextSize = (mode == "mini") and 11 or 12
-        e.lbl.TextTransparency = fade
-        e.lbl.TextStrokeTransparency = 0.5 + fade * 0.5
-        e.bar.Visible = showBar
-        if showBar then
-            e.barFill.Size = UDim2.fromScale(math.clamp(frac, 0, 1), 1)
-            e.barFill.BackgroundColor3 = col
-        end
-
-        -- outline: kandidat jatah Highlight
-        local hlWanted = show and e.hlTarget and e.hlTarget.Parent
-            and ((isPlayer and C.outline) or ((not isPlayer) and C.objOutline))
-        if hlWanted then
-            want[#want + 1] = { e = e, col = col, dist = dist, locked = locked,
-                near = (e.isK == true and dist <= CFG.parry.range),   -- v9.0: killer di dalam cincin parry -> isi lebih tebel
-                prio = locked and 0 or (ESP_PRIO[e.kind] or 3) }
-        elseif e.hl then
-            e.hl.Enabled = false
-        end
-    end
-
-    for key, e in pairs(ESP.entries) do
-        local ok, err = pcall(one, key, e)
-        if not ok and os.clock() - ESP.errAt > 5 then
-            ESP.errAt = os.clock()
-            log("ESP", "update " .. tostring(e.kind) .. " error: " .. tostring(err))
-        end
-    end
-
-    -- jatah Highlight: lock > pemain/generator > exit > hook/pallet, dalam kelompok yang paling deket duluan
-    local okB, errB = pcall(function()
-        table.sort(want, function(a, b)
-            if a.prio ~= b.prio then return a.prio < b.prio end
-            return a.dist < b.dist
-        end)
-        local budget = math.max(1, math.floor(C.maxHighlights))
-        for i, w in ipairs(want) do
-            local e = w.e
-            if i <= budget then
-                local h = espHighlight(e)
-                if h then
-                    if h.Adornee ~= e.hlTarget then h.Adornee = e.hlTarget end
-                    h.Enabled = true
-                    h.OutlineColor = w.col
-                    h.FillColor = w.col
-                    h.FillTransparency = w.locked and 0.55
-                        or (w.near and 0.5)
-                        or (e.kind == "player" and C.fillPlayers)
-                        or (e.kind == "gen" and C.fillGens)
-                        or C.fillObjs
+        local showBar = show and C.bars and barsOk and frac ~= nil
+        local enabled = show and (text ~= "" or showBar)
+        local u = e.ui
+        if enabled and not u then u = E.uiGet(e) end
+        if u then
+            if e.cEn ~= enabled then
+                e.cEn = enabled
+                u.bb.Enabled = enabled
+            end
+            if enabled then
+                if e.cText ~= text then e.cText = text; u.lbl.Text = text end
+                if e.cCol ~= col then e.cCol = col; u.lbl.TextColor3 = col end
+                if e.cFade ~= fade then
+                    e.cFade = fade
+                    u.lbl.TextTransparency = fade
+                    u.lbl.TextStrokeTransparency = 0.5 + fade * 0.5
                 end
-            elseif e.hl then
-                e.hl.Enabled = false
+                local sz = (mode == "mini") and 11 or 12
+                if e.cSize ~= sz then e.cSize = sz; u.lbl.TextSize = sz end
+                if e.cBar ~= showBar then e.cBar = showBar; u.bar.Visible = showBar end
+                if showBar then
+                    local fr = math.floor(clamp(frac, 0, 1) * 50 + 0.5)
+                    if e.cFrac ~= fr then e.cFrac = fr; u.fill.Size = UDim2.fromScale(fr / 50, 1) end
+                    if e.cBarCol ~= col then e.cBarCol = col; u.fill.BackgroundColor3 = col end
+                end
             end
         end
-    end)
-    if not okB and os.clock() - ESP.errAt > 5 then
-        ESP.errAt = os.clock()
-        log("ESP", "outline error: " .. tostring(errB))
+        e.hidden, e.col, e.lockedNow = not show, col, locked
     end
-end
 
-local function espStep()
-    local C = CFG.esp
-    local now = os.clock()
-    if now - ESP.tPlayers >= C.scanPlayers then
-        ESP.tPlayers = now
-        espScanPlayers()
+    function E.hlApply(e, w, C, cap)
+        local h = E.hlAcquire(e, cap)
+        if not h then return false end
+        local tgt = e.hlTarget
+        if e.cHlT ~= tgt then e.cHlT = tgt; h.Adornee = tgt end
+        local col = e.col or WHITE
+        if e.cHlCol ~= col then e.cHlCol = col; h.OutlineColor = col; h.FillColor = col end
+        local ft
+        if w.locked then ft = 0.55
+        elseif w.near then ft = 0.5
+        elseif e.kind == "player" then ft = C.fillPlayers
+        elseif e.kind == "gen" then ft = C.fillGens
+        else ft = C.fillObjs end
+        if e.cHlFill ~= ft then e.cHlFill = ft; h.FillTransparency = ft end
+        if not e.cHlOn then e.cHlOn = true; h.Enabled = true end
+        return true
     end
-    if now - ESP.tObjs >= C.scanObjects then
-        ESP.tObjs = now
-        espScanObjects()
+
+    ---------------------------------------------------------------- governor (FPS + beban objek)
+    function E.govern(now)
+        local G = E.gov
+        local el = now - G.t0
+        if el < 0.5 then return end
+        local fps = G.n / el
+        local worst = G.worst
+        G.t0, G.n, G.worst = now, 0, 0
+        G.fps = G.fps * 0.4 + fps * 0.6
+        local C = CFG.esp
+        if (not C.adaptive) or FORCED[C.tier] then
+            G.scaleFps = 1
+            return
+        end
+        local target = clamp(tonumber(C.targetFps) or 45, 15, 240)
+        local minS = clamp(tonumber(C.minScale) or 0.25, 0.1, 1)
+        -- kalau udah mentok di skala terendah >15 dtk dan FPS tetap rendah, berarti ESP bukan penyebabnya:
+        -- jangan dipaksa jelek terus, naikin lagi dan tahan 60 dtk sebelum dicoba turun lagi
+        if G.scaleFps <= minS * 1.001 then
+            if not G.floorSince then
+                G.floorSince = now
+            elseif now - G.floorSince > 15 and fps < target * 0.9 then
+                G.scaleFps, G.hold, G.floorSince = math.max(0.6, minS), now + 60, nil
+                log("ESP", string.format("FPS %.0f tetap di bawah target walau ESP minimal: penyebabnya bukan ESP, kualitas dinaikkan lagi", fps))
+                return
+            end
+        else
+            G.floorSince = nil
+        end
+        if fps < target * 0.9 or worst > 0.25 then
+            G.scaleFps = math.max(minS, G.scaleFps * ((fps < target * 0.7) and 0.7 or 0.88))
+            G.hold = now + 3        -- habis turun, tahan 3 dtk sebelum boleh naik lagi
+        elseif fps > target * 1.06 and now > G.hold then
+            G.scaleFps = math.min(1, G.scaleFps + 0.05)
+        end
     end
-    espUpdate()
+
+    keep(RunService.Heartbeat:Connect(function(dt)
+        local G = E.gov
+        G.n = G.n + 1
+        if dt > G.worst then G.worst = dt end
+    end))
+
+    ---------------------------------------------------------------- satu putaran: hitung beban, jatah, tulis
+    local function byScore(a, b) return a.score < b.score end
+
+    function E.tick(now)
+        local C = CFG.esp
+        local cam = workspace.CurrentCamera
+        local me = myRoot()
+        local from = (me and me.Position) or (cam and cam.CFrame.Position)
+        if not from then return end
+
+        local lockedChar = Gun.lockTarget and Gun.lockTarget.Parent
+        local vChar = Veil.targetChar
+        local parryRange = CFG.parry.range
+
+        local look, camPos, cosV
+        if cam and C.cullView then
+            look, camPos = cam.CFrame.LookVector, cam.CFrame.Position
+            local vp = cam.ViewportSize
+            local asp = (vp.Y > 0) and (vp.X / vp.Y) or 1.78
+            local half = math.atan(math.tan(math.rad(cam.FieldOfView) / 2) * asp) + math.rad(14)
+            cosV = (half >= math.pi / 2) and -1 or math.cos(half)
+        end
+
+        -- 1) kumpulin kandidat + biaya penuh
+        local list, nList = E.list, 0
+        local st = E.stat
+        local fullCost, objTotal = 0, 0
+        local cPlayers, cGens, cPallets, cHooks, cExits, cTraps = 0, 0, 0, 0, 0, 0
+        local maxD = C.maxDist
+        for key, e in pairs(E.entries) do
+            local ad = e.adornee
+            local dead = (not (ad and ad.Parent)) or (e.hum and e.hum.Health <= 0)
+            if (not dead) and now - e.vAt > 1.5 then
+                e.vAt = now
+                if not ad:IsDescendantOf(workspace) then dead = true end
+            end
+            if dead then
+                E.drop(key)
+            else
+                local kind = e.kind
+                if kind == "player" then cPlayers = cPlayers + 1
+                elseif kind == "gen" then cGens = cGens + 1
+                elseif kind == "pallet" then cPallets = cPallets + 1
+                elseif kind == "hook" then cHooks = cHooks + 1
+                elseif kind == "exit" then cExits = cExits + 1
+                else cTraps = cTraps + 1 end
+                local pos = ad.Position
+                local dist = (pos - from).Magnitude
+                local w = e.w
+                w.e, w.dist = e, dist
+                w.inRange = (maxD <= 0) or dist <= maxD
+                local isObj = OBJ[kind] == true
+                w.obj = isObj
+                local inView = true
+                if cosV and isObj then
+                    local v = pos - camPos
+                    local m = v.Magnitude
+                    inView = m < 14 or (v:Dot(look) > 0 and v:Dot(look) / m >= cosV)
+                end
+                w.view = inView
+                local locked = false
+                if kind == "player" then
+                    local ch = e.model
+                    locked = (e.isK and lockedChar ~= nil and lockedChar == ch) or ((not e.isK) and vChar ~= nil and vChar == ch)
+                    w.score = (locked and -1002) or (e.isK and -1001) or -1000
+                    w.score = w.score + dist * 0.001
+                    w.near = e.isK == true and dist <= parryRange
+                else
+                    w.score = dist * (WEIGHT[kind] or 1) + (inView and 0 or 400)
+                    w.near = false
+                end
+                if locked ~= (e.lockedPrev == true) then
+                    e.lockedPrev = locked
+                    e.nextAt = 0
+                end
+                w.locked = locked
+                if w.inRange and not e.hidden then
+                    fullCost = fullCost + (COST_HL[kind] or 3) + COST_BB + COST_UP
+                    if isObj and kind ~= "gen" then objTotal = objTotal + 1 end
+                end
+                nList = nList + 1
+                list[nList] = w
+            end
+        end
+        for i = #list, nList + 1, -1 do list[i] = nil end
+        table.sort(list, byScore)
+
+        -- 2) skala kualitas = min(skala FPS, skala beban objek). Tier manual menimpa semuanya.
+        local budgetUnits = clamp(tonumber(C.costBudget) or 150, 20, 2000)
+        local minS = clamp(tonumber(C.minScale) or 0.25, 0.1, 1)
+        local capNow = clamp(budgetUnits / math.max(fullCost, 1), minS, 1)
+        E.scaleCap = E.scaleCap * 0.6 + capNow * 0.4
+        local forced = FORCED[C.tier]
+        local S
+        if forced then S = forced
+        elseif C.adaptive then S = math.min(E.gov.scaleFps, E.scaleCap)
+        else S = 1 end
+        E.scale = S
+
+        local maxHL = clamp(math.floor(C.maxHighlights), 1, 28)
+        local hlBudget = clamp(math.floor(maxHL * (0.35 + 0.65 * S) + 0.5), math.min(2, maxHL), maxHL)
+        local objBudget = math.max(4, math.floor((tonumber(C.objMax) or 40) * S + 0.5))
+        local modeP = C.text
+        local modeO = modeP
+        if modeP == "full" and S < 0.55 then modeO = "mini" end
+        if S < 0.3 then modeO = "off" end
+
+        local baseHz = clamp(tonumber(C.updateHz) or 12, 3, 30)
+        local hz = 3 + (baseHz - 3) * S
+        if st.stepMs > 3 then hz = hz * clamp(3 / st.stepMs, 0.4, 1) end
+        E.hz = math.max(3, hz)
+        local interval = 1 / E.hz
+
+        -- 3) bagi jatah, tulis
+        local hlUsed, objShown, nBB = 0, 0, 0
+        local hlList, nHL = E.hlList, 0
+        for i = 1, nList do
+            local w = list[i]
+            local e = w.e
+            local isObj = w.obj
+            local keepIt = w.inRange
+            if keepIt and isObj and e.kind ~= "gen" and not e.hidden then
+                if objShown >= objBudget then keepIt = false else objShown = objShown + 1 end
+            end
+            if keepIt then
+                if now >= e.nextAt or e.col == nil then
+                    local lod = (e.kind == "player" or w.dist < 80) and 1 or ((w.dist < 160) and 2 or 3)
+                    if isObj then lod = lod * 2 end
+                    if not w.view and isObj then lod = lod * 2 end
+                    e.nextAt = now + interval * lod
+                    local okA, errA = pcall(E.apply, e, w, C, modeP, modeO, S, now)
+                    if not okA and now - E.errAt > 5 then
+                        E.errAt = now
+                        log("ESP", "update " .. tostring(e.kind) .. " error: " .. tostring(errA))
+                    end
+                end
+                if e.ui and e.cEn then nBB = nBB + 1 end
+                local wantHL = (not e.hidden) and e.hlTarget and e.hlTarget.Parent
+                    and ((e.kind == "player" and C.outline) or (e.kind ~= "player" and C.objOutline))
+                    and (w.view or not isObj)
+                if wantHL and hlUsed < hlBudget then
+                    hlUsed = hlUsed + 1
+                    nHL = nHL + 1
+                    hlList[nHL] = w
+                else
+                    E.hlRelease(e)
+                end
+            else
+                if e.ui and e.cEn then
+                    e.cEn = false
+                    e.ui.bb.Enabled = false
+                end
+                E.hlRelease(e)
+            end
+        end
+        -- Highlight dipasang SETELAH semua yang ga kebagian dilepas, biar pool-nya cukup di putaran yang sama
+        local hlOk = 0
+        for i = 1, nHL do
+            local w = hlList[i]
+            local okH, got = pcall(E.hlApply, w.e, w, C, maxHL)
+            if okH and got then hlOk = hlOk + 1 else E.hlRelease(w.e) end
+        end
+        hlUsed = hlOk
+        for i = #hlList, nHL + 1, -1 do hlList[i] = nil end
+        -- Highlight yang kelebihan (jatah turun) dibuang dari pool biar ga numpuk
+        while E.hlCount > maxHL and #E.hlFree > 0 do
+            local h = table.remove(E.hlFree)
+            pcall(function() h:Destroy() end)
+            E.hlCount = E.hlCount - 1
+        end
+
+        -- 4) statistik buat UI
+        st.players, st.gens, st.pallets, st.hooks, st.exits, st.traps = cPlayers, cGens, cPallets, cHooks, cExits, cTraps
+        st.bb, st.hl, st.hlBudget, st.hlCap = nBB, hlUsed, hlBudget, maxHL
+        st.objShown, st.objBudget, st.objTotal, st.culled = objShown, objBudget, objTotal, math.max(0, objTotal - objShown)
+        st.cost, st.costBudget = fullCost, budgetUnits
+        st.scale, st.scaleFps, st.scaleCap, st.hz, st.fps = S, E.gov.scaleFps, E.scaleCap, E.hz, E.gov.fps
+        st.forced = forced ~= nil
+        local name = "Minimal"
+        for _, t in ipairs(TIERS) do
+            if S >= t[1] then
+                name = t[2]
+                break
+            end
+        end
+        E.tierName = name
+        st.tier = name
+    end
+
+    function E.step()
+        local C = CFG.esp
+        local now = os.clock()
+        local t0 = now
+        E.govern(now)
+        local slow = 1 / math.max(E.scale, 0.25)   -- 1 (penuh) .. 4 (minimal): scan makin jarang kalau berat
+
+        -- perubahan opsi tampil/sembunyi: scan ulang langsung, ga nunggu jeda
+        local mask = (C.killer and 1 or 0) + (C.survivors and 2 or 0) + (C.objects and 4 or 0) + (C.gens and 8 or 0)
+            + (C.pallets and 16 or 0) + (C.hooks and 32 or 0) + (C.exits and 64 or 0) + (C.traps and 128 or 0)
+        if mask ~= E.cfgMask then
+            E.cfgMask = mask
+            E.tPlayers, E.tObjs = -10, -10
+        end
+        if now - E.tPlayers >= C.scanPlayers * math.min(slow, 2) then
+            E.tPlayers = now
+            E.scanPlayers()
+        end
+        if now - E.tObjs >= math.max(1, C.scanGens) * 2 * math.min(slow, 3) then
+            E.tObjs = now
+            local ok, err = pcall(E.reconcile)
+            if not ok and now - E.errAt > 5 then
+                E.errAt = now
+                log("ESP", "scan objek error: " .. tostring(err))
+            end
+        end
+        E.tick(now)
+        local ms = (os.clock() - t0) * 1000
+        E.stat.stepMs = E.stat.stepMs * 0.8 + ms * 0.2
+    end
+
+    function E.resetGov()
+        local G = E.gov
+        G.scaleFps, G.hold, E.scaleCap = 1, 0, 1
+    end
 end
 
 task.spawn(function()
     local old = ENV.DP3_ESPFOLDER   -- sisa instance sebelumnya (reload)
     if old then pcall(function() old:Destroy() end) end
     while alive() do
-        task.wait(0.1)
+        task.wait(1 / math.clamp(ESP.hz, 3, 30))
         if CFG.esp.enabled then
-            local ok, err = pcall(espStep)
+            local ok, err = pcall(ESP.step)
             if not ok and os.clock() - ESP.errAt > 5 then
                 ESP.errAt = os.clock()
                 log("ESP", "error: " .. tostring(err))
             end
             ENV.DP3_ESPFOLDER = ESP.folder
         elseif next(ESP.entries) or ESP.folder then
-            espClear()
+            ESP.clear()
         end
     end
-    espClear()
+    ESP.clear()
 end)
 
 ------------------------------------------------------------------ 5) CINCIN + GARIS HIT KILLER (v9.1)
@@ -5271,7 +5961,7 @@ keep(UIS.InputBegan:Connect(function(i, gp)
         notify("Hide Skill UI: " .. (CFG.skill.hideUI and "ON" or "OFF"))
     elseif k == CFG.keys.esp then
         CFG.esp.enabled = not CFG.esp.enabled
-        if not CFG.esp.enabled then espClear() end
+        if not CFG.esp.enabled then ESP.clear() end
         notify("ESP: " .. (CFG.esp.enabled and "ON" or "OFF"))
     elseif k == CFG.keys.text then
         CFG.esp.text = ({ full = "mini", mini = "off", off = "full" })[CFG.esp.text] or "full"
@@ -5290,7 +5980,7 @@ end))
     local HS = game:GetService("HttpService")
     local DEF = {}
     local ENUMS = {
-        ["parry.via"] = true, ["esp.text"] = true, ["veil.mode"] = true,
+        ["parry.via"] = true, ["esp.text"] = true, ["esp.tier"] = true, ["veil.mode"] = true,
         ["veil.part"] = true, ["veil.priority"] = true, ["veil.aimFrom"] = true,
     }
     for g, t in pairs(CFG) do
@@ -5305,7 +5995,8 @@ end))
     -- efek samping yang dulu ada di tombol panel lama
     local function onSet(path, v)
         if path == "gun.aimLock" and not v then Gun.lockTarget = nil
-        elseif path == "esp.enabled" and not v then pcall(espClear)
+        elseif path == "esp.enabled" and not v then pcall(ESP.clear)
+        elseif path == "esp.tier" or path == "esp.adaptive" then pcall(ESP.resetGov)
         elseif path == "gun.learn" and not v then Gun.leadAdj, Gun.biasR, Gun.biasU = 0, 0, 0
         elseif path == "parry.via" and v == "game" then PG.scanAt, PG.gap = 0, 1.5
         elseif path == "veil.mode" then Veil.heldKey, Veil.heldBtn, Veil.toggled = false, false, false
@@ -5358,7 +6049,7 @@ end))
         end
     end
 
-    local API = { Version = "12.0", CFG = Flat, Store = Store, Net = Net, UI = {}, Save = save }
+    local API = { Version = "13.0", CFG = Flat, Store = Store, Net = Net, UI = {}, Save = save }
     API.Counters = setmetatable({}, { __index = function(_, k)
         if k == "parry" then return Parry.nOk or 0
         elseif k == "parryMiss" then return Parry.nMiss or 0
@@ -5378,17 +6069,21 @@ end))
 
     function API.Summary()
         local L = {
-            string.format("DP v12.0 | ping %.0f ms | fps %.0f", Net.rtt * 1000, 1 / Net.frameDt),
+            string.format("DP v13.0 | ping %.0f ms | fps %.0f", Net.rtt * 1000, 1 / Net.frameDt),
             string.format("parry: kirim %d | ok %d | meleset %d", Parry.nFire or 0, Parry.nOk or 0, Parry.nMiss or 0),
             string.format("gun: %s | hit %d/%d", tostring(Gun.status), Gun.hits, Gun.shots),
             string.format("skill: rung %s | hasil %d", tostring(Skill.tierName or "-"), Skill.resultN or 0),
-            tostring(Veil.statusText()),
+            string.format("esp: %s %d%% | fps %.0f | %.0f Hz | %.2f ms | HL %d/%d | objek %d/%d | beban %d/%d", tostring(ESP.stat.tier),
+            math.floor(ESP.stat.scale * 100 + 0.5), ESP.stat.fps, ESP.stat.hz, ESP.stat.stepMs, ESP.stat.hl, ESP.stat.hlBudget,
+            ESP.stat.objShown, ESP.stat.objTotal, math.floor(ESP.stat.cost + 0.5), ESP.stat.costBudget),
+        tostring(Veil.statusText()),
             "log:",
             table.concat(LOG, "\n"),
         }
         return table.concat(L, "\n")
     end
     API.Analyze = API.Summary
+    function API.ESP() return ESP.stat end
     API.Reset = resetAll
 
     API.Act = {
@@ -5406,6 +6101,7 @@ end))
             task.spawn(function() pcall(Veil.dumpMath) end)
         end,
         resetCalib = function() Veil.resetCalib(); notify("Kalibrasi Veil dihapus") end,
+        espReset = function() pcall(ESP.clear); pcall(ESP.resetGov); notify("Skala ESP direset") end,
     }
 
     function API.Stop()
@@ -5414,7 +6110,7 @@ end))
         for _, n in ipairs({ "DP3_CamLock", "DP3_AimLock", "DP3_VeilAim", "DP3_HideSkillUI" }) do
             pcall(function() RunService:UnbindFromRenderStep(n) end)
         end
-        pcall(espClear)
+        pcall(ESP.clear)
         for _, k in ipairs({ "DP3_VEILFOLDER", "DP3_ESPFOLDER", "DP3_RINGFOLDER" }) do
             local f = ENV[k]
             if f then pcall(function() f:Destroy() end); ENV[k] = nil end
@@ -5430,7 +6126,7 @@ end))
     ENV.__DPAPI = API
 end)()
 
-notify("v12.0 loaded. hook=" .. tostring(Gun.hookOK) .. " | hub: tombol bulat / RightAlt")
+notify("v13.0 loaded. hook=" .. tostring(Gun.hookOK) .. " | hub: tombol bulat / RightAlt")
 end
 
 -- =====================================================================
@@ -6667,7 +7363,7 @@ end
 -- =====================================================================
 --  DASAR
 -- =====================================================================
-local VERSION = "12.0"
+local VERSION = "13.0"
 
 local Players      = game:GetService("Players")
 local RunService   = game:GetService("RunService")
@@ -7101,6 +7797,8 @@ function K.pollPar()
         return
     end
     local c, net = AP.Counters, AP.Net or {}
+    local okE, es = pcall(function() return AP.ESP and AP.ESP() or nil end)
+    V.esp = okE and es or nil
     local v = V.par
     v.on = CFG13["parry.enabled"] == true
     local okS, st = pcall(AP.State)
@@ -7388,11 +8086,17 @@ local OPT_DESC = {
     ["esp.maxHighlights"] = "batas Highlight bareng (Roblox sekitar 31)", ["ring.enabled"] = "cincin jangkauan di tanah",
     ["ring.cone"] = "garis kerucut serang killer", ["veil.mode"] = "hold, toggle, auto", ["veil.part"] = "auto, head, body",
     ["veil.priority"] = "cross, near, lowhp", ["veil.autoThrow"] = "EKSPERIMEN: lempar otomatis", ["veil.fov"] = "sudut dari crosshair (derajat)",
+    ["esp.adaptive"] = "kualitas ESP ngikutin FPS dan jumlah objek di ESP", ["esp.tier"] = "auto, full, light, eco, min (kunci kualitas)",
+    ["esp.targetFps"] = "FPS yang dijaga ESP adaptif", ["esp.costBudget"] = "anggaran beban ESP, makin kecil makin banyak yang dipangkas",
+    ["esp.objMax"] = "maks objek digambar pada kualitas penuh", ["esp.traps"] = "ESP jebakan Butcher (tag BearTrap)",
+    ["esp.cullView"] = "objek di luar pandangan tanpa Highlight", ["esp.minScale"] = "skala kualitas terendah",
+    ["esp.updateHz"] = "update ESP per detik pada kualitas penuh",
 }
 local OPT_ENUM = {
     ["parry.via"] = { "game", "input", "remote" }, ["esp.text"] = { "full", "mini", "off" },
     ["veil.mode"] = { "hold", "toggle", "auto" }, ["veil.part"] = { "auto", "head", "body" },
     ["veil.priority"] = { "cross", "near", "lowhp" }, ["veil.aimFrom"] = { "cam", "spawn" },
+    ["esp.tier"] = { "auto", "full", "light", "eco", "min" },
 }
 local OPT_HIDE = { ["skill.zoneLo"] = true, ["skill.zoneHi"] = true }
 local OPT_RANGE = {
@@ -7401,6 +8105,8 @@ local OPT_RANGE = {
     ["esp.textDistPlayers"] = { 0, 300, 10 }, ["esp.textDistObjs"] = { 0, 300, 10 }, ["veil.throwHold"] = { 0, 1, 0.01 },
     ["parry.range"] = { 4, 30, 1 }, ["gun.lockFov"] = { 10, 180, 5 }, ["veil.fov"] = { 5, 120, 1 }, ["veil.maxDist"] = { 50, 500, 10 },
     ["gun.maxDist"] = { 50, 500, 10 }, ["gun.snapFov"] = { 1, 30, 1 }, ["veil.speed"] = { 20, 400, 5 },
+    ["esp.costBudget"] = { 40, 400, 10 }, ["esp.targetFps"] = { 20, 144, 5 }, ["esp.minScale"] = { 0.1, 1, 0.05 },
+    ["esp.updateHz"] = { 3, 30, 1 }, ["esp.objMax"] = { 6, 80, 2 }, ["esp.maxHighlights"] = { 4, 28, 1 },
 }
 
 local function optAutoStep(v)
@@ -8124,7 +8830,7 @@ track(UIS.InputEnded:Connect(function(i)
 end))
 
 -- =====================================================================
---  WINDOW
+--  WINDOW (v13: datar dan rapi, tanpa efek dekorasi)
 -- =====================================================================
 ROOT = Instance.new("ScreenGui")
 ROOT.Name = "AP13_Hub"
@@ -8138,8 +8844,8 @@ if not okp or not ROOT.Parent then
     ROOT.Parent = PGui
 end
 
-local HDR, TABH, FTR = 70, 40, 28
-local WIN = { w = 392, h = 600 }
+local HDR, TABH, FTR = 52, 38, 24
+local WIN = { w = 400, h = 580 }
 local OPEN, MINI = true, false
 local START = os.clock()
 local MONO, BLACK = Enum.Font.RobotoMono, Enum.Font.GothamBlack
@@ -8153,16 +8859,12 @@ local function col(f) return f >= 55 and TH.on or (f >= 40 and TH.amb or TH.err)
 local function colPing(p) return p < 90 and TH.on or (p < 160 and TH.amb or TH.err) end
 local function mmss(s) return string.format("%02d:%02d", math.floor(s / 60) % 100, math.floor(s) % 60) end
 
--- ---------- jendela: dasar kaca gelap + border gradien yang berputar ----------
-UI.win = new("CanvasGroup", { Name = "Win", Size = UDim2.fromOffset(392, 600), Position = UDim2.fromOffset(40, 24),
-    BackgroundColor3 = Color3.fromRGB(10, 8, 22), BackgroundTransparency = 1 - S.op / 100, BorderSizePixel = 0,
+-- jendela: Frame biasa (bukan CanvasGroup, render lebih murah), border tipis
+UI.win = new("Frame", { Name = "Win", Size = UDim2.fromOffset(400, 580), Position = UDim2.fromOffset(40, 24),
+    BackgroundColor3 = Color3.fromRGB(14, 13, 22), BackgroundTransparency = 1 - S.op / 100, BorderSizePixel = 0,
     ClipsDescendants = true, Active = true }, ROOT)
-corner(UI.win, 18)
-UI.wstroke = stroke(UI.win, WHITE, 1.5, 0.1)
-UI.bgrad = new("UIGradient", { Rotation = 0 }, UI.wstroke)
-onTheme(function()
-    UI.bgrad.Color = ColorSequence.new({ ColorSequenceKeypoint.new(0, TH.brand), ColorSequenceKeypoint.new(0.5, TH.brand2), ColorSequenceKeypoint.new(1, TH.brand) })
-end)
+corner(UI.win, 14)
+UI.wstroke = stroke(UI.win, WHITE, 1, 0.86)
 UI.wscale = new("UIScale", { Scale = S.sc / 100 }, UI.win)
 
 local function vp()
@@ -8181,111 +8883,29 @@ local function clampTo(obj, x, y)
 end
 local function applyLayout()
     local v, sc = vp(), UI.wscale.Scale
-    WIN.w = math.min(392, math.floor(v.X / sc) - 16)
-    WIN.h = math.min(600, math.floor(v.Y / sc) - 24)
+    WIN.w = math.min(400, math.floor(v.X / sc) - 16)
+    WIN.h = math.min(580, math.floor(v.Y / sc) - 24)
     UI.win.Size = UDim2.fromOffset(WIN.w, WIN.h)
     clampTo(UI.win, UI.win.Position.X.Offset, UI.win.Position.Y.Offset)
 end
 
--- ---------- lapisan FX: tint gradien, aurora, partikel, scanline ----------
-UI.fx = new("Frame", { Name = "FX", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, BorderSizePixel = 0 }, UI.win)
-local tint = new("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = WHITE, BorderSizePixel = 0 }, UI.fx)
-UI.tintG = new("UIGradient", { Rotation = 60, Transparency = ns(0, 0.84, 0.5, 1, 1, 0.9) }, tint)
-onTheme(function() UI.tintG.Color = ColorSequence.new(TH.brand, TH.brand2) end)
-
-local function softCircle(parent, size, color)
-    local box = new("Frame", { Size = UDim2.fromOffset(size, size), AnchorPoint = Vector2.new(0.5, 0.5),
-        Position = UDim2.new(0.5, 0, 0.5, 0), BackgroundTransparency = 1 }, parent)
-    local layers = {}
-    for i, k in ipairs({ 1, 0.72, 0.44 }) do
-        local f = new("Frame", { Size = UDim2.fromOffset(size * k, size * k), AnchorPoint = Vector2.new(0.5, 0.5),
-            Position = UDim2.new(0.5, 0, 0.5, 0), BackgroundColor3 = color, BackgroundTransparency = 0.955, BorderSizePixel = 0 }, box)
-        corner(f, size * k / 2)
-        layers[i] = f
-    end
-    return box, layers
-end
-UI.blobs = {}
-for i = 1, 3 do
-    local box, layers = softCircle(UI.fx, 240 + i * 30, TH.brand)
-    UI.blobs[i] = { f = box, ph = i * 2.1, sp = 0.14 + i * 0.04 }
-    onTheme(function()
-        for _, l in ipairs(layers) do l.BackgroundColor3 = (i == 2) and TH.brand2 or TH.brand end
-    end)
-end
-UI.parts = {}
-for i = 1, 12 do
-    local sz = 2 + (i % 3)
-    local f = new("Frame", { Size = UDim2.fromOffset(sz, sz), BackgroundColor3 = WHITE, BackgroundTransparency = 0.55 + (i % 4) * 0.1,
-        BorderSizePixel = 0, Position = UDim2.new(math.random(), 0, math.random(), 0) }, UI.fx)
-    corner(f, 2)
-    UI.parts[i] = { f = f, x = math.random(), y = math.random(), v = 0.02 + math.random() * 0.04 }
-end
-UI.scan = new("Frame", { Size = UDim2.new(1, 0, 0.14, 0), Position = UDim2.new(0, 0, -0.2, 0), BackgroundColor3 = WHITE, BorderSizePixel = 0 }, UI.fx)
-new("UIGradient", { Rotation = 90, Transparency = ns(0, 1, 0.5, 0.94, 1, 1) }, UI.scan)
-
--- watermark samar "By Duke"
-label(UI.win, "By Duke", 62, WHITE, FD, { Size = UDim2.fromOffset(260, 76), AnchorPoint = Vector2.new(1, 1),
-    Position = UDim2.new(1, 14, 1, -40), Rotation = -12, TextTransparency = 0.965, TextXAlignment = Enum.TextXAlignment.Right })
-
--- ---------- header: judul berkilau + glitch, bar boss HP ----------
+-- ---------- header: judul, ringkasan, FPS, tombol ----------
 UI.hd = new("Frame", { Name = "Header", Size = UDim2.new(1, 0, 0, HDR), BackgroundTransparency = 1, Active = true }, UI.win)
-local hbg = new("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = WHITE, BorderSizePixel = 0 }, UI.hd)
-local hbgG = new("UIGradient", { Rotation = 0, Transparency = ns(0, 0.86, 0.7, 0.96, 1, 1) }, hbg)
-onTheme(function() hbgG.Color = ColorSequence.new(TH.brand, TH.brand2) end)
-local hline = new("Frame", { Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = WHITE, BorderSizePixel = 0 }, UI.hd)
-new("UIGradient", { Transparency = ns(0, 1, 0.5, 0.75, 1, 1) }, hline)
-
-local TITLE = "DISTRIK PEMBANTAI"
-local tpos, tsize = UDim2.fromOffset(14, 8), UDim2.new(1, -160, 0, 20)
-UI.gR = label(UI.hd, TITLE, 14, Color3.fromRGB(255, 60, 90), BLACK, { Position = tpos, Size = tsize, TextTransparency = 1 })
-UI.gC = label(UI.hd, TITLE, 14, Color3.fromRGB(60, 230, 255), BLACK, { Position = tpos, Size = tsize, TextTransparency = 1 })
-UI.title = label(UI.hd, TITLE, 14, WHITE, BLACK, { Position = tpos, Size = tsize, TextTruncate = Enum.TextTruncate.AtEnd })
-UI.tgrad = new("UIGradient", {}, UI.title)
-onTheme(function()
-    UI.tgrad.Color = ColorSequence.new({ ColorSequenceKeypoint.new(0, TH.bone), ColorSequenceKeypoint.new(0.38, TH.bone),
-        ColorSequenceKeypoint.new(0.5, TH.brand), ColorSequenceKeypoint.new(0.62, TH.bone), ColorSequenceKeypoint.new(1, TH.bone) })
-end)
-function UI.doGlitch()
-    if not S.fx then return end
-    UI.gR.Position = UDim2.fromOffset(12, 8); UI.gC.Position = UDim2.fromOffset(16, 9)
-    UI.gR.TextTransparency, UI.gC.TextTransparency = 0.45, 0.45
-    task.delay(0.09, function()
-        UI.gR.TextTransparency, UI.gC.TextTransparency = 1, 1
-        UI.gR.Position, UI.gC.Position = tpos, tpos
-    end)
-end
-
-UI.hp, UI.hpLast = {}, -1
 do
-    local box = new("Frame", { Position = UDim2.fromOffset(14, 32), Size = UDim2.new(1, -160, 0, 8), BackgroundTransparency = 1 }, UI.hd)
-    hlist(box, 2)
-    for i = 1, 20 do
-        local s = new("Frame", { Size = UDim2.new(1 / 20, -1.9, 1, 0), BackgroundColor3 = WHITE, BackgroundTransparency = 0.88,
-            BorderSizePixel = 0, LayoutOrder = i }, box)
-        corner(s, 2)
-        UI.hp[i] = s
-    end
+    local dot = new("Frame", { Size = UDim2.fromOffset(8, 8), Position = UDim2.fromOffset(14, 12), BackgroundColor3 = TH.brand, BorderSizePixel = 0 }, UI.hd)
+    corner(dot, 4)
+    onTheme(function() dot.BackgroundColor3 = TH.brand end)
+    UI.title = label(UI.hd, "DISTRIK PEMBANTAI", 14, TH.bone, BLACK, { Position = UDim2.fromOffset(30, 6), Size = UDim2.new(1, -190, 0, 20),
+        TextTruncate = Enum.TextTruncate.AtEnd })
+    UI.cap = label(UI.hd, "v" .. VERSION .. " Â· By Duke", 10, TH.mute, MONO, { Position = UDim2.fromOffset(30, 27), Size = UDim2.new(1, -190, 0, 14),
+        TextTruncate = Enum.TextTruncate.AtEnd })
+    local line = new("Frame", { Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = WHITE,
+        BackgroundTransparency = 0.9, BorderSizePixel = 0 }, UI.hd)
 end
-function UI.setHP(frac)
-    local filled = math.floor(math.clamp(frac, 0, 1) * 20 + 0.5)
-    if filled == UI.hpLast then return end
-    UI.hpLast = filled
-    for i, s in ipairs(UI.hp) do
-        if i <= filled then
-            tw(s, 0.25, { BackgroundColor3 = TH.brand:Lerp(TH.brand2, i / 20), BackgroundTransparency = 0 })
-        else
-            tw(s, 0.25, { BackgroundColor3 = WHITE, BackgroundTransparency = 0.88 })
-        end
-    end
-end
-onTheme(function() UI.hpLast = -1 end)
-UI.cap = label(UI.hd, "BY DUKE Â· 0/4 AKTIF", 10, TH.mute, MONO, { Position = UDim2.fromOffset(14, 46), Size = UDim2.new(1, -160, 0, 14) })
-UI.hpTxt = label(UI.hd, "HP 100%", 10, TH.brand, MONO, { Position = UDim2.fromOffset(14, 46), Size = UDim2.new(1, -160, 0, 14), TextXAlignment = Enum.TextXAlignment.Right })
-onTheme(function() UI.hpTxt.TextColor3 = TH.brand end)
 
-local fpsPill = new("Frame", { Size = UDim2.fromOffset(58, 22), Position = UDim2.new(1, -144, 0, 14), BackgroundColor3 = Color3.fromRGB(8, 6, 16), BackgroundTransparency = 0.3, BorderSizePixel = 0 }, UI.hd)
-corner(fpsPill, 11); stroke(fpsPill, WHITE, 1, 0.85)
+local fpsPill = new("Frame", { Size = UDim2.fromOffset(58, 22), Position = UDim2.new(1, -144, 0, 15), BackgroundColor3 = Color3.fromRGB(8, 6, 16),
+    BackgroundTransparency = 0.3, BorderSizePixel = 0 }, UI.hd)
+corner(fpsPill, 11); stroke(fpsPill, WHITE, 1, 0.88)
 UI.hfps = label(fpsPill, "-- fps", 11, TH.on, MONO, { Size = UDim2.new(1, 0, 1, 0), TextXAlignment = Enum.TextXAlignment.Center })
 
 function W.iconBtn(parent, kind, pos, onClick)
@@ -8313,32 +8933,21 @@ function W.iconBtn(parent, kind, pos, onClick)
     return b
 end
 
--- ---------- tab: pil geser + lencana status ----------
-local TABS = { { "home", "Beranda" }, { "com", "Combat" }, { "opt", "Opsi" }, { "lag", "Anti-lag" }, { "cfg", "Setelan" } }
+-- ---------- tab: teks + garis bawah ----------
+local TABS = { { "home", "Beranda" }, { "com", "Combat" }, { "esp", "ESP" }, { "lag", "Anti-lag" }, { "opt", "Opsi" }, { "cfg", "Setelan" } }
 UI.tabBar = new("Frame", { Size = UDim2.new(1, 0, 0, TABH), Position = UDim2.fromOffset(0, HDR), BackgroundTransparency = 1 }, UI.win)
-new("Frame", { Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = WHITE, BackgroundTransparency = 0.9, BorderSizePixel = 0 }, UI.tabBar)
-UI.pill = new("Frame", { Size = UDim2.new(1 / #TABS, -10, 0, 28), Position = UDim2.new(0, 5, 0.5, -14), BackgroundColor3 = TH.brand,
-    BackgroundTransparency = 0.84, BorderSizePixel = 0 }, UI.tabBar)
-corner(UI.pill, 14)
-local pillSt = stroke(UI.pill, TH.brand, 1, 0.4)
-onTheme(function() UI.pill.BackgroundColor3 = TH.brand; pillSt.Color = TH.brand end)
+new("Frame", { Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = WHITE, BackgroundTransparency = 0.92, BorderSizePixel = 0 }, UI.tabBar)
+UI.pill = new("Frame", { Size = UDim2.new(1 / #TABS, -16, 0, 2), Position = UDim2.new(0, 8, 1, -2), BackgroundColor3 = TH.brand, BorderSizePixel = 0 }, UI.tabBar)
+corner(UI.pill, 1)
+onTheme(function() UI.pill.BackgroundColor3 = TH.brand end)
 UI.groups, UI.panes, UI.tabBtn, UI.badge = {}, {}, {}, {}
 
 function W.showTab(id)
     if id == curTab then return end
     curTab = id
-    for k, g in pairs(UI.groups) do if k ~= id then g.Visible = false end end
-    local g = UI.groups[id]
-    g.Visible = true
-    local base = UDim2.fromOffset(0, HDR + TABH)
-    if S.motion then
-        g.GroupTransparency = 1; g.Position = UDim2.fromOffset(0, HDR + TABH + 12)
-        tw(g, 0.2, { GroupTransparency = 0, Position = base })
-    else
-        g.GroupTransparency = 0; g.Position = base
-    end
+    for k, g in pairs(UI.groups) do g.Visible = (k == id) end
     for i, t in ipairs(TABS) do
-        if t[1] == id then tw(UI.pill, 0.22, { Position = UDim2.new((i - 1) / #TABS, 5, 0.5, -14) }) end
+        if t[1] == id then tw(UI.pill, 0.18, { Position = UDim2.new((i - 1) / #TABS, 8, 1, -2) }) end
     end
     for _, r in ipairs(REF) do if r.tab == id then runR(r, true) end end
 end
@@ -8348,13 +8957,13 @@ for i, t in ipairs(TABS) do
         Text = t[2], TextSize = 12, Font = FD, TextColor3 = TH.mute, AutoButtonColor = false, BorderSizePixel = 0 }, UI.tabBar)
     b.Activated:Connect(function() W.showTab(t[1]) end)
     UI.tabBtn[t[1]] = b
-    if t[1] == "com" or t[1] == "lag" then
-        local d = new("Frame", { Size = UDim2.fromOffset(6, 6), Position = UDim2.new(1, -14, 0, 7), BackgroundColor3 = TH.on, BackgroundTransparency = 1, BorderSizePixel = 0 }, b)
+    if t[1] == "com" or t[1] == "lag" or t[1] == "esp" then
+        local d = new("Frame", { Size = UDim2.fromOffset(6, 6), Position = UDim2.new(1, -10, 0, 7), BackgroundColor3 = TH.on, BackgroundTransparency = 1, BorderSizePixel = 0 }, b)
         corner(d, 3)
         UI.badge[t[1]] = d
     end
-    local g = new("CanvasGroup", { Name = "G_" .. t[1], Size = UDim2.new(1, 0, 1, -(HDR + TABH + FTR)), Position = UDim2.fromOffset(0, HDR + TABH),
-        BackgroundTransparency = 1, BorderSizePixel = 0, Visible = (t[1] == "home") }, UI.win)
+    local g = new("Frame", { Name = "G_" .. t[1], Size = UDim2.new(1, 0, 1, -(HDR + TABH + FTR)), Position = UDim2.fromOffset(0, HDR + TABH),
+        BackgroundTransparency = 1, BorderSizePixel = 0, Visible = (t[1] == "home"), ClipsDescendants = true }, UI.win)
     local sf = new("ScrollingFrame", { Name = t[1], Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, BorderSizePixel = 0,
         ScrollBarThickness = 3, ScrollBarImageColor3 = TH.mute, CanvasSize = UDim2.new(), AutomaticCanvasSize = AUTO_Y,
         ScrollingDirection = Enum.ScrollingDirection.Y }, g)
@@ -8366,6 +8975,7 @@ reg(function()
     local map = {
         com = { "par", function() return K.pGet("parry.enabled") end },
         lag = { "lag", function() return V.lag.applied end },
+        esp = { "par", function() return K.pGet("esp.enabled") end },
     }
     for id, m in pairs(map) do
         local d, st = UI.badge[id], MOD[m[1]].state
@@ -8378,11 +8988,9 @@ end, true)
 
 -- ---------- footer + wadah toast ----------
 local foot = new("Frame", { Size = UDim2.new(1, 0, 0, FTR), Position = UDim2.new(0, 0, 1, -FTR), BackgroundTransparency = 1 }, UI.win)
-new("Frame", { Size = UDim2.new(1, 0, 0, 1), BackgroundColor3 = WHITE, BackgroundTransparency = 0.9, BorderSizePixel = 0 }, foot)
-local fdot = new("Frame", { Size = UDim2.fromOffset(6, 6), Position = UDim2.new(0, 12, 0.5, -3), BackgroundColor3 = TH.brand, BorderSizePixel = 0 }, foot)
-corner(fdot, 3); onTheme(function() fdot.BackgroundColor3 = TH.brand end)
-label(foot, "BY DUKE", 11, TH.bone, BLACK, { Position = UDim2.fromOffset(24, 0), Size = UDim2.new(0.4, 0, 1, 0) })
-label(foot, "DISTRIK PEMBANTAI Â· v" .. VERSION, 10, TH.mute, MONO, { Position = UDim2.new(0.3, 0, 0, 0), Size = UDim2.new(0.7, -12, 1, 0), TextXAlignment = Enum.TextXAlignment.Right })
+new("Frame", { Size = UDim2.new(1, 0, 0, 1), BackgroundColor3 = WHITE, BackgroundTransparency = 0.92, BorderSizePixel = 0 }, foot)
+label(foot, "BY DUKE", 10, TH.bone, BLACK, { Position = UDim2.fromOffset(14, 0), Size = UDim2.new(0.4, 0, 1, 0) })
+UI.footR = label(foot, "v" .. VERSION, 10, TH.mute, MONO, { Position = UDim2.new(0.3, 0, 0, 0), Size = UDim2.new(0.7, -14, 1, 0), TextXAlignment = Enum.TextXAlignment.Right })
 
 UI.toasts = new("Frame", { Size = UDim2.new(1, -24, 0, 0), AutomaticSize = AUTO_Y, AnchorPoint = Vector2.new(0.5, 0),
     Position = UDim2.new(0.5, 0, 0, HDR + TABH + 8), BackgroundTransparency = 1, ZIndex = 30 }, UI.win)
@@ -8657,48 +9265,6 @@ function W.tile(parent, title, getOn, getState, onTap)
     end)
 end
 
--- layar pembuka bergaya boot boss
-function W.intro(force)
-    if not (S.intro or force) then return end
-    local ov = new("CanvasGroup", { Name = "Intro", Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.fromRGB(8, 6, 16),
-        BorderSizePixel = 0, ZIndex = 200, Active = true }, UI.win)
-    local skip = false
-    ov.InputBegan:Connect(function(i) if isPtr(i) then skip = true end end)
-    local C = Enum.TextXAlignment.Center
-    local t1 = label(ov, "DISTRIK", 30, TH.bone, BLACK, { Size = UDim2.new(1, 0, 0, 36), Position = UDim2.new(0, 0, 0.2, 0), TextXAlignment = C, TextTransparency = 1, ZIndex = 201 })
-    local t2 = label(ov, "PEMBANTAI", 38, WHITE, BLACK, { Size = UDim2.new(1, 0, 0, 46), Position = UDim2.new(0, 0, 0.2, 38), TextXAlignment = C, TextTransparency = 1, ZIndex = 201 })
-    local g2 = new("UIGradient", { Color = ColorSequence.new(TH.brand, TH.brand2) }, t2)
-    local by = label(ov, "B Y   D U K E", 11, TH.mute, MONO, { Size = UDim2.new(1, 0, 0, 16), Position = UDim2.new(0, 0, 0.2, 92), TextXAlignment = C, TextTransparency = 1, ZIndex = 201 })
-    local bar = new("Frame", { Size = UDim2.new(0.62, 0, 0, 8), AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0.52, 0),
-        BackgroundColor3 = WHITE, BackgroundTransparency = 0.88, BorderSizePixel = 0, ZIndex = 201 }, ov)
-    corner(bar, 4)
-    local fill = new("Frame", { Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = WHITE, BorderSizePixel = 0, ZIndex = 202 }, bar)
-    corner(fill, 4)
-    new("UIGradient", { Color = ColorSequence.new(TH.brand, TH.brand2) }, fill)
-    local term = label(ov, "", 11, TH.on, MONO, { Size = UDim2.new(0.62, 0, 0, 90), AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0.52, 18),
-        ZIndex = 201, TextYAlignment = Enum.TextYAlignment.Top })
-    local lines = { "> memuat auto parry ..... ok", "> memuat anti-lag ....... ok", "> sinkron konfigurasi ... ok", "> boss siap dihadapi" }
-    task.spawn(function()
-        local function pause(t)
-            local e = os.clock() + t
-            while os.clock() < e and not skip and alive do task.wait() end
-        end
-        tw(t1, 0.3, { TextTransparency = 0 }); pause(0.15)
-        tw(t2, 0.3, { TextTransparency = 0 }); pause(0.15)
-        tw(by, 0.3, { TextTransparency = 0 }); pause(0.1)
-        for i = 1, #lines do
-            if skip or not alive then break end
-            term.Text = table.concat(lines, "\n", 1, i)
-            tw(fill, 0.22, { Size = UDim2.new(i / #lines, 0, 1, 0) })
-            pause(0.2)
-        end
-        pause(0.25)
-        tw(ov, 0.35, { GroupTransparency = 1 })
-        task.wait(0.4)
-        ov:Destroy()
-    end)
-end
-
 function W.startDrag(obj, input, onTap, onHold, onDone)
     local sx, sy = input.Position.X, input.Position.Y
     local ox, oy = obj.Position.X.Offset, obj.Position.Y.Offset
@@ -8919,6 +9485,19 @@ do
     W.spark(p, HIST.ping, 300, colPing, "PING Â· 40 DETIK TERAKHIR", " ms")
 
 
+    -- v13: ringkasan ESP adaptif
+    local ce = W.card(p)
+    local setE = W.chipRow(ce, "ESP", function()
+        local s = V.esp
+        if not s or K.pGet("esp.enabled") ~= true then return "ESP mati atau modul belum siap" end
+        return string.format("%d pemain Â· %d gen Â· objek %d/%d Â· Highlight %d/%d", s.players, s.gens, s.objShown, s.objTotal, s.hl, s.hlBudget)
+    end)
+    reg(function()
+        local s = V.esp
+        if not s or K.pGet("esp.enabled") ~= true then setE("MATI", TH.mute); return end
+        setE(s.tier .. " " .. math.floor(s.scale * 100 + 0.5) .. "%", s.scale >= 0.85 and TH.on or (s.scale >= 0.55 and TH.amb or TH.err))
+    end)
+
     local function dotOf(key, onFn)
         return function()
             local m = MOD[key]
@@ -9048,15 +9627,6 @@ do
     W.toggle(c4, "Buang Check yang nyangkut", "Check yang jarumnya diam terlalu lama disembunyikan", K.pbool("skill.unstick"))
     W.slider(c4, "Geser titik tekan", -40, 40, 1, " Â°", K.pnum("skill.offset"))
 
-    local c5 = W.section(p, "ESP", false)
-    W.row(c5, "Mode teks", "full, mini, atau off. Hotkey F10")
-    W.seg(c5, { "full", "mini", "off" }, K.pstr("esp.text", { "full", "mini", "off" }))
-    W.toggle(c5, "Outline pemain", nil, K.pbool("esp.outline"))
-    W.toggle(c5, "Objek (generator, pallet, hook, exit)", nil, K.pbool("esp.objects"))
-    W.toggle(c5, "Outline objek", nil, K.pbool("esp.objOutline"))
-    W.toggle(c5, "Bar progress dan HP", nil, K.pbool("esp.bars"))
-    W.slider(c5, "Jarak maksimal (0 = tanpa batas)", 0, 1500, 50, " stud", K.pnum("esp.maxDist"))
-
     local c6 = W.section(p, "Veil", false)
     W.toggle(c6, "Aim ke survivor", nil, K.pbool("veil.aim"))
     W.toggle(c6, "Assist (lead dan busur)", nil, K.pbool("veil.assist"))
@@ -9091,6 +9661,103 @@ do
         if MOD.par.state ~= "ready" or not (AP and AP.Store) then K.ready(MOD.par); return end
         pcall(AP.Store.reset); say("warn", "Opsi Distrik Pembantai dikembalikan ke bawaan")
     end, 1, true } })
+end
+
+-- ---------- ESP (v13: tab sendiri, beban dan anti-lag adaptif) ----------
+BT = "esp"
+do
+    local p = UI.panes.esp
+    W.banner(p, "par")
+
+    local c1 = W.card(p)
+    W.toggle(c1, "ESP", "Outline dan info pemain serta objek. Hotkey F8", K.pbool("esp.enabled"))
+    W.row(c1, "Mode teks", "full, mini, atau off. Hotkey F10")
+    W.seg(c1, { "full", "mini", "off" }, K.pstr("esp.text", { "full", "mini", "off" }))
+
+    W.heading(p, "Beban dan anti-lag")
+    local function tierCol(s) return s >= 0.85 and TH.on or (s >= 0.55 and TH.amb or TH.err) end
+    local g1 = W.grid(p, { { "tier", "Kualitas" }, { "fps", "FPS" }, { "hz", "Update/dtk" }, { "ms", "Biaya ms" } })
+    local g2 = W.grid(p, { { "obj", "Objek" }, { "hl", "Highlight" }, { "cut", "Dipangkas" }, { "cost", "Beban" } })
+    reg(function()
+        local s = V.esp
+        local on = MOD.par.state == "ready" and s ~= nil and K.pGet("esp.enabled") == true
+        if not on then
+            for _, k in ipairs({ "tier", "fps", "hz", "ms" }) do g1[k].Text = "--"; g1[k].TextColor3 = TH.bone end
+            for _, k in ipairs({ "obj", "hl", "cut", "cost" }) do g2[k].Text = "--"; g2[k].TextColor3 = TH.bone end
+            return
+        end
+        g1.tier.Text = s.tier; g1.tier.TextColor3 = tierCol(s.scale)
+        g1.fps.Text = tostring(math.floor(s.fps + 0.5)); g1.fps.TextColor3 = col(s.fps)
+        g1.hz.Text = string.format("%.0f", s.hz)
+        g1.ms.Text = string.format("%.2f", s.stepMs)
+        g2.obj.Text = s.objShown .. "/" .. s.objTotal
+        g2.hl.Text = s.hl .. "/" .. s.hlBudget
+        g2.cut.Text = tostring(s.culled); g2.cut.TextColor3 = s.culled > 0 and TH.amb or TH.bone
+        g2.cost.Text = string.format("%d/%d", math.floor(s.cost + 0.5), s.costBudget)
+        g2.cost.TextColor3 = (s.cost <= s.costBudget) and TH.bone or TH.amb
+    end)
+
+    local cs = W.card(p)
+    do
+        local setObj = W.chipRow(cs, "Di ESP sekarang", function()
+            local s = V.esp
+            if not s then return "menunggu modulâ€¦" end
+            return string.format("%d pemain Â· %d gen Â· %d pallet Â· %d hook Â· %d exit Â· %d trap", s.players, s.gens, s.pallets, s.hooks, s.exits, s.traps)
+        end)
+        reg(function()
+            local s = V.esp
+            if not s or K.pGet("esp.enabled") ~= true then setObj("MATI", TH.mute); return end
+            setObj(math.floor(s.scale * 100 + 0.5) .. "%", tierCol(s.scale))
+        end)
+        W.toggle(cs, "Anti-lag adaptif", "Kualitas ESP naik turun otomatis mengikuti FPS dan jumlah objek di ESP. Yang paling jauh dipangkas duluan",
+            K.pbool("esp.adaptive"))
+        W.row(cs, "Kualitas", "auto = adaptif. Pilihan lain mengunci kualitas (penuh, ringan, hemat, minimal)")
+        W.seg(cs, { "auto", "full", "light", "eco", "min" }, K.pstr("esp.tier", { "auto", "full", "light", "eco", "min" }))
+        W.slider(cs, "Target FPS", 20, 144, 5, "", K.pnum("esp.targetFps"))
+        W.slider(cs, "Anggaran beban", 40, 400, 10, "", K.pnum("esp.costBudget"))
+        W.slider(cs, "Maks objek digambar", 6, 80, 2, "", K.pnum("esp.objMax"))
+        W.slider(cs, "Jatah Highlight", 4, 28, 1, "", K.pnum("esp.maxHighlights"))
+        W.slider(cs, "Kualitas terendah", 10, 100, 5, " %", function()
+            local v = K.pGet("esp.minScale"); return v and v * 100 or nil
+        end, function(v, final)
+            if MOD.par.state ~= "ready" or not CFG13 then return end
+            CFG13["esp.minScale"] = v / 100
+            if final then K.ptouch() end
+        end)
+    end
+
+    local c2 = W.section(p, "Tampilkan", true)
+    W.toggle(c2, "Killer", nil, K.pbool("esp.killer"))
+    W.toggle(c2, "Survivor", nil, K.pbool("esp.survivors"))
+    W.toggle(c2, "Objek", "Generator, pallet, hook, exit, jebakan", K.pbool("esp.objects"))
+    W.toggle(c2, "Generator", nil, K.pbool("esp.gens"))
+    W.toggle(c2, "Pallet", nil, K.pbool("esp.pallets"))
+    W.toggle(c2, "Hook", nil, K.pbool("esp.hooks"))
+    W.toggle(c2, "Exit", nil, K.pbool("esp.exits"))
+    W.toggle(c2, "Jebakan Butcher", "Terbaca lewat tag BearTrap milik game", K.pbool("esp.traps"))
+
+    local c3 = W.section(p, "Gaya", false)
+    W.toggle(c3, "Outline pemain", nil, K.pbool("esp.outline"))
+    W.toggle(c3, "Outline objek", nil, K.pbool("esp.objOutline"))
+    W.toggle(c3, "Bar progress dan HP", nil, K.pbool("esp.bars"))
+    W.toggle(c3, "Nama pemain", nil, K.pbool("esp.names"))
+    W.toggle(c3, "Sisa HP survivor", nil, K.pbool("esp.hp"))
+    W.toggle(c3, "Jarak", nil, K.pbool("esp.dist"))
+    W.toggle(c3, "Sembunyikan generator selesai", nil, K.pbool("esp.hideDoneGens"))
+    W.toggle(c3, "Tampilkan pallet patah", nil, K.pbool("esp.showBroken"))
+
+    local c4 = W.section(p, "Jarak", false)
+    W.slider(c4, "Jarak maksimal (0 = tanpa batas)", 0, 1500, 50, " stud", K.pnum("esp.maxDist"))
+    W.slider(c4, "Teks pallet, hook, trap sampai", 0, 300, 10, " stud", K.pnum("esp.textDistObjs"))
+    W.slider(c4, "Teks pemain sampai", 0, 300, 10, " stud", K.pnum("esp.textDistPlayers"))
+
+    local c5 = W.section(p, "Lanjutan", false)
+    W.toggle(c5, "Lewati objek di luar pandangan", "Objek di belakang atau samping kamera tidak dapat jatah Highlight", K.pbool("esp.cullView"))
+    W.slider(c5, "Laju update penuh", 3, 30, 1, " Hz", K.pnum("esp.updateHz"))
+    W.btnRow(p, {
+        { "Reset skala ESP", "norm", function() K.act("espReset") end },
+        { "Salin log", "norm", function() K.act("copyLog") end },
+    })
 end
 
 -- ---------- Opsi (cari dan ubah semua opsi CFG auto parry) ----------
@@ -9207,7 +9874,7 @@ do
     W.seg(p, { "Aman", "Seimbang", "Maksimal" }, function() return nil end,
         function(i) K.lagPreset(({ "SAFE", "BALANCED", "MAX" })[i]) end)
 
-    local c2 = W.card(p)
+    local c2 = W.section(p, "Batas FPS dan jarak render", true)
     W.slider(c2, "Batas FPS", 30, 300, 5, "",
         function() return K.lagSlGet("FPS Cap (bypass)") end,
         function(v, final) K.lagSlSet("FPS Cap (bypass)", 30, 300, 5, v, final) end)
@@ -9215,7 +9882,7 @@ do
         function() return K.lagSlGet("Render Distance") end,
         function(v, final) K.lagSlSet("Render Distance", 64, 1024, 64, v, final) end)
 
-    local c3 = W.card(p)
+    local c3 = W.section(p, "Pengaturan Nono", false)
     local names = { "Hapus tekstur", "Matikan bayangan", "Matikan efek post", "Sembunyikan daun", "Matikan partikel dan FX",
         "Anchor part", "Matikan skybox", "Mode agresif", "FPS adaptif", "Terapkan otomatis" }
     local subs = {
@@ -9246,7 +9913,7 @@ do
         fs.max.Text = tostring(math.floor(st.max + 0.5))
     end)
 
-    local cp = W.card(p)
+    local cp = W.section(p, "Opsi lanjutan", false)
     W.toggle(cp, "Buka batas FPS", "Batas bawaan Roblox 60 FPS. Butuh setfpscap.",
         function() return K.boostGet("unlock") end, function() K.boostFlip("unlock") end)
     do
@@ -9336,17 +10003,6 @@ do
         end)
     W.toggle(c1, "Animasi", "Transisi tab, toggle, dan notifikasi",
         function() return S.motion end, function() S.motion = not S.motion; K.saveSoon() end)
-    W.toggle(c1, "Efek visual", "Aurora, partikel, kilau judul, scanline, glitch",
-        function() return S.fx end, function() S.fx = not S.fx; K.saveSoon() end)
-    W.toggle(c1, "Hemat efek saat tarung", "Animasi dekorasi berhenti kalau lagi tarung atau fps di bawah 40",
-        function() return S.fxFight end, function() S.fxFight = not S.fxFight; K.saveSoon() end)
-    W.toggle(c1, "Layar pembuka", "Animasi boot saat hub dijalankan",
-        function() return S.intro end, function() S.intro = not S.intro; K.saveSoon() end)
-    do
-        local sp = new("Frame", { Size = UDim2.new(1, 0, 0, 8), BackgroundTransparency = 1, LayoutOrder = nextLO() }, c1)
-        W.btn(c1, "Putar ulang intro", "norm", function() W.intro(true) end, { Size = UDim2.new(1, 0, 0, 32), LayoutOrder = nextLO(), TextSize = 12 })
-        local sp2 = new("Frame", { Size = UDim2.new(1, 0, 0, 8), BackgroundTransparency = 1, LayoutOrder = nextLO() }, c1)
-    end
 
     W.heading(p, "Warna aksen")
     do
@@ -9463,61 +10119,29 @@ do
     W.btnRow(p, { { "Matikan semua dan tutup", "dng", K.shutdownAll, 1, true } })
 
     local c5 = W.card(p)
-    W.row(c5, "Distrik Pembantai v" .. VERSION, "Hub UI + anti-lag dari Anime High School (By Duke) Â· DP v11.0 dan Nono dikendalikan dari hub ini", false, 0)
+    W.row(c5, "Distrik Pembantai v" .. VERSION, "By Duke Â· ESP adaptif, anti-lag Nono, dan auto parry dikendalikan dari hub ini", false, 0)
 end
 BT = nil
 
 -- =====================================================================
--- =====================================================================
---  TOMBOL BULAT, MODE RINGKAS, HOTKEY, EFEK
+--  TOMBOL BULAT, MODE RINGKAS, HOTKEY
 -- =====================================================================
 UI.fab = new("Frame", { Name = "Fab", Size = UDim2.fromOffset(44, 44), Position = UDim2.fromOffset(12, 96), BackgroundTransparency = 1,
     BorderSizePixel = 0, ZIndex = 5, Active = true }, ROOT)
 do
-    local fab = UI.fab
-    UI.fabHalo = new("Frame", { Size = UDim2.fromOffset(54, 54), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0),
-        BackgroundColor3 = TH.brand, BackgroundTransparency = 0.86, BorderSizePixel = 0 }, fab)
-    corner(UI.fabHalo, 27); onTheme(function() UI.fabHalo.BackgroundColor3 = TH.brand end)
-    local base = new("Frame", { Size = UDim2.fromOffset(38, 38), Position = UDim2.fromOffset(3, 3), BackgroundTransparency = 1 }, fab)
-    corner(base, 19); stroke(base, WHITE, 3, 0.84)
-    local seq = ns(0, 0, 0.5, 0, 0.501, 1, 1, 1)
-    local function half(right)
-        local clip = new("Frame", { Size = UDim2.fromOffset(22, 44), Position = UDim2.fromOffset(right and 22 or 0, 0), BackgroundTransparency = 1, ClipsDescendants = true }, fab)
-        local circ = new("Frame", { Size = UDim2.fromOffset(38, 38), Position = UDim2.fromOffset(right and -19 or 3, 3), BackgroundTransparency = 1 }, clip)
-        corner(circ, 19)
-        local st = stroke(circ, TH.brand, 3, 0)
-        onTheme(function() st.Color = TH.brand end)
-        return new("UIGradient", { Transparency = seq, Rotation = right and 0 or 180 }, st)
-    end
-    local gR, gL = half(true), half(false)
-    local inner = new("Frame", { Size = UDim2.fromOffset(34, 34), Position = UDim2.fromOffset(5, 5), BackgroundColor3 = TH.ink, BackgroundTransparency = 0.05, BorderSizePixel = 0 }, fab)
-    corner(inner, 17)
-    UI.fabTxt = label(inner, "SI", 14, TH.bone, BLACK, { Size = UDim2.new(1, 0, 1, 0), TextXAlignment = Enum.TextXAlignment.Center })
-    function UI.setRing(p)
-        local ang = math.clamp(p, 0, 1) * 360
-        gR.Rotation = math.clamp(ang, 0, 180)
-        gL.Rotation = math.clamp(ang, 180, 360)
-    end
+    local base = new("Frame", { Size = UDim2.fromOffset(40, 40), Position = UDim2.fromOffset(2, 2), BackgroundColor3 = Color3.fromRGB(14, 13, 22),
+        BackgroundTransparency = 0.08, BorderSizePixel = 0 }, UI.fab)
+    corner(base, 20)
+    UI.fabStroke = stroke(base, TH.brand, 2, 0.2)
+    onTheme(function() UI.fabStroke.Color = TH.brand end)
+    UI.fabTxt = label(base, "DP", 13, TH.bone, BLACK, { Size = UDim2.new(1, 0, 1, 0), TextXAlignment = Enum.TextXAlignment.Center })
 end
 
 function K.setOpen(o)
     OPEN = o
-    local p = UI.win.Position
+    UI.win.Visible = o
     if o then
-        UI.win.Visible = true
-        if S.motion then
-            UI.win.GroupTransparency = 1
-            UI.win.Position = UDim2.fromOffset(p.X.Offset, p.Y.Offset + 14)
-            tw(UI.win, 0.22, { GroupTransparency = 0, Position = p })
-        else
-            UI.win.GroupTransparency = 0
-        end
         for _, r in ipairs(REF) do runR(r) end
-    else
-        tw(UI.win, 0.16, { GroupTransparency = 1, Position = UDim2.fromOffset(p.X.Offset, p.Y.Offset + 10) })
-        task.delay(0.18, function()
-            if not OPEN then UI.win.Visible = false; UI.win.Position = p end
-        end)
     end
 end
 
@@ -9621,55 +10245,16 @@ track(UIS.InputBegan:Connect(function(i, gp)
     end
 end))
 
--- header, bar boss HP, cincin, dan label (selalu diperbarui, walau jendela tertutup)
+-- header dan label (selalu diperbarui, walau jendela tertutup)
 reg(function()
     local f = V.sys.fps
     UI.hfps.Text = f .. " fps"; UI.hfps.TextColor3 = col(f)
     local on = { K.pGet("parry.enabled") == true, K.pGet("gun.aimLock") == true, K.pGet("skill.enabled") == true, MOD.lag.state == "ready" and V.lag.applied }
     local n = 0
     for i = 1, 4 do if on[i] then n = n + 1 end end
-    UI.cap.Text = "BY DUKE Â· " .. n .. "/4 AKTIF"
-    UI.setHP(1 - n / 4)
-    UI.hpTxt.Text = (n == 4) and "K.O." or ("HP " .. math.floor((1 - n / 4) * 100 + 0.5) .. "%")
-    UI.hpTxt.TextColor3 = (n == 4) and TH.on or TH.brand
-    UI.setRing(n / 4)
+    UI.cap.Text = "v" .. VERSION .. " Â· By Duke Â· " .. n .. "/4 aktif"
     UI.fabTxt.TextColor3 = (OPEN or MINI) and TH.brand or TH.bone
 end, true)
-
--- loop efek visual: border berputar, kilau judul, aurora, partikel, scanline, glitch
-local FXT = { glitch = os.clock() + 4 }
-track(RunService.Heartbeat:Connect(function(dt)
-    if not S.fx then return end
-    -- v13.5: pas tarung (hasil hit / block baru aja berubah) atau fps < 40, animasi dekorasi dibekukan biar frame time nggak naik
-    if S.fxFight and (V.sys.fps < 40 or (V.par.lastAct and os.clock() - V.par.lastAct < 4)) then return end
-    -- v13.9: dekorasi cukup 30 Hz (dt dikumpulin biar kecepatan animasi tetap sama)
-    FXT.acc = (FXT.acc or 0) + dt
-    if FXT.acc < 0.033 then return end
-    dt, FXT.acc = FXT.acc, 0
-    local now = os.clock()
-    local t = now - START
-    local s = (math.sin(t * 2.4) + 1) / 2
-    UI.fabHalo.BackgroundTransparency = 0.88 - 0.1 * s
-    local z = 52 + 6 * s
-    UI.fabHalo.Size = UDim2.fromOffset(z, z)
-    if MINI then UI.mgrad.Rotation = (t * 40) % 360 end
-    if not OPEN then return end
-    UI.bgrad.Rotation = (t * 40) % 360
-    UI.tgrad.Offset = Vector2.new(((t * 0.35) % 2.4) - 1.2, 0)
-    for _, b in ipairs(UI.blobs) do
-        b.f.Position = UDim2.new(0.5 + 0.38 * math.sin(t * b.sp + b.ph), 0, 0.5 + 0.4 * math.cos(t * b.sp * 0.8 + b.ph), 0)
-    end
-    for i, p in ipairs(UI.parts) do
-        p.y = p.y - p.v * dt
-        if p.y < -0.03 then p.y = 1.03; p.x = math.random() end
-        p.f.Position = UDim2.new(p.x + 0.012 * math.sin(t + i), 0, p.y, 0)
-    end
-    UI.scan.Position = UDim2.new(0, 0, ((t * 0.18) % 1.5) - 0.25, 0)
-    if now > FXT.glitch then
-        FXT.glitch = now + 5 + math.random() * 5
-        UI.doGlitch()
-    end
-end))
 
 applyLayout()
 if S.wp then clampTo(UI.win, S.wp.x, S.wp.y) else clampTo(UI.win, (vp().X - WIN.w) / 2, 24) end
@@ -9683,7 +10268,7 @@ if workspace.CurrentCamera then
 end
 UI.ready = true
 task.delay(1.5, function() pcall(K.boostStartup) end)
-if S.mini then K.setMini(true) else W.intro() end
+if S.mini then K.setMini(true) end
 
 
 function K.toggleHub()
@@ -9726,4 +10311,4 @@ task.spawn(function()
     end
 end)
 
-print("[AP13 v" .. VERSION .. "] Distrik Pembantai v11 + anti-lag | hub UI | " .. S.hk.hub .. " = buka/tutup")
+print("[DP v" .. VERSION .. "] ESP adaptif + anti-lag + hub UI | " .. S.hk.hub .. " = buka/tutup")
