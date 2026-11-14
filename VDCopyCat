@@ -1,5 +1,66 @@
 --!nonstrict
 --[[
+  v14.1 (Veil: lock ga lepas walau target ketutup tembok / objek)
+    VEIL
+      - Dulu: target ketutup tembok atau objek = ga lolos cek halangan (LOS) = lock lepas setelah grace 0.3 detik (graceTime).
+      - Sekarang (CFG.veil.holdBlocked = true): selama target yang SEDANG dikunci masih di dalam FOV dan jarak maxDist tapi ketutup,
+        lock ditahan. Kamera tetap ngikut posisi prediksi target di balik tembok, jadi pas dia nongol lagi bidikan udah pas.
+          * auto lempar DITAHAN selama ketutup (ga ngelempar ke tembok). Lempar manual tetap kamu yang pegang.
+          * kalau ada survivor lain yang KELIHATAN dan lolos filter, dia tetap diprioritaskan (ga nyia-nyiain bidikan bebas).
+          * HUD: penanda jadi abu-abu dan teksnya "KETUTUP".
+          * CFG.veil.blockedHold = batas waktu tahan dalam detik. 0 = tanpa batas (default). Habis batas = lock lepas.
+      - Tetap lepas kalau: target keluar FOV (kamu muter kamera jauh), lebih jauh dari maxDist, kena hook / digendong (skipHooked),
+        mati / keluar, atau kamu lepas tombol lock (mode hold) / ketuk LOCK lagi (mode toggle).
+    Inti DP lain tidak diubah dari v14.0.
+]]
+--[[
+  v14.0 (gun kena kepala + ESP / cincin dirapihin)
+    GUN
+      - BARU: titik bidik kepala. CFG.gun.aimPoint = "auto" | "head" | "body" (tombol "Titik bidik" di Combat > Gun).
+          auto = kepala kalau killer lebih dekat dari headMaxDist, geraknya lebih pelan dari headMaxSpeed, dan kepalanya kelihatan
+                 (ga ketutup tembok). Selain itu badan, karena kepala itu target kecil dan makin kena meleset kalau killer lari.
+          head = kepala selama kelihatan, kalau ketutup balik ke badan.   body = persis kayak v13.1.
+        Pindah badan <-> kepala ditahan CFG.gun.aimHold detik supaya kamera ga loncat-loncat. Cek halangan (LOS) sekarang
+        dicek ke titik yang dibidik: kepala doang yang nongol di atas tembok tetap bisa ditembak.
+        Semua jalur ikut: aim lock (kamera), auto fire, snap tembakan manual, tembak lewat remote, dan hitungan KENA / MELESET
+        di log TEMBAK (sekarang ada tulisan HEAD / BODY).
+    ESP (tampilan)
+      - Label baru bergaya kartu: panel gelap + garis tepi warna. Baris atas = nama / jenis objek, baris bawah = jarak dan HP.
+        Lebar kartu ngikutin teks. Bar tipis di dasar kartu. Bar HP survivor berwarna hijau -> kuning -> merah ngikutin sisa HP.
+        Matikan lewat esp.card (label balik ke gaya lama tanpa panel).
+      - Outline: warna garis sedikit lebih terang dari isi, killer isinya lebih jelas dari survivor, isi target lock / killer
+        dalam jangkauan berdenyut pelan (esp.pulseLock), outline objek yang jauh memudar dikit biar layar ga penuh (esp.outlineFade).
+    CINCIN
+      - Cincin kamu: cincin tipis + isi tipis di dalam (ring.fill), riak keluar kalau killer masuk jangkauan (ring.ripple),
+        warna pindah halus (ring.smoothCol) bukan loncat, denyut lebih pelan kalau aman.
+      - Kerucut serang killer: dua garis tepi + busur di depan (ring.arc) jadi bentuk kipas. Geometri ditulis sekali, ga tiap frame.
+    Inti DP (parry, skill check, Veil, anti-lag adaptif) tidak diubah dari v13.1.
+    Catatan: ditulis lewat baca kode, belum dijalankan di Roblox. Kalau ada baris log aneh atau tampilan yang rusak, Copy Log dari hub.
+]]
+--[[
+  v13.1 (audit parry, gun, skill check, Veil, cincin: stabilitas, bukan fitur baru)
+    PARRY
+      - Waktu "animasi -> kena" dulu dipelajari dari damage APA PUN dalam 0.9s setelah animasi killer dekat (trap, bleed, peluru, killer lain).
+        Sampel salah menggeser delay parry dan bisa bikin parry telat. Sekarang damage cuma dihitung kalau killer pemilik animasi itu
+        memang ada <= range x 1.6 + 3 stud dari kamu saat damage masuk.
+    CINCIN
+      - Range (cincin + jangkauan parry) naik permanen kalau kamu kena damage apa pun dengan killer <= 20 stud, lalu ikut tersimpan ke
+        dp10_learn.json. Sekarang belajar range cuma dari hit yang terbukti dari animasi serang killer dekat (pindah ke hookHealth,
+        satu tempat, ga balapan sama event HealthChanged). Kalau range kamu terlanjur membengkak: tombol Wipe atau hapus dp10_learn.json.
+    GUN
+      - Aim lock: LOS / FOV putus sebentar (tiang, sudut tembok) dulu langsung melepas lock. Sekarang target lama ditahan CFG.gun.lockGrace
+        (0.25 detik): kamera tetap ngikut, auto-fire dan snap tembakan manual ditahan selama target ketutup (ga nembak ke tembok).
+      - Bind kamera aim lock dipindah ke prioritas Last (setelah semua script kamera game), sama kayak Veil di v12.1.
+    SKILL CHECK
+      - Kalau GUI skill check dibikin ulang game setelah event (respawn / ronde baru), pasangan Check / Line / Goal yang sudah dipegang mati
+        dan check ga pernah "tampil" (nunggu 5 detik lalu fail). Sekarang pasangan diambil ulang (maks 4x per detik) kalau semuanya sudah mati.
+    VEIL
+      - Kalibrasi lemparan (speed / gravitasi) yang jauh dari konstanta game (charge sebagian, spear kena sesuatu) dibuang, dan kalibrasi
+        tersimpan dari versi lama yang jauh dari konstanta ditolak waktu dimuat. Ini kepake kalau SpearMath ga kebaca (trustMath mati).
+      - HUD Veil dibangun ulang tiap 3 detik kalau hilang (dulu cuma dicoba sekali pas load).
+    Catatan: perubahan ini ditulis lewat baca kode, belum dijalankan di Roblox. Kalau ada baris log baru yang aneh, Copy Log dari hub.
+]]
+--[[
   v13.0 (UI rapi + ANTI-LAG ADAPTIF YANG NGIKUTIN OBJEK ESP)
     ESP v2 (ditulis ulang)
       - Objek ditemukan lewat TAG milik game (dari dump): GeneratorPoint, HookPoint, pallet (+ atribut PalletState), BearTrap.
@@ -385,6 +446,7 @@ local CFG = {
         aimLock      = true,      -- kamera otomatis nempel ke killer pas kamu tahan aim
         lockFov      = 90,        -- derajat dari arah kamera: killer di luar sudut ini ga di-lock (180 = semua arah)
         lockSmooth   = 0.85,      -- 1 = keras (langsung nempel), makin kecil makin halus
+        lockGrace    = 0.25,      -- v13.1: detik target lama ditahan kalau LOS / FOV putus sebentar (kamera ngikut, auto-fire nahan)
         fireStuds    = 0.6,       -- v9.1: toleransi auto-fire dalam STUD (dijadiin sudut sesuai jarak). v9.0 pakai sudut doang = kelonggaran
         fireTol      = 2.5,       -- derajat MAKS: kamera harus segini dekat ke target baru auto-fire (ngecil sendiri kalau killer jauh)
         leadPing     = 1.0,       -- x ping: tembak ke posisi killer di depan (kompensasi lag). 0 = mati. 1 = ping penuh (RTT)
@@ -397,6 +459,11 @@ local CFG = {
         maxDist      = 220,
         aimPart      = "HumanoidRootPart",   -- v9.1: titik paling stabil (posisi yang direplikasi server)
         aimYOffset   = 0.3,       -- v9.1: stud di atas HumanoidRootPart (pusat badan)
+        aimPoint     = "auto",    -- v14.0: titik bidik. "auto" (kepala kalau dekat + killer pelan + kepala kelihatan, selain itu badan) | "head" (kepala kalau kelihatan, ketutup = badan) | "body"
+        headYOffset  = 0,         -- v14.0: stud, geser titik kepala (naik = positif). 0 = pusat Head
+        headMaxDist  = 120,       -- v14.0: mode auto: kepala cuma dipakai kalau killer lebih dekat dari ini (stud)
+        headMaxSpeed = 14,        -- v14.0: mode auto: kepala cuma dipakai kalau killer lebih pelan dari ini (stud/detik)
+        aimHold      = 0.3,       -- v14.0: detik: pindah badan -> kepala ditahan segini biar bidikan ga loncat-loncat
         lead         = 0,         -- 0 = hitscan. 1 = tambah prediksi buat travel time peluru (jarak / bulletSpeed)
         bulletSpeed  = 800,
         needLOS      = true,      -- trigger cuma nembak kalau killer ga ketutup tembok
@@ -442,7 +509,7 @@ local CFG = {
         text      = "full",       -- "full" | "mini" | "off"   (tombol Teks di panel / F10). off = tanpa teks sama sekali
         bars      = true,         -- bar tipis progress generator + HP survivor
         objOutline = true,        -- outline buat generator / pallet / hook / exit juga
-        fillPlayers = 0.78,       -- transparansi isi outline pemain (1 = cuma garis)
+        fillPlayers = 0.82,       -- transparansi isi outline survivor (1 = cuma garis). Killer otomatis lebih jelas dari ini
         fillObjs    = 1,          -- transparansi isi outline objek (1 = cuma garis)
         fillGens    = 0.6,        -- v9.0: transparansi isi outline generator (biar keliatan dari jauh)
         textDistObjs    = 70,     -- teks PALLET / HOOK cuma muncul kalau lebih deket dari ini (stud). 0 = selalu. Generator/exit/pemain selalu
@@ -474,6 +541,12 @@ local CFG = {
         objMax      = 40,         -- maks objek (pallet / hook / exit / trap) yang digambar bareng pada kualitas penuh
         updateHz    = 12,         -- update ESP per detik pada kualitas penuh (turun sendiri kalau berat)
         cullView    = true,       -- objek di luar pandangan kamera ga dapat jatah Highlight
+        -- v14.0: tampilan
+        card        = true,       -- label gaya kartu (panel gelap + garis tepi warna, nama di atas, jarak / HP di bawah). false = gaya lama tanpa panel
+        cardAlpha   = 0.3,        -- transparansi panel kartu (0 = pekat, 1 = tanpa panel)
+        hpColor     = true,       -- bar HP survivor hijau -> kuning -> merah ngikutin sisa HP
+        pulseLock   = true,       -- isi outline target lock / killer dalam jangkauan berdenyut pelan
+        outlineFade = true,       -- outline objek jauh memudar dikit
     },
 
     ring = {                      -- v9.1: cincin jangkauan hit/parry + garis jangkauan hit killer
@@ -488,12 +561,18 @@ local CFG = {
         inRange   = Color3.fromRGB(235, 255, 255),   -- putih: killer di dalam cincin, parry siap
         danger    = Color3.fromRGB(255, 80, 60),     -- merah: killer di dalam cincin & parry belum siap / kamu di dalam kerucut
         coneCol   = Color3.fromRGB(255, 255, 255),   -- warna garis killer
+        arc       = true,         -- v14.0: busur di depan kerucut serang killer (garis tepi + busur = bentuk kipas)
+        fill      = true,         -- v14.0: isi tipis di dalam cincin kamu
+        ripple    = true,         -- v14.0: riak keluar dari cincin kalau killer masuk jangkauan
+        smoothCol = true,         -- v14.0: warna cincin / garis pindah halus, bukan loncat
     },
 
     veil = {                      -- v11: Veil Assist (cuma kerja pas kamu killer Veil)
         enabled     = true,
         trustMath   = true,       -- v12.1: konstanta SpearMath (Speed / Gravity) dari game dipercaya penuh, kalibrasi lemparan ga menimpa
         graceTime   = 0.3,        -- v12.1: detik target lama ditahan kalau LOS / FOV putus sebentar
+        holdBlocked = true,       -- v14.1: lock target yang sedang dikunci ditahan walau ketutup tembok / objek (kamera ngikut, auto lempar nahan)
+        blockedHold = 0,          -- v14.1: detik maksimal nahan lock yang ketutup. 0 = tanpa batas
         stickSnapDeg = 0.6,       -- v12.1: kamera nempel penuh kalau sudah segini dekat (derajat)
         hudRate     = 15,         -- v12.1: Hz update HUD / busur (kamera tetap tiap frame)
         forceVeil   = false,      -- true = abaikan cek identitas "aku Veil" (kalau atribut KillerName dll ga kebaca)
@@ -622,7 +701,7 @@ local function notify(msg)
     if ENV.DP_TOAST and not inHook then shown = pcall(ENV.DP_TOAST, msg) end
     if not shown then
         pcall(function()
-            StarterGui:SetCore("SendNotification", { Title = "DP v13.0", Text = msg, Duration = 2.5 })
+            StarterGui:SetCore("SendNotification", { Title = "DP v14.1", Text = msg, Duration = 2.5 })
         end)
     end
     log("INFO", msg)
@@ -857,6 +936,7 @@ local Gun = {
     leadAdj = 0, biasR = 0, biasU = 0, steadyAt = 0, shots = 0, hits = 0, last = nil,   -- v9.1
 }
 Gun.vis = setmetatable({}, { __mode = "k" })   -- v10: cache cek halangan per killer
+Gun.aimK = setmetatable({}, { __mode = "k" })  -- v14.0: [karakter killer] = { kind = "HEAD" | "BODY", t } (tahan pindah titik bidik)
 Gun.mzc = nil                                  -- v10: cache titik moncong per frame
 local SkillHook = { judged = function() end }   -- diisi di bagian skill check
 
@@ -1017,9 +1097,50 @@ local function leadTime(dist)
     return math.clamp(t, 0, G.leadMax)
 end
 
+-- v14.0: titik bidik di killer. part = HumanoidRootPart (dari pickPart). force = "HEAD" | "BODY" (buat evaluasi tembakan lama).
+-- return posisi titik bidik, "HEAD" | "BODY", part yang dipakai buat cek halangan.
+function Gun.aimOf(part, origin, force)
+    local G = CFG.gun
+    local body = part.Position
+    if part.Name ~= "HumanoidRootPart" then return body, "BODY", part end
+    body = body + Vector3.new(0, G.aimYOffset or 0, 0)   -- v9.1: pusat badan
+    local mode = G.aimPoint or "body"
+    if force == "BODY" or mode == "body" then return body, "BODY", part end
+    local ch = part.Parent
+    local head = ch and ch:FindFirstChild("Head")
+    if not (head and head:IsA("BasePart")) then return body, "BODY", part end
+    local headPos = head.Position + Vector3.new(0, G.headYOffset or 0, 0)
+    if force == "HEAD" then return headPos, "HEAD", head end
+    local want = true
+    if mode == "auto" then
+        local tr = Track[ch]
+        local spd = tr and Vector3.new(tr.vel.X, 0, tr.vel.Z).Magnitude or 0
+        if spd > (G.headMaxSpeed or 14) or (part.Position - origin).Magnitude > (G.headMaxDist or 120) then want = false end
+    end
+    local now = os.clock()
+    local ak = Gun.aimK[ch]
+    if not ak then
+        ak = { kind = "BODY", t = -10 }
+        Gun.aimK[ch] = ak
+    end
+    local ok = want and visibleFrom(origin, head)
+    if not ok then
+        if ak.kind ~= "BODY" then ak.kind, ak.t = "BODY", now end                        -- ke badan langsung
+    elseif ak.kind ~= "HEAD" and now - ak.t >= (G.aimHold or 0.3) then
+        ak.kind, ak.t = "HEAD", now                                                       -- ke kepala nunggu stabil dulu
+    end
+    if ak.kind == "HEAD" then return headPos, "HEAD", head end
+    return body, "BODY", part
+end
+
+-- v14.0: titik bidik kelihatan dari origin? (kepala dicek ke kepala, badan ke badan)
+function Gun.aimVis(origin, part)
+    local _, _, vp = Gun.aimOf(part, origin)
+    return visibleFrom(origin, vp)
+end
+
 local function predictPos(part, origin)
-    local pos = part.Position
-    if part.Name == "HumanoidRootPart" then pos = pos + Vector3.new(0, CFG.gun.aimYOffset or 0, 0) end   -- v9.1: pusat badan
+    local pos = Gun.aimOf(part, origin)   -- v14.0: kepala atau badan (aimPoint)
     local tr = Track[part.Parent]
     if not tr then return pos end
     local G = CFG.gun
@@ -1082,7 +1203,7 @@ local function snapDir(orig, originArg)
 
     -- 1b) aim lock aktif: tembakan apapun (manual atau trigger) diarahkan ke badan target kunci
     local lt = Gun.lockTarget
-    if CFG.gun.aimLock and lt and lt.Parent then
+    if CFG.gun.aimLock and lt and lt.Parent and not Gun.lockBlind then
         local nd = dirTo(origin, lt)
         if nd then
             log("HIT", string.format("lock -> %s (%.0f stud) %s", lt.Parent.Name, (lt.Position - origin).Magnitude, leadInfo(lt, origin)))
@@ -1103,7 +1224,7 @@ local function snapDir(orig, originArg)
             if dist <= CFG.gun.maxDist and dist > 0.5 then
                 local ang = math.deg(math.acos(math.clamp(o:Dot(to.Unit), -1, 1)))
                 if ang <= CFG.gun.snapFov and (not best or ang < bestAng) then
-                    if visibleFrom(origin, part) then best, bestAng, bestDist = part, ang, dist end
+                    if Gun.aimVis(origin, part) then best, bestAng, bestDist = part, ang, dist end
                 end
             end
         end
@@ -1593,7 +1714,7 @@ local function watchKiller(k)
         local key = (track.Animation and track.Animation.AnimationId) or track.Name
         local t0 = os.clock()
         local me = myRoot()
-        local entry = { key = key, t0 = t0 }
+        local entry = { key = key, t0 = t0, k = k }   -- v13.1: k = killer pemilik animasi (buat cek damage beneran dari dia)
         entry.near = me ~= nil and k.root.Parent ~= nil
             and (me.Position - k.root.Position).Magnitude <= CFG.parry.range * 2.2
         if entry.near then
@@ -1682,11 +1803,17 @@ local function hookHealth()
         last = h
         if drop <= 0.5 or not alive() or not CFG.parry.learn then return end
         local now = os.clock()
+        local meR, nearest = myRoot(), nil
         for i = #Parry.recent, 1, -1 do
             local e = Parry.recent[i]
             local age = now - e.t0
             if age > 0.9 then break end
-            if age >= 0.04 and e.near and not e.landed and not e.hit then
+            -- v13.1: damage cuma dihitung "kena animasi ini" kalau killer pemilik animasi memang ada dekat kamu. Dulu damage APA PUN
+            -- (trap, bleed, peluru, killer lain) dalam 0.9s dari animasi dekat ikut jadi sampel waktu kena -> delay parry melenceng.
+            local kr = e.k and e.k.root
+            local dd = (meR and kr and kr.Parent) and (meR.Position - kr.Position).Magnitude or nil
+            if age >= 0.04 and e.near and not e.landed and not e.hit and dd and dd <= CFG.parry.range * 1.6 + 3 then
+                if not nearest or dd < nearest then nearest = dd end
                 e.hit = now
                 local hs = Parry.hits[e.key]
                 if not hs then
@@ -1701,6 +1828,11 @@ local function hookHealth()
                 log("PARRY", string.format("[%s] kena damage %.0f ms setelah animasi mulai -> rencana delay %.0f ms (ping %.0f ms, fps %.0f)",
                     shortKey(e.key), age * 1000, d * 1000, Net.rtt * 1000, 1 / Net.frameDt))
             end
+        end
+        -- v13.1: range parry / cincin belajar DI SINI: cuma dari hit yang terbukti dari animasi serang killer dekat.
+        if nearest and CFG.ring.learnRange and nearest <= 20 and nearest + 1.5 > CFG.parry.range then
+            CFG.parry.range = math.clamp(nearest + 1.5, 8, 22)
+            log("RING", string.format("kena hit dari %.1f stud -> range %.1f", nearest, CFG.parry.range))
         end
     end))
 end
@@ -1860,7 +1992,7 @@ local function findTarget()
                 if along > 0 then
                     local miss = (to - dir * along).Magnitude
                     if miss <= CFG.gun.hitRadius and (not bestMiss or miss < bestMiss) then
-                        if (not CFG.gun.needLOS) or visibleFrom(origin, part) then
+                        if (not CFG.gun.needLOS) or Gun.aimVis(origin, part) then
                             best, bestMiss = part, miss
                         end
                     end
@@ -2065,7 +2197,7 @@ local function gunStep()
     -- target: kalau kamera udah nempel ke target lock -> tembak. kalau belum, cek crosshair manual
     local part, miss
     local lt = Gun.lockTarget
-    if CFG.gun.aimLock and lt and lt.Parent and Gun.lockAng <= fireTolFor(lt) then
+    if CFG.gun.aimLock and lt and lt.Parent and not Gun.lockBlind and Gun.lockAng <= fireTolFor(lt) then
         part, miss = lt, 0
     else
         part, miss = findTarget()
@@ -2126,6 +2258,7 @@ do
         if r then pcall(function() my = r.AssemblyLinearVelocity end) end
         Gun.last = {
             t = os.clock(), part = part, origin = origin, dir = nd, pred = predictPos(part, origin),
+            kind = (select(2, Gun.aimOf(part, origin))),   -- v14.0: HEAD / BODY saat tembak
             vel = tr and flat(tr.vel) or Vector3.new(0, 0, 0), my = flat(my), done = false,
         }
     end
@@ -2133,8 +2266,7 @@ do
     local function evalShot(s, o, e)
         local part = s.part
         if not (part and part.Parent) then return end
-        local actual = part.Position
-        if part.Name == "HumanoidRootPart" then actual = actual + Vector3.new(0, CFG.gun.aimYOffset or 0, 0) end
+        local actual = Gun.aimOf(part, o, s.kind)   -- v14.0: titik yang tadi dibidik (kepala / badan)
         local d = e - o
         local len = d.Magnitude
         if len < 1 then return end
@@ -2182,7 +2314,7 @@ do
         end
 
         log("TEMBAK", string.format("%s | %.0f stud | killer %.0f st/s | meleset %.1f (kanan %+.1f atas %+.1f)%s | hit %d/%d",
-            hit and "KENA" or "MELESET", dist, spd, m.Magnitude, mr, mu, note, Gun.hits, Gun.shots))
+            (hit and "KENA" or "MELESET") .. " " .. tostring(s.kind or "BODY"), dist, spd, m.Magnitude, mr, mu, note, Gun.hits, Gun.shots))
     end
 
     task.spawn(function()
@@ -2236,7 +2368,7 @@ local function pickLockTarget(origin, camCF)
                 local isCur = (part == cur)
                 local score = ang - (isCur and 8 or 0)          -- target lama dikasih bonus biar ga loncat-loncat
                 if ang <= CFG.gun.lockFov * (isCur and 1.4 or 1) and (not bestScore or score < bestScore)
-                    and ((not CFG.gun.needLOS) or visibleFrom(origin, part)) then
+                    and ((not CFG.gun.needLOS) or Gun.aimVis(origin, part)) then
                     best, bestScore, bestAng = part, score, ang
                 end
             end
@@ -2264,6 +2396,24 @@ local function aimLockStep(dt)
 
     local cf = cam.CFrame
     local part, ang = pickLockTarget(origin, cf)
+    -- v13.1: grace. LOS / FOV putus sebentar (tiang, sudut tembok) = target lama ditahan, kamera tetap ngikut tapi TIDAK nembak.
+    -- Dulu lock langsung lepas (kamera balik ke kamu / loncat ke target lain) dan tembakan manual ikut ga ke-snap.
+    local blind = false
+    local nowL = os.clock()
+    if part then
+        Gun.lockSeenAt = nowL
+    else
+        local held = Gun.lockTarget
+        if held and held.Parent and nowL - (Gun.lockSeenAt or 0) < (CFG.gun.lockGrace or 0.25) then
+            local to = predictPos(held, origin) - cf.Position
+            local dist = to.Magnitude
+            if dist > 1 and dist <= CFG.gun.maxDist then
+                part, blind = held, true
+                ang = math.deg(math.acos(math.clamp(cf.LookVector:Dot(to.Unit), -1, 1)))
+            end
+        end
+    end
+    Gun.lockBlind = blind
     Gun.lockTarget = part
     if not part then
         Gun.lockAng, lockNameSeen = 180, nil
@@ -2284,7 +2434,7 @@ local function aimLockStep(dt)
 end
 
 pcall(function() RunService:UnbindFromRenderStep("DP3_AimLock") end)
-RunService:BindToRenderStep("DP3_AimLock", Enum.RenderPriority.Camera.Value + 1, function(dt)
+RunService:BindToRenderStep("DP3_AimLock", Enum.RenderPriority.Last.Value, function(dt)   -- v13.1: Last = setelah semua script kamera game (sama kayak Veil v12.1)
     local ok, err = pcall(aimLockStep, dt)
     if not ok and os.clock() - lockErrAt > 4 then
         lockErrAt = os.clock()
@@ -2647,7 +2797,7 @@ do
             local camCF = cam.CFrame
             local look = camCF.LookVector
             local cur = V.targetChar
-            local best
+            local best, held
             for _, k in ipairs(survivors()) do
                 local ch = k.char
                 local skip = C.skipHooked and (ch:GetAttribute("IsHooked") or ch:GetAttribute("IsCarried"))
@@ -2661,7 +2811,8 @@ do
                     if to.Magnitude > 0.1 then
                         local ang = math.deg(math.acos(math.clamp(look:Dot(to.Unit), -1, 1)))
                         local isCur = (ch == cur)
-                        if ang <= C.fov * (isCur and 1.4 or 1) and los(origin, point, ch, kindName) then
+                        local inFov = ang <= C.fov * (isCur and 1.4 or 1)
+                        if inFov and los(origin, point, ch, kindName) then
                             local score
                             if C.priority == "near" then score = dist - (isCur and 10 or 0)
                             elseif C.priority == "lowhp" then
@@ -2672,11 +2823,15 @@ do
                                 best = { k = k, off = off, kind = kindName, T = T, dir = dir, flight = flight, reach = reach,
                                          P = P, ang = ang, dist = dist, score = score }
                             end
+                        elseif inFov and isCur then
+                            -- v14.1: target yang lagi dikunci masih di FOV tapi ketutup tembok / objek. Disimpan buat ditahan (holdBlocked).
+                            held = { k = k, off = off, kind = kindName, T = T, dir = dir, flight = flight, reach = reach,
+                                     P = P, ang = ang, dist = dist, score = ang }
                         end
                     end
                 end
             end
-            return best
+            return best, held
         end
 
         -- v12.1: antar pemilihan target (20 Hz) cuma titik bidik target yang SAMA yang dihitung ulang tiap frame
@@ -2958,6 +3113,14 @@ do
                 log("SPEAR", string.format("kalibrasi dibuang (speed %.0f g %.1f)", speed, g))
                 return
             end
+            -- v13.1: lemparan charge sebagian / spear kena sesuatu di tengah jalan bikin speed / gravitasi jauh dari konstanta game.
+            -- Kalau SpearMath ga kebaca (trustMath mati), nilai begitu dulu bisa menimpa kalibrasi dan busur jadi melenceng. Buang.
+            local refS, refG = V.seedSpeed or C.speed, V.seedG or C.gravity
+            if (refS and refS > 1 and (speed < refS * 0.5 or speed > refS * 1.8))
+                or (refG and refG > 1 and (g < refG * 0.4 or g > refG * 2.5)) then
+                log("SPEAR", string.format("kalibrasi dibuang: speed %.0f / g %.1f jauh dari konstanta game (%.0f / %.1f)", speed, g, refS or 0, refG or 0))
+                return
+            end
             if g < 2 then g = 0 end
             V.calibSpeed = V.calibSpeed and (V.calibSpeed * 0.65 + speed * 0.35) or speed
             V.calibG = (V.calibG ~= nil) and (V.calibG * 0.65 + g * 0.35) or g
@@ -3228,6 +3391,13 @@ do
             local alive2 = me ~= nil and hum ~= nil and hum.Health > 0
             -- v12.1: lock jalan walau HUD gagal dibuat (v12.0 ikut mati kalau hud.gui nil)
             local hasHud = hud.gui ~= nil and hud.gui.Parent ~= nil
+            -- v13.1: HUD hilang (gagal dibuat pas load / kebuang) = coba bangun ulang tiap 3 detik. Lock tetap jalan tanpa HUD.
+            if not hasHud and now - (X.hudTry or 0) > 3 then
+                X.hudTry = now
+                pcall(buildHud)
+                hud.mOn, hud.cdKey, hud.btnOn, hud.R = nil, nil, nil, nil
+                hasHud = hud.gui ~= nil and hud.gui.Parent ~= nil
+            end
             local hudTick = hasHud and (now - X.hudAt >= 1 / math.max(C.hudRate or 15, 4))
             if hudTick then X.hudAt = now end
 
@@ -3252,6 +3422,7 @@ do
             V.isVeil = isV
             if not (isV and alive2 and cam) then
                 V.targetChar, V.lockedNow, V.snap, V.steadyAt, V.cache = nil, false, nil, nil, nil
+                V.blockAt = nil
                 if not V.hidden then
                     V.hidden = true
                     hideArc()
@@ -3267,18 +3438,28 @@ do
             local origin = spawnOrigin()
             local camCF = cam.CFrame
             -- pilih target ~20 Hz; antar pilih cuma titik bidik target yang sama dihitung ulang. Grace: LOS / FOV putus sebentar = target lama ditahan
-            local best
+            local best, held
             if origin then
                 local cached = V.cache
                 if cached and now - X.selAt < 0.05 then
                     best = refreshBest(cached, origin, camCF)
                 else
                     X.selAt = now
-                    best = pickTarget(origin, cam)
+                    best, held = pickTarget(origin, cam)
                     if best then
                         V.cacheOkAt = now
-                    elseif cached and now - (V.cacheOkAt or 0) < (C.graceTime or 0.3) then
-                        best = refreshBest(cached, origin, camCF)
+                        V.blockAt = nil
+                    else
+                        -- v14.1: target yang dikunci ketutup tembok / objek: tahan (blockedHold = batas detik, 0 = tanpa batas)
+                        local hold = C.holdBlocked ~= false and held
+                        if hold then V.blockAt = V.blockAt or now else V.blockAt = nil end
+                        if hold and ((C.blockedHold or 0) <= 0 or now - V.blockAt < C.blockedHold) then
+                            best = held
+                            best.blocked = true
+                            V.cacheOkAt = now
+                        elseif cached and now - (V.cacheOkAt or 0) < (C.graceTime or 0.3) then
+                            best = refreshBest(cached, origin, camCF)
+                        end
                     end
                 end
             end
@@ -3308,7 +3489,7 @@ do
                         log("VEIL", string.format("nempel ke %s (%s, %.0f stud, terbang %.2fs, lead %.0f ms)", best.k.player.DisplayName,
                             best.kind, best.dist, best.flight, leadTime() * 1000))
                     end
-                    if C.autoThrow then autoThrow(now, best, errStuds) end
+                    if C.autoThrow and not best.blocked then autoThrow(now, best, errStuds) end   -- v14.1: ga auto lempar ke tembok
                 end
             else
                 V.snap, V.steadyAt, V.lastLockChar = nil, nil, nil
@@ -3340,11 +3521,12 @@ do
 
             local ready = V.cdLeft(now) <= 0.05
             if best then
-                local col = (not best.reach) and Color3.fromRGB(255, 80, 80)
-                    or (ready and Color3.fromRGB(80, 255, 140) or Color3.fromRGB(255, 190, 70))
+                local col = best.blocked and Color3.fromRGB(150, 155, 170)   -- v14.1: abu-abu = ketutup, lock ditahan
+                    or ((not best.reach) and Color3.fromRGB(255, 80, 80)
+                    or (ready and Color3.fromRGB(80, 255, 140) or Color3.fromRGB(255, 190, 70)))
                 if hud.marker.BackgroundColor3 ~= col then hud.marker.BackgroundColor3 = col end
                 local txt = string.format("%s %s\n%.0fst  %.2fs%s", best.k.player.DisplayName, best.kind, best.dist, best.flight,
-                    best.reach and "" or "  JAUH")
+                    best.blocked and "  KETUTUP" or (best.reach and "" or "  JAUH"))
                 if hud.mlabel.Text ~= txt then hud.mlabel.Text = txt end
                 drawArc(origin, best.dir, V.speed(), V.grav(), best.flight, col)
             else
@@ -3528,8 +3710,13 @@ do
                 if type(v) ~= "number" or v ~= v then return nil end
                 return math.clamp(v, lo, hi)
             end
-            V.calibSpeed = num(d.speed, 20, 700) or V.calibSpeed
-            V.calibG = num(d.g, 0, 600) or V.calibG
+            -- v13.1: kalibrasi tersimpan dari versi lama (gravitasi 0 / speed salah) ditolak kalau jauh dari konstanta game / CFG
+            local sp, gv = num(d.speed, 20, 700), num(d.g, 0, 600)
+            local baseS, baseG = V.seedSpeed or C.speed, V.seedG or C.gravity
+            if sp and baseS and baseS > 1 and (sp < baseS * 0.5 or sp > baseS * 1.8) then sp = nil end
+            if gv and baseG and baseG > 1 and (gv < baseG * 0.4 or gv > baseG * 2.5) then gv = nil end
+            V.calibSpeed = sp or V.calibSpeed
+            V.calibG = gv or V.calibG
             V.cdLearn = num(d.cd, 1, 60) or V.cdLearn
             if V.cdLearn then V.cdMin, V.cdSamples = V.cdLearn, 2 end
             V.leadAdj = num(d.lead, -0.2, 0.45) or V.leadAdj
@@ -4182,10 +4369,28 @@ local function skillTrackNamed(evtInfo, gen)
     local act, samples, moved = nil, {}, false
     local lastRot
     local seedW = Skill.seedOmega(evtInfo)     -- v10: kecepatan jarum dari game, ga nunggu regresi 3 sample
+    local pAt = t0
 
     while os.clock() - t0 < 5 and alive() and CFG.skill.enabled and Skill.gen == gen do
         local dtf = RunService.RenderStepped:Wait()
         local now = os.clock()
+
+        -- v13.1: GUI skill check dibikin ulang game (respawn / ronde baru) setelah event -> pasangan Check/Line/Goal lama mati dan
+        -- check ga pernah "tampil" (jatuh ke 5 detik nunggu lalu fail). Kalau belum ada yang dipakai dan semua pasangan sudah mati, ambil ulang.
+        if not act and now - pAt > 0.25 then
+            pAt = now
+            local anyLive = false
+            for _, p in ipairs(P) do
+                if p.chk.Parent and p.line.Parent and p.goal.Parent then
+                    anyLive = true
+                    break
+                end
+            end
+            if not anyLive then
+                local np = skillPairs()
+                if #np > 0 then P = np end
+            end
+        end
 
         local cur
         for _, p in ipairs(P) do
@@ -4782,6 +4987,7 @@ do
         genLo = Color3.fromRGB(255, 70, 70), genHi = Color3.fromRGB(80, 255, 120),
         genUnk = Color3.fromRGB(255, 200, 60), trap = Color3.fromRGB(255, 90, 160),
         down = Color3.fromRGB(255, 110, 110),
+        hpLo = Color3.fromRGB(235, 70, 70), hpMid = Color3.fromRGB(245, 190, 60), hpHi = Color3.fromRGB(90, 225, 120),
     }
     local OBJ = { gen = true, pallet = true, hook = true, exit = true, trap = true }
     local WEIGHT = { gen = 0.3, trap = 0.6, exit = 0.5, hook = 1, pallet = 1 }          -- skor urutan objek = jarak x bobot (kecil = duluan)
@@ -4805,6 +5011,21 @@ do
         if d < 50 then return math.floor(d + 0.5) end
         if d < 150 then return math.floor(d / 2 + 0.5) * 2 end
         return math.floor(d / 5 + 0.5) * 5
+    end
+
+    -- v14.0: warna bar HP (merah -> kuning -> hijau) dan lebar teks buat ukuran kartu. Ditaruh di tabel E (bukan local) biar jatah local chunk aman.
+    function E.hpCol(f)
+        f = clamp(f, 0, 1)
+        if f < 0.5 then return COL.hpLo:Lerp(COL.hpMid, f * 2) end
+        return COL.hpMid:Lerp(COL.hpHi, (f - 0.5) * 2)
+    end
+    E.TS = game:GetService("TextService")
+    E.BIG = Vector2.new(480, 60)
+    function E.tw(text, size, font)
+        if text == "" then return 0 end
+        local ok, v = pcall(E.TS.GetTextSize, E.TS, text, size, font, E.BIG)
+        if ok and v then return v.X end
+        return #text * size * 0.58
     end
 
     ---------------------------------------------------------------- folder, pool
@@ -4838,43 +5059,82 @@ do
             bb.LightInfluence = 0
             bb.ResetOnSpawn = false
             bb.Active = false
-            bb.Size = UDim2.fromOffset(150, 40)
+            bb.Size = UDim2.fromOffset(340, 120)   -- v14.0: kartu nempel di tengah (dasar kartu = titik StudsOffsetWorldSpace), tumbuh ke atas
             bb.Enabled = false
 
+            -- v14.0: kartu. Panel gelap + garis tepi warna. Judul, baris info, dan bar tipis di dasar. Ukuran diatur di E.apply.
+            local card = Instance.new("Frame")
+            card.Name = "card"
+            card.AnchorPoint = Vector2.new(0.5, 1)
+            card.Position = UDim2.fromScale(0.5, 0.5)
+            card.Size = UDim2.fromOffset(80, 21)
+            card.BackgroundColor3 = Color3.fromRGB(12, 13, 18)
+            card.BackgroundTransparency = 0.3
+            card.BorderSizePixel = 0
+            card.Parent = bb
+            local cr = Instance.new("UICorner")
+            cr.CornerRadius = UDim.new(0, 6)
+            cr.Parent = card
+            local sk = Instance.new("UIStroke")
+            sk.Thickness = 1.2
+            sk.Transparency = 0.15
+            sk.Color = WHITE
+            sk.Parent = card
+
             local l = Instance.new("TextLabel")
+            l.Name = "t"
             l.BackgroundTransparency = 1
-            l.Position = UDim2.fromOffset(0, 0)
-            l.Size = UDim2.new(1, 0, 0, 28)
-            l.Font = Enum.Font.GothamMedium
+            l.Position = UDim2.fromOffset(0, 3)
+            l.Size = UDim2.new(1, 0, 0, 14)
+            l.Font = Enum.Font.GothamBold
             l.TextSize = 12
-            l.TextYAlignment = Enum.TextYAlignment.Bottom
-            l.TextStrokeTransparency = 0.5
             l.TextColor3 = WHITE
+            l.TextStrokeTransparency = 1
             l.Text = ""
-            l.Parent = bb
+            l.Parent = card
+
+            local s = Instance.new("TextLabel")
+            s.Name = "s"
+            s.BackgroundTransparency = 1
+            s.Position = UDim2.fromOffset(0, 18)
+            s.Size = UDim2.new(1, 0, 0, 12)
+            s.Font = Enum.Font.GothamMedium
+            s.TextSize = 11
+            s.TextColor3 = Color3.fromRGB(205, 210, 222)
+            s.TextStrokeTransparency = 1
+            s.Text = ""
+            s.Visible = false
+            s.Parent = card
 
             local back = Instance.new("Frame")
-            back.AnchorPoint = Vector2.new(0.5, 0)
-            back.Position = UDim2.new(0.5, 0, 0, 31)
-            back.Size = UDim2.fromOffset(70, 7)
-            back.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
-            back.BorderColor3 = WHITE
-            back.BorderSizePixel = 1
+            back.Name = "bar"
+            back.AnchorPoint = Vector2.new(0.5, 1)
+            back.Position = UDim2.new(0.5, 0, 1, -4)
+            back.Size = UDim2.new(1, -14, 0, 4)
+            back.BackgroundColor3 = Color3.fromRGB(44, 46, 58)
+            back.BorderSizePixel = 0
             back.Visible = false
-            back.Parent = bb
+            back.Parent = card
+            local bc = Instance.new("UICorner")
+            bc.CornerRadius = UDim.new(1, 0)
+            bc.Parent = back
 
             local fill = Instance.new("Frame")
             fill.Size = UDim2.fromScale(0, 1)
             fill.BorderSizePixel = 0
             fill.Parent = back
+            local fc = Instance.new("UICorner")
+            fc.CornerRadius = UDim.new(1, 0)
+            fc.Parent = fill
 
             bb.Parent = f
-            u = { bb = bb, lbl = l, bar = back, fill = fill }
+            u = { bb = bb, card = card, stroke = sk, lbl = l, sub = s, bar = back, fill = fill }
         end
-        u.bb.StudsOffsetWorldSpace = Vector3.new(0, e.kind == "player" and 3.6 or 2.4, 0)
+        u.bb.StudsOffsetWorldSpace = Vector3.new(0, e.kind == "player" and 3.4 or 2.2, 0)
         u.bb.Adornee = e.adornee
         e.ui = u
-        e.cText, e.cCol, e.cFade, e.cEn, e.cBar, e.cFrac, e.cSize, e.cBarCol = nil, nil, nil, nil, nil, nil, nil, nil
+        e.cText, e.cSubTxt, e.cCol, e.cFade, e.cEn, e.cBarV, e.cFrac, e.cSize, e.cBarCol = nil, nil, nil, nil, nil, nil, nil, nil, nil
+        e.cCard, e.cAlpha = nil, nil
         return u
     end
 
@@ -4913,7 +5173,7 @@ do
             E.hlCount = E.hlCount + 1
         end
         e.hl = h
-        e.cHlT, e.cHlCol, e.cHlFill, e.cHlOn = nil, nil, nil, false
+        e.cHlT, e.cHlCol, e.cHlFill, e.cHlOn, e.cHlOT = nil, nil, nil, false, nil
         return h
     end
 
@@ -5396,7 +5656,7 @@ do
             mini = "EXIT"
         end
 
-        -- teks: off = kosong, mini = satu baris pendek, full = nama + info + jarak
+        -- teks: off = kosong, mini = satu baris pendek, full = judul (nama / jenis) + baris info (jarak, HP)
         local isPlayer = kind == "player"
         local textOk = mode ~= "off"
         local farOnly = (kind == "pallet" or kind == "hook" or kind == "trap")
@@ -5405,19 +5665,20 @@ do
         if textOk and farOnly and tLimit > 0 and dist > tLimit then textOk = false end
         if textOk and isPlayer and C.textDistPlayers > 0 and dist > C.textDistPlayers then textOk = false end
         local distTxt = C.dist and (bucket(dist) .. "m") or nil
-        local text = ""
+        local text, subTxt = "", ""
         if textOk then
             if mode == "mini" then
                 text = mini
                 if distTxt and (isPlayer or kind == "gen" or kind == "exit") then
-                    text = (text ~= "" and (text .. " ") or "") .. distTxt
+                    text = (text ~= "" and (text .. " Â· ") or "") .. distTxt
                 end
             else
-                local parts = {}
-                if title ~= "" then parts[#parts + 1] = title end
-                if sub then parts[#parts + 1] = sub end
-                text = table.concat(parts, "  ")
-                if distTxt then text = (text ~= "" and (text .. "\n") or "") .. distTxt end
+                text = title
+                local sp = {}
+                if distTxt then sp[#sp + 1] = distTxt end
+                if sub then sp[#sp + 1] = "HP " .. sub end
+                subTxt = table.concat(sp, " Â· ")
+                if text == "" then text, subTxt = subTxt, "" end
             end
         end
         local fade = math.floor(clamp((dist - 60) / 240, 0, 0.4) * 10 + 0.5) / 10   -- makin jauh makin pudar (maks 40%)
@@ -5432,20 +5693,47 @@ do
                 u.bb.Enabled = enabled
             end
             if enabled then
-                if e.cText ~= text then e.cText = text; u.lbl.Text = text end
-                if e.cCol ~= col then e.cCol = col; u.lbl.TextColor3 = col end
-                if e.cFade ~= fade then
-                    e.cFade = fade
-                    u.lbl.TextTransparency = fade
-                    u.lbl.TextStrokeTransparency = 0.5 + fade * 0.5
-                end
+                local cardOn = C.card ~= false
                 local sz = (mode == "mini") and 11 or 12
-                if e.cSize ~= sz then e.cSize = sz; u.lbl.TextSize = sz end
-                if e.cBar ~= showBar then e.cBar = showBar; u.bar.Visible = showBar end
+                -- isi / ukuran kartu: cuma dihitung ulang kalau teks, bar, atau ukuran huruf berubah
+                if e.cText ~= text or e.cSubTxt ~= subTxt or e.cBarV ~= showBar or e.cSize ~= sz then
+                    e.cText, e.cSubTxt, e.cBarV, e.cSize = text, subTxt, showBar, sz
+                    u.lbl.Text = text
+                    u.lbl.TextSize = sz
+                    u.sub.Text = subTxt
+                    u.sub.Visible = subTxt ~= ""
+                    u.bar.Visible = showBar
+                    local cw = math.max(E.tw(text, sz, Enum.Font.GothamBold), E.tw(subTxt, 11, Enum.Font.GothamMedium), showBar and 54 or 0) + 18
+                    local y = 3
+                    if text ~= "" then u.lbl.Position = UDim2.fromOffset(0, y); y = y + 15 end
+                    if subTxt ~= "" then u.sub.Position = UDim2.fromOffset(0, y); y = y + 12 end
+                    if showBar then y = y + 9 end
+                    u.card.Size = UDim2.fromOffset(clamp(math.floor(cw + 0.5), 46, 320), y + 3)
+                end
+                local ca = C.cardAlpha or 0.3
+                if e.cCol ~= col then e.cCol = col; u.lbl.TextColor3 = col; u.stroke.Color = col end
+                if e.cFade ~= fade or e.cCard ~= cardOn or e.cAlpha ~= ca then
+                    e.cFade, e.cCard, e.cAlpha = fade, cardOn, ca
+                    u.lbl.TextTransparency = fade
+                    u.sub.TextTransparency = fade
+                    if cardOn then
+                        u.card.BackgroundTransparency = math.min(1, ca + fade * 0.5)
+                        u.stroke.Transparency = 0.15 + fade
+                        u.lbl.TextStrokeTransparency = 1
+                        u.sub.TextStrokeTransparency = 1
+                    else   -- gaya lama: teks mengambang dengan outline hitam, tanpa panel
+                        u.card.BackgroundTransparency = 1
+                        u.stroke.Transparency = 1
+                        u.lbl.TextStrokeTransparency = 0.5 + fade * 0.5
+                        u.sub.TextStrokeTransparency = 0.5 + fade * 0.5
+                    end
+                end
                 if showBar then
                     local fr = math.floor(clamp(frac, 0, 1) * 50 + 0.5)
                     if e.cFrac ~= fr then e.cFrac = fr; u.fill.Size = UDim2.fromScale(fr / 50, 1) end
-                    if e.cBarCol ~= col then e.cBarCol = col; u.fill.BackgroundColor3 = col end
+                    local bcol = col
+                    if isPlayer and C.hpColor ~= false then bcol = E.hpCol(fr / 50) end
+                    if e.cBarCol ~= bcol then e.cBarCol = bcol; u.fill.BackgroundColor3 = bcol end
                 end
             end
         end
@@ -5458,14 +5746,26 @@ do
         local tgt = e.hlTarget
         if e.cHlT ~= tgt then e.cHlT = tgt; h.Adornee = tgt end
         local col = e.col or WHITE
-        if e.cHlCol ~= col then e.cHlCol = col; h.OutlineColor = col; h.FillColor = col end
+        if e.cHlCol ~= col then
+            e.cHlCol = col
+            h.OutlineColor = col:Lerp(WHITE, 0.12)   -- v14.0: garis sedikit lebih terang dari isi
+            h.FillColor = col
+        end
         local ft
-        if w.locked then ft = 0.55
+        if w.locked then ft = 0.5
         elseif w.near then ft = 0.5
-        elseif e.kind == "player" then ft = C.fillPlayers
+        elseif e.kind == "player" then ft = e.isK and math.max(0.55, C.fillPlayers - 0.12) or C.fillPlayers   -- killer lebih jelas dari survivor
         elseif e.kind == "gen" then ft = C.fillGens
         else ft = C.fillObjs end
+        if C.pulseLock ~= false and (w.locked or w.near) then   -- v14.0: denyut pelan
+            ft = math.floor((ft + 0.1 * math.sin(os.clock() * 6)) * 100 + 0.5) / 100
+        end
         if e.cHlFill ~= ft then e.cHlFill = ft; h.FillTransparency = ft end
+        local ot = 0
+        if C.outlineFade ~= false and e.kind ~= "player" and not (w.locked or w.near) then   -- objek jauh memudar dikit
+            ot = math.floor(clamp((w.dist - 90) / 400, 0, 0.45) * 20 + 0.5) / 20
+        end
+        if e.cHlOT ~= ot then e.cHlOT = ot; h.OutlineTransparency = ot end
         if not e.cHlOn then e.cHlOn = true; h.Enabled = true end
         return true
     end
@@ -5758,19 +6058,21 @@ task.spawn(function()
     ESP.clear()
 end)
 
------------------------------------------------------------------- 5) CINCIN + GARIS HIT KILLER (v9.1)
+------------------------------------------------------------------ 5) CINCIN + GARIS HIT KILLER (v9.1, dirapihin v14.0)
 -- Cincin di tanah ngelilingin kamu = jangkauan kamu kena hit = jangkauan parry (CFG.parry.range, satu angka).
--- Dari tiap killer keluar dua garis putih ke depan (tepi kerucut serang) sepanjang jangkauan itu, plus garis killer -> kamu kalau deket.
--- Kamu masuk kerucut + jangkauan = garis jadi merah. Muncul tanpa harus pegang dagger.
+-- Dari tiap killer keluar dua garis ke depan (tepi kerucut serang) sepanjang jangkauan itu, dihubungkan busur di ujungnya (bentuk kipas),
+-- plus garis killer -> kamu kalau deket. Kamu masuk kerucut + jangkauan = merah. Muncul tanpa harus pegang dagger.
+-- v14.0: cincin = cincin tipis + isi tipis + riak kalau killer masuk jangkauan. Warna pindah halus. Geometri kipas ditulis SEKALI
+-- (cuma ditulis ulang kalau jangkauan / sudut / tebal berubah), warna ditulis cuma kalau berubah.
 -- Murni visual client (CylinderHandleAdornment / BoxHandleAdornment di folder gethui/CoreGui), ga ada objek game yang disentuh.
--- Dibungkus do...end biar ga nambah variabel local di chunk utama.
+-- Dibungkus do...end biar ga nambah variabel local di chunk utama. Helper ditaruh di tabel R, bukan local.
 do
-    local R = { folder = nil, ring = nil, killers = {}, lastHum = nil, lastHp = 0, readyAt = -10, ready = true }
+    local R = { folder = nil, ring = nil, fill = nil, rip = nil, killers = {}, lastHum = nil, lastHp = 0, readyAt = -10, ready = true, col = nil, ARC_N = 10 }
     local FLAT = 0.06
 
     local function dropAll()
         if R.folder then pcall(function() R.folder:Destroy() end) end
-        R.folder, R.ring, R.killers = nil, nil, {}
+        R.folder, R.ring, R.fill, R.rip, R.killers = nil, nil, nil, nil, {}
         ENV.DP3_RINGFOLDER = nil
     end
 
@@ -5797,6 +6099,26 @@ do
         return bx
     end
 
+    function R.newCyl(f, name, z)
+        local c = Instance.new("CylinderHandleAdornment")
+        c.Name = name
+        c.Height = FLAT
+        c.ZIndex = z
+        c.Visible = false
+        c.Parent = f
+        return c
+    end
+
+    -- warna mendekat ke target (a = 1 langsung). Berhenti tepat di target kalau sudah dekat, biar ga nulis warna terus.
+    function R.approach(cur, target, a)
+        if not cur or a >= 1 then return target end
+        local r = cur.R + (target.R - cur.R) * a
+        local g = cur.G + (target.G - cur.G) * a
+        local b = cur.B + (target.B - cur.B) * a
+        if math.abs(target.R - r) + math.abs(target.G - g) + math.abs(target.B - b) < 0.012 then return target end
+        return Color3.new(r, g, b)
+    end
+
     do   -- sisa instance sebelumnya (reload)
         local old = ENV.DP3_RINGFOLDER
         if old then pcall(function() old:Destroy() end) end
@@ -5805,39 +6127,34 @@ do
     task.spawn(function()
         local errAt = 0
         while alive() do
-            RunService.RenderStepped:Wait()
+            local dt = RunService.RenderStepped:Wait()
             local ok, err = pcall(function()
                 local C = CFG.ring
                 local me, hum = myRoot(), myHum()
                 if not (C.enabled and me and hum and hum.Health > 0 and amSurvivor()) then
                     if R.folder then dropAll() end
-                    R.lastHum = nil
+                    R.lastHum, R.col = nil, nil
                     return
                 end
                 local f = ensureFolder()
                 if not f then return end
                 local now = os.clock()
+                local sm = (C.smoothCol ~= false) and (1 - math.exp(-math.clamp(dt, 0, 0.1) * 11)) or 1
 
-                -- belajar jangkauan: kena hit -> jarak killer terdekat (<= 20 stud) dicatat, range naik kalau perlu
+                -- v13.1: belajar jangkauan pindah ke hookHealth (parry). Dulu: damage APA PUN (trap / bleed / peluru) + killer terdekat
+                -- <= 20 stud = range naik permanen dan ikut tersimpan ke dp10_learn.json. Sekarang cuma dari hit yang terbukti dari
+                -- animasi serang killer yang dekat.
                 if R.lastHum ~= hum then R.lastHum, R.lastHp = hum, hum.Health end
-                if C.learnRange and hum.Health < R.lastHp - 0.9 then
-                    local best
-                    for _, k in ipairs(killers()) do
-                        local d = (k.root.Position - me.Position).Magnitude
-                        if not best or d < best then best = d end
-                    end
-                    if best and best <= 20 and best + 1.5 > CFG.parry.range then
-                        CFG.parry.range = math.clamp(best + 1.5, 8, 22)
-                        log("RING", string.format("kena hit dari %.1f stud -> range %.1f", best, CFG.parry.range))
-                    end
-                end
                 R.lastHp = hum.Health
 
                 local range = CFG.parry.range
                 local drop = (hum.HipHeight > 0 and hum.HipHeight or 2) + me.Size.Y / 2 - 0.08
                 local onTop = C.onTop == true
+                local ang = math.rad(C.coneDeg)
+                local wantArc = C.arc ~= false
+                local ARC_N = R.ARC_N
 
-                -- killer: dua garis tepi kerucut + garis penghubung
+                -- killer: dua garis tepi + busur + garis penghubung
                 local near = false
                 local seen = {}
                 for _, k in ipairs(killers()) do
@@ -5851,25 +6168,63 @@ do
                         seen[k.char] = true
                         local set = R.killers[k.char]
                         if not set then
-                            set = { newBox(f), newBox(f), newBox(f) }
+                            set = { newBox(f), newBox(f), newBox(f), arcs = {} }
                             R.killers[k.char] = set
                         end
                         local kdrop = (k.hum.HipHeight > 0 and k.hum.HipHeight or 2) + k.root.Size.Y / 2 - 0.08
-                        local col = inCone and C.danger or C.coneCol
-                        local tr = inCone and 0.05 or 0.25
                         local th = inCone and 0.5 or 0.32
-                        local ang = math.rad(C.coneDeg)
-                        for i = 1, 2 do
-                            local sgn = (i == 1) and -1 or 1
-                            local d = Vector3.new(sgn * math.sin(ang), 0, -math.cos(ang))
-                            local c = d * (range / 2) + Vector3.new(0, -kdrop, 0)
-                            local bx = set[i]
-                            bx.Adornee = k.root
-                            bx.Size = Vector3.new(th, FLAT, range)
-                            bx.CFrame = CFrame.lookAt(c, c + d)
-                            bx.Color3, bx.Transparency, bx.AlwaysOnTop = col, tr, onTop
-                            bx.Visible = true
+                        -- warna dan transparansi pindah halus ke target
+                        local tcol = inCone and C.danger or C.coneCol
+                        local ttr = inCone and 0.05 or 0.25
+                        set.col = R.approach(set.col, tcol, sm)
+                        set.tr = set.tr and (set.tr + (ttr - set.tr) * sm) or ttr
+                        if math.abs(set.tr - ttr) < 0.005 then set.tr = ttr end
+
+                        -- geometri (relatif ke HumanoidRootPart killer): ditulis cuma kalau jangkauan / sudut / tebal / busur berubah
+                        local sig = string.format("%.2f|%.1f|%.2f|%.2f|%d", range, C.coneDeg, kdrop, th, wantArc and 1 or 0)
+                        if set.sig ~= sig then
+                            set.sig = sig
+                            for i = 1, 2 do
+                                local sgn = (i == 1) and -1 or 1
+                                local d = Vector3.new(sgn * math.sin(ang), 0, -math.cos(ang))
+                                local c = d * (range / 2) + Vector3.new(0, -kdrop, 0)
+                                local bx = set[i]
+                                bx.Adornee = k.root
+                                bx.Size = Vector3.new(th, FLAT, range)
+                                bx.CFrame = CFrame.lookAt(c, c + d)
+                            end
+                            local arcs = set.arcs
+                            if wantArc then
+                                local prev = Vector3.new(-math.sin(ang) * range, -kdrop, -math.cos(ang) * range)
+                                for i = 1, ARC_N do
+                                    local a = -ang + (2 * ang) * (i / ARC_N)
+                                    local nxt = Vector3.new(math.sin(a) * range, -kdrop, -math.cos(a) * range)
+                                    local bx = arcs[i]
+                                    if not bx then
+                                        bx = newBox(f)
+                                        arcs[i] = bx
+                                    end
+                                    bx.Adornee = k.root
+                                    bx.Size = Vector3.new(th * 0.8, FLAT, (nxt - prev).Magnitude + 0.08)
+                                    bx.CFrame = CFrame.lookAt((prev + nxt) / 2, nxt)
+                                    prev = nxt
+                                end
+                            end
+                            set.wc = nil   -- paksa tulis ulang warna / Visible
                         end
+                        if set.wc ~= set.col or set.wt ~= set.tr or set.wtop ~= onTop or set.warc ~= wantArc then
+                            set.wc, set.wt, set.wtop, set.warc = set.col, set.tr, onTop, wantArc
+                            for i = 1, 2 do
+                                local bx = set[i]
+                                bx.Color3, bx.Transparency, bx.AlwaysOnTop = set.col, set.tr, onTop
+                                bx.Visible = true
+                            end
+                            for _, bx in ipairs(set.arcs) do
+                                bx.Color3, bx.Transparency, bx.AlwaysOnTop = set.col, math.min(1, set.tr + 0.14), onTop
+                                bx.Visible = wantArc
+                            end
+                        end
+
                         local lk = set[3]
                         if dist <= range * 1.8 then
                             local p1 = k.root.Position - Vector3.new(0, kdrop, 0)
@@ -5879,7 +6234,7 @@ do
                                 lk.Adornee = me
                                 lk.Size = Vector3.new(0.2, FLAT, len)
                                 lk.CFrame = me.CFrame:ToObjectSpace(CFrame.lookAt((p1 + p2) / 2, p2))
-                                lk.Color3, lk.Transparency, lk.AlwaysOnTop = col, inCone and 0.1 or 0.4, onTop
+                                lk.Color3, lk.Transparency, lk.AlwaysOnTop = set.col, inCone and 0.1 or 0.4, onTop
                                 lk.Visible = true
                             else
                                 lk.Visible = false
@@ -5892,6 +6247,7 @@ do
                 for ch, set in pairs(R.killers) do
                     if not seen[ch] then
                         for _, bx in ipairs(set) do pcall(function() bx:Destroy() end) end
+                        for _, bx in ipairs(set.arcs) do pcall(function() bx:Destroy() end) end
                         R.killers[ch] = nil
                     end
                 end
@@ -5906,26 +6262,64 @@ do
                         R.ready = true   -- ga punya dagger: cincin tetap tampil (teal)
                     end
                 end
-                local ring = R.ring
+                local ring, disc, rip = R.ring, R.fill, R.rip
                 if not (ring and ring.Parent) then
-                    ring = Instance.new("CylinderHandleAdornment")
-                    ring.Name = "ring"
-                    ring.Height = FLAT
-                    ring.ZIndex = 1
-                    ring.Parent = f
+                    ring = R.newCyl(f, "ring", 3)
                     R.ring = ring
                 end
-                local col
-                if near then col = R.ready and C.inRange or C.danger
-                else col = R.ready and C.ready or C.cooldown end
-                local pulse = 0.5 + 0.5 * math.sin(now * (near and 8 or 3))
+                if not (disc and disc.Parent) then
+                    disc = R.newCyl(f, "disc", 1)
+                    R.fill = disc
+                end
+                if not (rip and rip.Parent) then
+                    rip = R.newCyl(f, "rip", 2)
+                    R.rip = rip
+                end
+                local tcol
+                if near then tcol = R.ready and C.inRange or C.danger
+                else tcol = R.ready and C.ready or C.cooldown end
+                R.col = R.approach(R.col, tcol, sm)
+                local col = R.col
+                local pulse = 0.5 + 0.5 * math.sin(now * (near and 8 or 2.2))   -- v14.0: aman = denyut pelan, bahaya = cepat
+                local th = C.thickness
+                local cf = CFrame.new(0, -drop, 0) * CFrame.Angles(math.rad(90), 0, 0)
+
                 ring.Adornee = me
                 ring.Radius = range
-                ring.InnerRadius = math.clamp(range - C.thickness, 0.1, range - 0.05)
-                ring.CFrame = CFrame.new(0, -drop, 0) * CFrame.Angles(math.rad(90), 0, 0)
+                ring.InnerRadius = math.clamp(range - th, 0.1, range - 0.05)
+                ring.CFrame = cf
                 ring.Color3 = col
                 ring.AlwaysOnTop = onTop
-                ring.Transparency = near and (0.1 + 0.15 * pulse) or (0.38 + 0.12 * pulse)
+                ring.Transparency = near and (0.06 + 0.12 * pulse) or (0.3 + 0.1 * pulse)
+                ring.Visible = true
+
+                if C.fill ~= false then   -- isi tipis di dalam cincin
+                    disc.Adornee = me
+                    disc.Radius = math.max(0.2, range - th)
+                    disc.InnerRadius = 0
+                    disc.CFrame = cf
+                    disc.Color3 = col
+                    disc.AlwaysOnTop = onTop
+                    disc.Transparency = near and (0.8 + 0.08 * pulse) or 0.93
+                    disc.Visible = true
+                else
+                    disc.Visible = false
+                end
+
+                if C.ripple ~= false and near then   -- riak: keluar dari 30% jangkauan sampai tepi, memudar
+                    local ph = (now * 1.15) % 1
+                    local rr = range * (0.3 + 0.7 * ph)
+                    rip.Adornee = me
+                    rip.Radius = rr
+                    rip.InnerRadius = math.clamp(rr - th * 0.9, 0.05, rr - 0.04)
+                    rip.CFrame = cf
+                    rip.Color3 = col
+                    rip.AlwaysOnTop = onTop
+                    rip.Transparency = 0.25 + 0.75 * ph
+                    rip.Visible = true
+                else
+                    rip.Visible = false
+                end
             end)
             if not ok and os.clock() - errAt > 5 then
                 errAt = os.clock()
@@ -5981,7 +6375,7 @@ end))
     local DEF = {}
     local ENUMS = {
         ["parry.via"] = true, ["esp.text"] = true, ["esp.tier"] = true, ["veil.mode"] = true,
-        ["veil.part"] = true, ["veil.priority"] = true, ["veil.aimFrom"] = true,
+        ["veil.part"] = true, ["veil.priority"] = true, ["veil.aimFrom"] = true, ["gun.aimPoint"] = true,
     }
     for g, t in pairs(CFG) do
         if g ~= "keys" and type(t) == "table" then
@@ -6049,7 +6443,7 @@ end))
         end
     end
 
-    local API = { Version = "13.0", CFG = Flat, Store = Store, Net = Net, UI = {}, Save = save }
+    local API = { Version = "14.1", CFG = Flat, Store = Store, Net = Net, UI = {}, Save = save }
     API.Counters = setmetatable({}, { __index = function(_, k)
         if k == "parry" then return Parry.nOk or 0
         elseif k == "parryMiss" then return Parry.nMiss or 0
@@ -6069,7 +6463,7 @@ end))
 
     function API.Summary()
         local L = {
-            string.format("DP v13.0 | ping %.0f ms | fps %.0f", Net.rtt * 1000, 1 / Net.frameDt),
+            string.format("DP v14.1 | ping %.0f ms | fps %.0f", Net.rtt * 1000, 1 / Net.frameDt),
             string.format("parry: kirim %d | ok %d | meleset %d", Parry.nFire or 0, Parry.nOk or 0, Parry.nMiss or 0),
             string.format("gun: %s | hit %d/%d", tostring(Gun.status), Gun.hits, Gun.shots),
             string.format("skill: rung %s | hasil %d", tostring(Skill.tierName or "-"), Skill.resultN or 0),
@@ -6126,7 +6520,7 @@ end))
     ENV.__DPAPI = API
 end)()
 
-notify("v13.0 loaded. hook=" .. tostring(Gun.hookOK) .. " | hub: tombol bulat / RightAlt")
+notify("v14.1 loaded. hook=" .. tostring(Gun.hookOK) .. " | hub: tombol bulat / RightAlt")
 end
 
 -- =====================================================================
@@ -7363,7 +7757,7 @@ end
 -- =====================================================================
 --  DASAR
 -- =====================================================================
-local VERSION = "13.0"
+local VERSION = "14.1"
 
 local Players      = game:GetService("Players")
 local RunService   = game:GetService("RunService")
@@ -8091,12 +8485,21 @@ local OPT_DESC = {
     ["esp.objMax"] = "maks objek digambar pada kualitas penuh", ["esp.traps"] = "ESP jebakan Butcher (tag BearTrap)",
     ["esp.cullView"] = "objek di luar pandangan tanpa Highlight", ["esp.minScale"] = "skala kualitas terendah",
     ["esp.updateHz"] = "update ESP per detik pada kualitas penuh",
+    ["gun.aimPoint"] = "titik bidik gun: auto, head, body", ["gun.headMaxDist"] = "auto: kepala cuma kalau killer lebih dekat dari ini (stud)",
+    ["gun.headMaxSpeed"] = "auto: kepala cuma kalau killer lebih pelan dari ini (stud/dtk)", ["gun.aimHold"] = "tahan pindah badan ke kepala (dtk)",
+    ["gun.headYOffset"] = "geser titik kepala (stud, naik = positif)",
+    ["esp.card"] = "label gaya kartu (panel gelap + garis tepi warna)", ["esp.cardAlpha"] = "transparansi panel kartu",
+    ["esp.hpColor"] = "bar HP survivor hijau ke merah", ["esp.pulseLock"] = "isi outline target lock berdenyut",
+    ["esp.outlineFade"] = "outline objek jauh memudar",
+    ["ring.arc"] = "busur depan kerucut serang killer", ["ring.fill"] = "isi tipis di dalam cincin",
+    ["ring.ripple"] = "riak saat killer masuk jangkauan", ["ring.smoothCol"] = "warna cincin pindah halus",
+    ["veil.holdBlocked"] = "lock Veil ditahan walau target ketutup tembok / objek", ["veil.blockedHold"] = "batas tahan lock ketutup (dtk), 0 = tanpa batas",
 }
 local OPT_ENUM = {
     ["parry.via"] = { "game", "input", "remote" }, ["esp.text"] = { "full", "mini", "off" },
     ["veil.mode"] = { "hold", "toggle", "auto" }, ["veil.part"] = { "auto", "head", "body" },
     ["veil.priority"] = { "cross", "near", "lowhp" }, ["veil.aimFrom"] = { "cam", "spawn" },
-    ["esp.tier"] = { "auto", "full", "light", "eco", "min" },
+    ["esp.tier"] = { "auto", "full", "light", "eco", "min" }, ["gun.aimPoint"] = { "auto", "head", "body" },
 }
 local OPT_HIDE = { ["skill.zoneLo"] = true, ["skill.zoneHi"] = true }
 local OPT_RANGE = {
@@ -8107,6 +8510,9 @@ local OPT_RANGE = {
     ["gun.maxDist"] = { 50, 500, 10 }, ["gun.snapFov"] = { 1, 30, 1 }, ["veil.speed"] = { 20, 400, 5 },
     ["esp.costBudget"] = { 40, 400, 10 }, ["esp.targetFps"] = { 20, 144, 5 }, ["esp.minScale"] = { 0.1, 1, 0.05 },
     ["esp.updateHz"] = { 3, 30, 1 }, ["esp.objMax"] = { 6, 80, 2 }, ["esp.maxHighlights"] = { 4, 28, 1 },
+    ["gun.headMaxDist"] = { 20, 300, 5 }, ["gun.headMaxSpeed"] = { 2, 40, 1 }, ["gun.aimHold"] = { 0, 1, 0.05 },
+    ["gun.headYOffset"] = { -0.6, 0.6, 0.05 }, ["esp.cardAlpha"] = { 0, 0.9, 0.05 }, ["ring.thickness"] = { 0.1, 1.5, 0.05 },
+    ["veil.blockedHold"] = { 0, 15, 0.5 },
 }
 
 local function optAutoStep(v)
@@ -9617,6 +10023,10 @@ do
     W.slider(c3, "Toleransi auto fire", 0.1, 3, 0.1, " stud", K.pnum("gun.fireStuds"))
     W.slider(c3, "Prediksi ping (lead)", 0, 2, 0.1, " x", K.pnum("gun.leadPing"))
     W.slider(c3, "Radius bidik pas", 0.5, 5, 0.1, " stud", K.pnum("gun.hitRadius"))
+    W.row(c3, "Titik bidik", "auto = kepala kalau dekat dan killer pelan, selain itu badan. head = kepala selama kelihatan")
+    W.seg(c3, { "auto", "head", "body" }, K.pstr("gun.aimPoint", { "auto", "head", "body" }))
+    W.slider(c3, "Auto: kepala sampai jarak", 20, 300, 5, " stud", K.pnum("gun.headMaxDist"))
+    W.slider(c3, "Auto: kepala kalau killer lebih pelan", 2, 40, 1, " st/dtk", K.pnum("gun.headMaxSpeed"))
     W.toggle(c3, "Tunggu killer lurus", "Auto fire nunggu arah dan kecepatan killer stabil", K.pbool("gun.steady"))
     W.toggle(c3, "Belajar dari tembakan", "Koreksi lead dan bias dari balasan server", K.pbool("gun.learn"))
     W.toggle(c3, "Cek tembok", "Tembak cuma kalau killer tidak ketutup tembok", K.pbool("gun.needLOS"))
@@ -9640,6 +10050,8 @@ do
     W.seg(c6, { "cross", "near", "lowhp" }, K.pstr("veil.priority", { "cross", "near", "lowhp" }))
     W.slider(c6, "Sudut dari crosshair", 5, 120, 1, " Â°", K.pnum("veil.fov"))
     W.slider(c6, "Kehalusan lock", 0.1, 1, 0.05, "", K.pnum("veil.smooth"))
+    W.toggle(c6, "Lock tahan walau ketutup", "Target yang dikunci ketutup tembok atau objek: lock tidak lepas, kamera tetap ngikut, auto lempar nahan", K.pbool("veil.holdBlocked"))
+    W.slider(c6, "Batas tahan ketutup (0 = tanpa batas)", 0, 15, 0.5, " dtk", K.pnum("veil.blockedHold"))
 
     W.btnRow(p, {
         { "Salin log", "norm", function() K.act("copyLog") end },
@@ -9745,6 +10157,21 @@ do
     W.toggle(c3, "Jarak", nil, K.pbool("esp.dist"))
     W.toggle(c3, "Sembunyikan generator selesai", nil, K.pbool("esp.hideDoneGens"))
     W.toggle(c3, "Tampilkan pallet patah", nil, K.pbool("esp.showBroken"))
+    W.toggle(c3, "Label gaya kartu", "Panel gelap dan garis tepi warna. Nama di atas, jarak dan HP di bawah", K.pbool("esp.card"))
+    W.slider(c3, "Transparansi panel kartu", 0, 0.9, 0.05, "", K.pnum("esp.cardAlpha"))
+    W.toggle(c3, "Bar HP berwarna", "Bar HP survivor hijau ke kuning ke merah mengikuti sisa HP", K.pbool("esp.hpColor"))
+    W.toggle(c3, "Isi outline berdenyut", "Target lock dan killer dalam jangkauan", K.pbool("esp.pulseLock"))
+    W.toggle(c3, "Outline objek jauh memudar", nil, K.pbool("esp.outlineFade"))
+
+    local cr = W.section(p, "Cincin dan kerucut", false)
+    W.toggle(cr, "Cincin jangkauan", "Jangkauan hit dan parry di tanah", K.pbool("ring.enabled"))
+    W.toggle(cr, "Isi cincin", "Isi tipis di dalam cincin kamu", K.pbool("ring.fill"))
+    W.toggle(cr, "Riak saat killer masuk", "Riak keluar dari cincin kalau killer dalam jangkauan", K.pbool("ring.ripple"))
+    W.toggle(cr, "Kerucut serang killer", "Dua garis tepi dari tiap killer", K.pbool("ring.cone"))
+    W.toggle(cr, "Busur kerucut", "Busur di ujung garis tepi, jadi bentuk kipas", K.pbool("ring.arc"))
+    W.toggle(cr, "Warna pindah halus", nil, K.pbool("ring.smoothCol"))
+    W.toggle(cr, "Tembus tembok", "Cincin dan garis tetap kelihatan di balik tembok", K.pbool("ring.onTop"))
+    W.slider(cr, "Tebal cincin", 0.1, 1.5, 0.05, " stud", K.pnum("ring.thickness"))
 
     local c4 = W.section(p, "Jarak", false)
     W.slider(c4, "Jarak maksimal (0 = tanpa batas)", 0, 1500, 50, " stud", K.pnum("esp.maxDist"))
