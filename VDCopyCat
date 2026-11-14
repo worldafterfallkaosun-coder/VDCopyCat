@@ -1,5 +1,5 @@
 --!nonstrict
--- DistrikPembantai v14.2 (ringkas: komentar & baris kosong dibuang, kode tidak diubah)
+-- DistrikPembantai v14.3 (lock semua killer + POV killer FPP/TPP; sisanya sama dengan v14.2)
 local function __startDP()
 local CFG = {
     keys = {
@@ -13,6 +13,7 @@ local CFG = {
         esp   = Enum.KeyCode.F8,
         text  = Enum.KeyCode.F10,
         veil  = Enum.KeyCode.RightShift,
+        pov   = Enum.KeyCode.RightControl,
     },
     parry = {
         enabled      = true,
@@ -168,6 +169,8 @@ local CFG = {
         stickSnapDeg = 0.6,
         hudRate     = 15,
         forceVeil   = false,
+        allKillers  = true,
+        meleeLead   = 0.5,
         aim         = true,
         mode        = (game:GetService("UserInputService").TouchEnabled and not game:GetService("UserInputService").KeyboardEnabled) and "toggle" or "hold",
         part        = "auto",
@@ -204,6 +207,19 @@ local CFG = {
         throwGap    = 0.6,
         button      = true,
         holdKey     = Enum.UserInputType.MouseButton2,
+    },
+    pov = {
+        enabled = true,
+        tpp     = false,
+        zoom    = 10,
+        height  = 1.2,
+        button  = true,
+    },
+    speed = {
+        enabled   = false,
+        pct       = 8,
+        ramp      = 0.6,
+        wallCheck = true,
     },
 }
 local Players    = game:GetService("Players")
@@ -276,7 +292,7 @@ local function notify(msg)
     if ENV.DP_TOAST and not inHook then shown = pcall(ENV.DP_TOAST, msg) end
     if not shown then
         pcall(function()
-            StarterGui:SetCore("SendNotification", { Title = "DP v14.2", Text = msg, Duration = 2.5 })
+            StarterGui:SetCore("SendNotification", { Title = "DP v14.3", Text = msg, Duration = 2.5 })
         end)
     end
     log("INFO", msg)
@@ -1903,19 +1919,54 @@ do
             end
             return false
         end
-        local roleAt, roleVeil = -1, false
-        local function amVeil()
+        local KNAMES = { veil = true, butcher = true, cure = true, hidden = true, abysswalker = true,
+            masked = true, slasher = true, stalker = true, killer = true }
+        local PROF = {
+            veil    = { label = "Veil", kind = "spear" },
+            butcher = { label = "Butcher", kind = "line", speed = 140, gravity = 0, range = 50 },
+            cure    = { label = "Cure", kind = "arc", speed = 95, gravity = 196.2, range = 46 },
+        }
+        local PDEF = { label = "Killer", kind = "melee", speed = 100000, gravity = 0 }
+        V.PROF, V.PDEF = PROF, PDEF
+        local function holderKiller(h)
+            if not h then return nil end
+            for _, key in ipairs({ "KillerName", "MorphedKiller", "SelectedKiller" }) do
+                local v = h:GetAttribute(key)
+                if type(v) == "string" and KNAMES[v:lower()] then return v:lower() end
+            end
+            local ok, at = pcall(function() return h:GetAttributes() end)
+            if ok and type(at) == "table" then
+                for _, v in pairs(at) do
+                    if type(v) == "string" and PROF[v:lower()] then return v:lower() end
+                end
+            end
+            return nil
+        end
+        local roleAt, roleId = -1, nil
+        local function killerId()
             local now = os.clock()
-            if now - roleAt < 0.4 then return roleVeil end
+            if now - roleAt < 0.4 then return roleId end
             roleAt = now
-            local r = false
-            if C.forceVeil then r = true
-            elseif amKiller() then r = holderIsVeil(myChar()) or holderIsVeil(LP) end
-            if r ~= roleVeil then
-                roleVeil = r
-                if r then notify("Veil terdeteksi. Panel DP > Veil Panel") else log("VEIL", "bukan Veil lagi") end
+            local r = nil
+            if C.forceVeil then r = "veil"
+            elseif amKiller() then r = holderKiller(myChar()) or holderKiller(LP) or "killer" end
+            if r ~= roleId then
+                roleId = r
+                if r then
+                    local lbl = PROF[r] and PROF[r].label or (string.upper(r:sub(1, 1)) .. r:sub(2))
+                    notify("Lock killer: " .. lbl .. ". Panel DP > Lock killer")
+                else
+                    log("VEIL", "bukan killer lagi")
+                end
             end
             return r
+        end
+        local function amVeil() return killerId() == "veil" end
+        local function lockId()
+            local id = killerId()
+            if id == nil then return nil end
+            if id ~= "veil" and C.allKillers == false then return nil end
+            return id
         end
         local SL = { t = -1, list = {} }
         local function survivors()
@@ -1981,10 +2032,14 @@ do
             return math.deg(math.acos(math.clamp(a.Unit:Dot(b.Unit), -1, 1))) <= CFG.gun.steadyAng
         end
         function V.speed()
+            local pf = V.prof
+            if pf and pf.kind ~= "spear" then return pf.speed or 100000 end
             if V.trustMath and V.seedSpeed then return V.seedSpeed end
             return V.calibSpeed or V.seedSpeed or C.speed
         end
         function V.grav()
+            local pf = V.prof
+            if pf and pf.kind ~= "spear" then return pf.gravity or 0 end
             if V.trustMath and V.seedG ~= nil then return V.seedG end
             if V.calibG ~= nil then return V.calibG end
             if V.seedG ~= nil then return V.seedG end
@@ -1995,14 +2050,45 @@ do
         local function leadTime()
             if not C.assist then return 0 end
             local t = 0
-            if C.leadPing > 0 then t = Net.rtt * C.leadPing + C.leadBase + V.leadAdj end
-            if C.useThrowDelay and V.math.throwDelay then t = t + V.math.throwDelay end
+            local pk = V.prof and V.prof.kind or "spear"
+            local adj = (pk == "spear") and V.leadAdj or 0
+            if C.leadPing > 0 then t = Net.rtt * C.leadPing + C.leadBase + adj end
+            if pk == "spear" and C.useThrowDelay and V.math.throwDelay then t = t + V.math.throwDelay end
+            if pk == "melee" then t = t * math.clamp(C.meleeLead or 0.5, 0, 1.5) end
             return math.clamp(t, 0, C.leadMax)
         end
         V.leadTime = leadTime
+        local FLASK = { S = 95, B = 0.35, G = 196.2, travel = 70 }
+        pcall(function()
+            local m = require(RS.Modules.Killers.Cure.FlaskTrajectory)
+            if type(m) == "table" then
+                if type(m.ThrowSpeed) == "number" then FLASK.S = m.ThrowSpeed end
+                if type(m.UpBias) == "number" then FLASK.B = m.UpBias end
+                if typeof(m.Gravity) == "Vector3" then FLASK.G = math.abs(m.Gravity.Y) end
+                if type(m.TravelSpeed) == "number" and m.TravelSpeed > 0 then FLASK.travel = m.TravelSpeed end
+            end
+        end)
+        function V.arcAim(dx, dy, dz)
+            local S, G, B = FLASK.S, FLASK.G, FLASK.B
+            local wx, wy, wz, tp, reach = ballistic(dx, dy, dz, S, G)
+            local k = B * wy + math.sqrt(math.max(0, 1 - B * B * (1 - wy * wy)))
+            local ax, ay, az = k * wx, k * wy - B, k * wz
+            local m = math.sqrt(ax * ax + ay * ay + az * az)
+            if m < 1e-6 then return wx, wy, wz, tp, reach end
+            local len, px, py, pz = 0, 0, 0, 0
+            local N = 12
+            for i = 1, N do
+                local tt = tp * i / N
+                local x, y, z = wx * S * tt, wy * S * tt - 0.5 * G * tt * tt, wz * S * tt
+                len = len + math.sqrt((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2)
+                px, py, pz = x, y, z
+            end
+            return ax / m, ay / m, az / m, len / FLASK.travel, reach
+        end
         function V.solve(origin, k, point)
             local tr = VT[k.char]
             local S, g = V.speed(), V.grav()
+            local aimFn = (V.prof and V.prof.kind == "arc") and V.arcAim or ballistic
             local v, airborne = ZERO, false
             if C.assist and tr then
                 v = tr.vel
@@ -2024,15 +2110,18 @@ do
                 fut = fut + Vector3.new(0, V.vBias, 0)
                 local d = fut - origin
                 local t2
-                ux, uy, uz, t2, reach = ballistic(d.X, d.Y, d.Z, S, g)
+                ux, uy, uz, t2, reach = aimFn(d.X, d.Y, d.Z, S, g)
                 t = t2
             end
+            local pf = V.prof
+            if pf and pf.range and (point - origin).Magnitude > pf.range then reach = false end
             return fut, Vector3.new(ux, uy, uz), t, reach
         end
         local function spawnOrigin()
             local root = myRoot()
             if not root then return nil end
             local off = V.math.spawnOffset
+            if V.prof and V.prof.kind ~= "spear" then off = nil end
             if typeof(off) == "Vector3" then return (root.CFrame * CFrame.new(off)).Position end
             local p = root.Position + Vector3.new(0, 1.4, 0)
             if type(off) == "number" then p = p + root.CFrame.LookVector * off end
@@ -2103,9 +2192,11 @@ do
             local root = k.root
             local head = k.char:FindFirstChild("Head")
             local bodyOff = Vector3.new(0, 0.3, 0)
-            if C.part == "body" or not head then return bodyOff, "BODY" end
+            local part = C.part
+            if part == "auto" and V.prof and V.prof.kind == "melee" then part = "body" end
+            if part == "body" or not head then return bodyOff, "BODY" end
             local headOff = head.Position - root.Position
-            if C.part == "head" then return headOff, "HEAD" end
+            if part == "head" then return headOff, "HEAD" end
             local tr = VT[k.char]
             local spd = tr and Vector3.new(tr.vel.X, 0, tr.vel.Z).Magnitude or 0
             if (root.Position - origin).Magnitude > 90 and spd > 12 then return bodyOff, "BODY" end
@@ -2684,10 +2775,14 @@ do
                     hud.warn.Visible = false
                 end
             end
-            local isV = C.enabled and amVeil()
-            V.isVeil = isV
+            local lid = C.enabled and lockId() or nil
+            local isV = lid ~= nil
+            V.killerId = lid
+            V.isVeil = (lid == "veil")
+            V.prof = lid and (PROF[lid] or PDEF) or nil
             if not (isV and alive2 and cam) then
                 V.targetChar, V.lockedNow, V.snap, V.steadyAt, V.cache = nil, false, nil, nil, nil
+                V.prof = nil
                 V.blockAt = nil
                 if not V.hidden then
                     V.hidden = true
@@ -2734,7 +2829,8 @@ do
             local errStuds
             if locked then
                 local cf = cam.CFrame
-                local gv = (C.aimFrom == "spawn") and best.dir or (best.P - cf.Position)
+                local tppNow = ENV.DP3_POV and ENV.DP3_POV.applied
+                local gv = ((C.aimFrom == "spawn") or tppNow) and best.dir or (best.P - cf.Position)
                 if gv.Magnitude > 0.05 then
                     local goal = gv.Unit
                     local look = cf.LookVector
@@ -2751,7 +2847,7 @@ do
                         log("VEIL", string.format("nempel ke %s (%s, %.0f stud, terbang %.2fs, lead %.0f ms)", best.k.player.DisplayName,
                             best.kind, best.dist, best.flight, leadTime() * 1000))
                     end
-                    if C.autoThrow and not best.blocked then autoThrow(now, best, errStuds) end
+                    if C.autoThrow and V.isVeil and not best.blocked then autoThrow(now, best, errStuds) end
                 end
             else
                 V.snap, V.steadyAt, V.lastLockChar = nil, nil, nil
@@ -2785,12 +2881,12 @@ do
                 local txt = string.format("%s %s\n%.0fst  %.2fs%s", best.k.player.DisplayName, best.kind, best.dist, best.flight,
                     best.blocked and "  KETUTUP" or (best.reach and "" or "  JAUH"))
                 if hud.mlabel.Text ~= txt then hud.mlabel.Text = txt end
-                drawArc(origin, best.dir, V.speed(), V.grav(), best.flight, col)
+                if V.isVeil then drawArc(origin, best.dir, V.speed(), V.grav(), best.flight, col) else hideArc() end
             else
                 hideArc()
             end
-            hud.cdBack.Visible = C.cdBar
-            if C.cdBar then
+            hud.cdBack.Visible = C.cdBar and V.isVeil
+            if C.cdBar and V.isVeil then
                 local rem = V.cdLeft(now)
                 local extra = cdAttrs(now)
                 local key = (rem > 0 and math.floor(rem * 10) or -1) .. "|" .. extra
@@ -2983,7 +3079,7 @@ do
         function V.statusText()
             local now = os.clock()
             return string.format("%s | speed %.0f%s | g %.0f%s | lead %.0fms\ncd %.1fs%s | lempar %d/%d | tinggi %+.1f",
-                V.isVeil and "VEIL" or "bukan Veil", V.speed(), V.calibSpeed and "*" or "", V.grav(), V.calibG and "*" or "",
+                V.killerId and ("LOCK " .. V.killerId) or "bukan killer", V.speed(), V.calibSpeed and "*" or "", V.grav(), V.calibG and "*" or "",
                 leadTime() * 1000, V.cdTotal(), V.cdLearn and "*" or "", V.hits, V.shots, V.vBias)
         end
         log("VEIL", "modul dimuat (tanda * = hasil kalibrasi / belajar)")
@@ -5406,6 +5502,226 @@ keep(UIS.InputBegan:Connect(function(i, gp)
         notify("Veil Assist: " .. (CFG.veil.enabled and "ON" or "OFF"))
     end
 end))
+do
+    local S = CFG.speed
+    local rp = RaycastParams.new()
+    rp.FilterType = Enum.RaycastFilterType.Exclude
+    pcall(function() rp.RespectCanCollide = true end)
+    local fchar, cur, phase = nil, 0, math.random() * 6.28
+    local RUN, RUNNP = Enum.HumanoidStateType.Running, Enum.HumanoidStateType.RunningNoPhysics
+    keep(RunService.Heartbeat:Connect(function(dt)
+        if not alive() then return end
+        local hum, root = myHum(), myRoot()
+        local goal = 0
+        if S.enabled == true and hum and root and hum.Health > 0 and dt > 0 and dt < 0.05 then
+            local st = hum:GetState()
+            if hum.MoveDirection.Magnitude > 0.1 and hum.WalkSpeed >= 6 and not hum.Sit and not hum.PlatformStand
+                and not root.Anchored and (st == RUN or st == RUNNP) then
+                local v = root.AssemblyLinearVelocity
+                if Vector3.new(v.X, 0, v.Z).Magnitude >= hum.WalkSpeed * 0.7 then goal = 1 end
+            end
+        end
+        local step = dt / math.max(0.1, tonumber(S.ramp) or 0.6)
+        if goal > cur then cur = math.min(goal, cur + step) else cur = math.max(goal, cur - step * 2) end
+        if cur <= 0.001 or not hum or not root then return end
+        local pct = math.clamp(tonumber(S.pct) or 0, 0, 25)
+        if pct <= 0 then return end
+        local md = hum.MoveDirection
+        local dir = Vector3.new(md.X, 0, md.Z)
+        if dir.Magnitude < 0.1 then return end
+        dir = dir.Unit
+        phase = phase + dt * 0.7
+        local extra = hum.WalkSpeed * (pct / 100) * (1 + 0.12 * math.sin(phase)) * cur * dt
+        if S.wallCheck then
+            local ch = hum.Parent
+            if ch ~= fchar then fchar = ch; rp.FilterDescendantsInstances = { ch } end
+            if workspace:Raycast(root.Position, dir * (extra + 2.2), rp) then return end
+        end
+        root.CFrame = root.CFrame + dir * extra
+    end))
+end
+do
+    local P = CFG.pov
+    local Pov = { applied = false, char = nil, fppOffset = nil, fppChar = nil }
+    do
+        local old = ENV.DP3_POV
+        if type(old) == "table" and type(old.restore) == "function" then pcall(old.restore) end
+    end
+    ENV.DP3_POV = Pov
+    pcall(function() RunService:UnbindFromRenderStep("DP3_POV") end)
+    local FPP_OFFSET = Vector3.new(0, 0.2, -1.5)
+    local FPP_ZOOM = 0.5
+    local gui, btn, errAt = nil, nil, 0
+    local function guiParent()
+        local parent
+        pcall(function() parent = (gethui and gethui()) or game:GetService("CoreGui") end)
+        return parent or LP:FindFirstChildOfClass("PlayerGui")
+    end
+    local function killerNow() return teamKind(LP.Team) == "killer" end
+    local function touch()
+        pcall(function()
+            local a = ENV.__DPAPI
+            if a and a.Store then a.Store.touch() end
+        end)
+    end
+    local function headVisible(char, show)
+        local mod = show and 0 or 1
+        local head = char:FindFirstChild("Head")
+        if head then pcall(function() head.LocalTransparencyModifier = mod end) end
+        for _, a in ipairs(char:GetChildren()) do
+            if a:IsA("Accessory") then
+                local h = a:FindFirstChild("Handle")
+                if h and (show or CS:HasTag(a, "HeadAccessory")) then
+                    pcall(function() h.LocalTransparencyModifier = mod end)
+                end
+            end
+        end
+        if not show then
+            for _, inst in ipairs(CS:GetTagged("alwaysInvisible")) do
+                if inst:IsA("BasePart") and inst:IsDescendantOf(char) then
+                    pcall(function() inst.LocalTransparencyModifier = 1 end)
+                end
+            end
+        end
+    end
+    local function unbindEnforce()
+        pcall(function() RunService:UnbindFromRenderStep("DP3_POV") end)
+    end
+    local function bindEnforce()
+        unbindEnforce()
+        RunService:BindToRenderStep("DP3_POV", Enum.RenderPriority.Camera.Value - 1, function()
+            if not alive() then
+                unbindEnforce()
+                return
+            end
+            if not Pov.applied then return end
+            local hum = myHum()
+            if hum then
+                local t = Vector3.new(0, math.clamp(tonumber(P.height) or 1.2, 0, 6), 0)
+                if hum.CameraOffset ~= t then hum.CameraOffset = t end
+            end
+        end)
+    end
+    local function destroyBtn()
+        if gui then pcall(function() gui:Destroy() end) end
+        gui, btn = nil, nil
+    end
+    local function toggle()
+        P.tpp = not P.tpp
+        touch()
+    end
+    local function buildBtn()
+        local parent = guiParent()
+        if not parent then return end
+        local old = parent:FindFirstChild("DP3_POVBtn")
+        if old then old:Destroy() end
+        local g = Instance.new("ScreenGui")
+        g.Name, g.ResetOnSpawn, g.DisplayOrder, g.IgnoreGuiInset = "DP3_POVBtn", false, 9990, true
+        g.Parent = parent
+        local b = Instance.new("TextButton")
+        b.AnchorPoint, b.Position = Vector2.new(0.5, 0.5), UDim2.new(1, -80, 0.45, 70)
+        b.Size, b.BackgroundColor3, b.BackgroundTransparency = UDim2.fromOffset(58, 58), Color3.fromRGB(40, 60, 110), 0.15
+        b.Font, b.TextSize, b.TextColor3, b.Text = Enum.Font.GothamBold, 12, Color3.new(1, 1, 1), "POV\nFPP"
+        b.AutoButtonColor, b.Visible = false, false
+        b.Parent = g
+        local c = Instance.new("UICorner")
+        c.CornerRadius = UDim.new(1, 0)
+        c.Parent = b
+        b.InputBegan:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+                toggle()
+                if Pov.step then pcall(Pov.step) end
+            end
+        end)
+        gui, btn = g, b
+    end
+    local function step()
+        local ch, hum = LP.Character, myHum()
+        local isK = killerNow()
+        if Pov.applied and (Pov.char ~= ch or not isK or not hum or hum.Health <= 0) then
+            Pov.applied, Pov.char = false, nil
+            unbindEnforce()
+        end
+        local showBtn = (P.enabled and P.button and isK) and true or false
+        if showBtn and not btn then pcall(buildBtn) end
+        if btn then
+            if btn.Visible ~= showBtn then btn.Visible = showBtn end
+            local tpp = P.tpp == true
+            local txt = tpp and "POV\nTPP" or "POV\nFPP"
+            if btn.Text ~= txt then
+                btn.Text = txt
+                btn.BackgroundColor3 = tpp and Color3.fromRGB(40, 140, 80) or Color3.fromRGB(40, 60, 110)
+            end
+        end
+        if not (isK and ch and hum and hum.Health > 0) then return end
+        local rsa = ch:GetAttribute("RoundScriptsActive")
+        if rsa == nil then rsa = RS:GetAttribute("RoundInProgress") end
+        local ready = rsa == true or ch:GetAttribute("RankedIntroComplete") == true
+        local want = P.enabled and P.tpp == true and ready
+        if want then
+            if not Pov.applied then
+                Pov.applied, Pov.char = true, ch
+                bindEnforce()
+                notify("POV killer: TPP")
+            end
+            local zoom = math.clamp(tonumber(P.zoom) or 10, 3, 25)
+            if LP.CameraMode ~= Enum.CameraMode.Classic then LP.CameraMode = Enum.CameraMode.Classic end
+            if LP.CameraMaxZoomDistance ~= zoom + 4 then LP.CameraMaxZoomDistance = zoom + 4 end
+            if LP.CameraMinZoomDistance ~= zoom then LP.CameraMinZoomDistance = zoom end
+            headVisible(ch, true)
+        elseif Pov.applied then
+            Pov.applied, Pov.char = false, nil
+            unbindEnforce()
+            LP.CameraMinZoomDistance = FPP_ZOOM
+            LP.CameraMaxZoomDistance = FPP_ZOOM
+            hum.CameraOffset = (Pov.fppChar == ch and Pov.fppOffset) or FPP_OFFSET
+            headVisible(ch, false)
+            notify("POV killer: FPP")
+        else
+            local o = hum.CameraOffset
+            if o.Magnitude > 0.1 then Pov.fppOffset, Pov.fppChar = o, ch end
+            if P.tpp == true and P.enabled and not ready and not Pov.hinted then
+                Pov.hinted = true
+                notify("TPP dipilih, aktif begitu ronde jalan")
+            end
+        end
+    end
+    Pov.step = step
+    function Pov.state() return Pov.applied and "TPP" or "FPP" end
+    function Pov.restore()
+        unbindEnforce()
+        local was, ch = Pov.applied, Pov.char
+        Pov.applied, Pov.char = false, nil
+        destroyBtn()
+        if was and ch and ch.Parent and ch == LP.Character and killerNow() then
+            local hum = myHum()
+            pcall(function()
+                LP.CameraMinZoomDistance = FPP_ZOOM
+                LP.CameraMaxZoomDistance = FPP_ZOOM
+                if hum then hum.CameraOffset = (Pov.fppChar == ch and Pov.fppOffset) or FPP_OFFSET end
+                headVisible(ch, false)
+            end)
+        end
+    end
+    keep(UIS.InputBegan:Connect(function(i, gp)
+        if gp or not alive() then return end
+        if i.KeyCode == CFG.keys.pov and P.enabled and killerNow() then
+            toggle()
+            pcall(step)
+        end
+    end))
+    task.spawn(function()
+        while alive() do
+            local ok, err = pcall(step)
+            if not ok and os.clock() - errAt > 5 then
+                errAt = os.clock()
+                log("POV", "error: " .. tostring(err))
+            end
+            task.wait(0.2)
+        end
+        pcall(destroyBtn)
+    end)
+end
 ;(function()
     local FILE = "DP12_cfg.json"
     local HS = game:GetService("HttpService")
@@ -5474,7 +5790,7 @@ end))
             end
         end
     end
-    local API = { Version = "14.2", CFG = Flat, Store = Store, Net = Net, UI = {}, Save = save }
+    local API = { Version = "14.3", CFG = Flat, Store = Store, Net = Net, UI = {}, Save = save }
     API.Counters = setmetatable({}, { __index = function(_, k)
         if k == "parry" then return Parry.nOk or 0
         elseif k == "parryMiss" then return Parry.nMiss or 0
@@ -5488,11 +5804,13 @@ end))
         return 0
     end })
     function API.State()
-        return { locked = Gun.lockTarget ~= nil, gun = Gun.status, tier = Skill.tierName, veil = Veil.isVeil }
+        local pv = ENV.DP3_POV
+        return { locked = Gun.lockTarget ~= nil, gun = Gun.status, tier = Skill.tierName, veil = Veil.isVeil,
+            killer = Veil.killerId, pov = (pv and pv.state) and pv.state() or nil }
     end
     function API.Summary()
         local L = {
-            string.format("DP v14.2 | ping %.0f ms | fps %.0f", Net.rtt * 1000, 1 / Net.frameDt),
+            string.format("DP v14.3 | ping %.0f ms | fps %.0f", Net.rtt * 1000, 1 / Net.frameDt),
             string.format("parry: kirim %d | ok %d | meleset %d", Parry.nFire or 0, Parry.nOk or 0, Parry.nMiss or 0),
             string.format("gun: %s | hit %d/%d", tostring(Gun.status), Gun.hits, Gun.shots),
             string.format("skill: rung %s | hasil %d", tostring(Skill.tierName or "-"), Skill.resultN or 0),
@@ -5528,9 +5846,13 @@ end))
     function API.Stop()
         if ENV.DP3_TOKEN == TOKEN then ENV.DP3_TOKEN = nil end
         for _, c in ipairs(Conns) do pcall(function() c:Disconnect() end) end
-        for _, n in ipairs({ "DP3_CamLock", "DP3_AimLock", "DP3_VeilAim", "DP3_HideSkillUI" }) do
+        for _, n in ipairs({ "DP3_CamLock", "DP3_AimLock", "DP3_VeilAim", "DP3_HideSkillUI", "DP3_POV" }) do
             pcall(function() RunService:UnbindFromRenderStep(n) end)
         end
+        pcall(function()
+            local pv = ENV.DP3_POV
+            if pv and pv.restore then pv.restore() end
+        end)
         pcall(ESP.clear)
         for _, k in ipairs({ "DP3_VEILFOLDER", "DP3_ESPFOLDER", "DP3_RINGFOLDER" }) do
             local f = ENV[k]
@@ -5545,7 +5867,7 @@ end))
     end
     ENV.__DPAPI = API
 end)()
-notify("v14.2 loaded. hook=" .. tostring(Gun.hookOK) .. " | hub: tombol bulat / RightAlt")
+notify("v14.3 loaded. hook=" .. tostring(Gun.hookOK) .. " | hub: tombol bulat / RightAlt")
 end
 local function __startNono()
 local NX = {}
@@ -6625,7 +6947,7 @@ end
 print("[NONO v6.0] loaded | setfpscap:", HAS_SETFPSCAP, "| sethiddenproperty:", HAS_SETHIDDEN,
     "| file:", HAS_FILE)
 end
-local VERSION = "14.2"
+local VERSION = "14.3"
 local Players      = game:GetService("Players")
 local RunService   = game:GetService("RunService")
 local UIS          = game:GetService("UserInputService")
@@ -7020,6 +7342,7 @@ function K.pollPar()
     st = (okS and type(st) == "table") and st or {}
     v.block = st.locked == true
     v.gun, v.tier, v.veil = st.gun, st.tier, st.veil
+    v.killer, v.pov = st.killer, st.pov
     v.rtt = (tonumber(net.rtt) or 0) * 1000
     v.parried, v.blocked, v.dodged = c.parry or 0, c.gunHit or 0, c.skill or 0
     v.hit, v.gb, v.shots = c.parryMiss or 0, 0, c.gunShot or 0
@@ -7311,6 +7634,8 @@ local OPT_RANGE = {
     ["gun.headMaxDist"] = { 20, 300, 5 }, ["gun.headMaxSpeed"] = { 2, 40, 1 }, ["gun.aimHold"] = { 0, 1, 0.05 },
     ["gun.headYOffset"] = { -0.6, 0.6, 0.05 }, ["esp.cardAlpha"] = { 0, 0.9, 0.05 }, ["ring.thickness"] = { 0.1, 1.5, 0.05 },
     ["veil.blockedHold"] = { 0, 15, 0.5 }, ["gun.unsteadyScale"] = { 0.3, 1, 0.05 },
+    ["speed.pct"] = { 0, 20, 1 }, ["speed.ramp"] = { 0.2, 2, 0.1 },
+    ["pov.zoom"] = { 4, 20, 1 }, ["pov.height"] = { 0, 4, 0.1 }, ["veil.meleeLead"] = { 0, 1, 0.05 },
 }
 local function optAutoStep(v)
     if v == math.floor(v) and math.abs(v) >= 2 then return 1 end
@@ -7353,7 +7678,7 @@ function K.optItem(parent, k)
 end
 local PLABEL = { ["parry.enabled"] = "Auto parry", ["skill.enabled"] = "Auto skill check", ["gun.aimLock"] = "Aim lock gun",
     ["gun.trigger"] = "Auto fire", ["gun.snap"] = "Gun snap", ["esp.enabled"] = "ESP", ["ring.enabled"] = "Cincin killer",
-    ["veil.enabled"] = "Veil assist", ["skill.hideUI"] = "Sembunyikan UI skill check" }
+    ["veil.enabled"] = "Lock killer", ["skill.hideUI"] = "Sembunyikan UI skill check" }
 function K.pGet(key)
     if MOD.par.state ~= "ready" or not CFG13 then return nil end
     return CFG13[key]
@@ -8649,7 +8974,9 @@ do
     W.toggle(c1, "Gun snap", "Tembakan manual dibelokkan pas ke badan killer. Hotkey F2", K.pbool("gun.snap"))
     W.toggle(c1, "ESP", "Outline dan info pemain serta objek. Hotkey F8", K.pbool("esp.enabled"))
     W.toggle(c1, "Cincin dan garis killer", "Jangkauan parry dan kerucut serang killer", K.pbool("ring.enabled"))
-    W.toggle(c1, "Veil assist", "Aim dan prediksi lempar spear saat kamu killer Veil. Hotkey RightShift", K.pbool("veil.enabled"))
+    W.toggle(c1, "Lock killer (semua killer)", "Kamera nempel ke survivor saat kamu jadi killer apa pun. Veil: spear, Butcher: chain, Cure: flask, killer lain: lurus. Hotkey RightShift", K.pbool("veil.enabled"))
+    W.toggle(c1, "POV killer: TPP", "Ganti kamera killer dari FPP ke TPP. Hotkey RightCtrl atau tombol POV di layar", K.pbool("pov.tpp"))
+    W.toggle(c1, "Speed lari", "Tambahan kecepatan lari kecil dan halus, berhenti kalau ketutup tembok", K.pbool("speed.enabled"))
     local setGun = W.chipRow(c1, "Gun", nil)
     reg(function()
         if MOD.par.state ~= "ready" then setGun("--", TH.mute); return end
@@ -8661,10 +8988,17 @@ do
         local t = V.par.tier
         setSkill(t and tostring(t) or "belum ada", t and TH.on or TH.mute)
     end)
-    local setVeil = W.chipRow(c1, "Veil", nil)
+    local setVeil = W.chipRow(c1, "Lock killer", nil)
     reg(function()
         if MOD.par.state ~= "ready" then setVeil("--", TH.mute); return end
-        setVeil(V.par.veil and "kamu Veil" or "bukan Veil", V.par.veil and TH.on or TH.mute)
+        local kid = V.par.killer
+        setVeil(kid and tostring(kid) or "bukan killer", kid and TH.on or TH.mute)
+    end)
+    local setPov = W.chipRow(c1, "POV", nil)
+    reg(function()
+        if MOD.par.state ~= "ready" then setPov("--", TH.mute); return end
+        local pv = V.par.pov
+        setPov(pv and tostring(pv) or "--", pv == "TPP" and TH.on or TH.mute)
     end)
     local setSafe = W.chipRow(c1, "Parry sukses", nil)
     reg(function()
@@ -8709,7 +9043,8 @@ do
     W.toggle(c4, "Snap ke tengah zona", "Anti lompat frame di FPS rendah", K.pbool("skill.frameSnap"))
     W.toggle(c4, "Buang Check yang nyangkut", "Check yang jarumnya diam terlalu lama disembunyikan", K.pbool("skill.unstick"))
     W.slider(c4, "Geser titik tekan", -40, 40, 1, " °", K.pnum("skill.offset"))
-    local c6 = W.section(p, "Veil", false)
+    local c6 = W.section(p, "Lock killer", false)
+    W.toggle(c6, "Lock ke semua killer", "Mati = lock cuma jalan kalau kamu Veil", K.pbool("veil.allKillers"))
     W.toggle(c6, "Aim ke survivor", nil, K.pbool("veil.aim"))
     W.toggle(c6, "Assist (lead dan busur)", nil, K.pbool("veil.assist"))
     W.toggle(c6, "Auto lempar (eksperimen)", "Kirim input lempar otomatis saat bidikan pas", K.pbool("veil.autoThrow"))
@@ -8724,6 +9059,16 @@ do
     W.slider(c6, "Kehalusan lock", 0.1, 1, 0.05, "", K.pnum("veil.smooth"))
     W.toggle(c6, "Lock tahan walau ketutup", "Target yang dikunci ketutup tembok atau objek: lock tidak lepas, kamera tetap ngikut, auto lempar nahan", K.pbool("veil.holdBlocked"))
     W.slider(c6, "Batas tahan ketutup (0 = tanpa batas)", 0, 15, 0.5, " dtk", K.pnum("veil.blockedHold"))
+    W.slider(c6, "Lead killer jarak dekat", 0, 1, 0.05, " x", K.pnum("veil.meleeLead"))
+    local c8 = W.section(p, "POV killer", false)
+    W.toggle(c8, "Mode TPP (mati = FPP)", "Aktif begitu ronde jalan. Hotkey RightCtrl atau tombol POV di layar", K.pbool("pov.tpp"))
+    W.slider(c8, "Jarak kamera TPP", 4, 20, 1, " stud", K.pnum("pov.zoom"))
+    W.slider(c8, "Tinggi kamera TPP", 0, 4, 0.1, " stud", K.pnum("pov.height"))
+    W.toggle(c8, "Tombol POV di layar", nil, K.pbool("pov.button"))
+    local c7 = W.section(p, "Speed lari", false)
+    W.slider(c7, "Tambahan kecepatan", 0, 20, 1, " %", K.pnum("speed.pct"))
+    W.slider(c7, "Waktu naik ke penuh", 0.2, 2, 0.1, " dtk", K.pnum("speed.ramp"))
+    W.toggle(c7, "Cek tembok di depan", "Berhenti nambah kalau ada tembok atau objek tepat di depan", K.pbool("speed.wallCheck"))
     W.btnRow(p, {
         { "Salin log", "norm", function() K.act("copyLog") end },
         { "Salin dump skill", "norm", function() K.act("copyDump") end },
