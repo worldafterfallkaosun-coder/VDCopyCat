@@ -1,5 +1,5 @@
 --!nonstrict
--- DistrikPembantai v14.5 (kamera lock gun + Veil dihapus; silent aim/shoot gun + tombak Veil lewat tabel Spearthrow; fix step remote gun; sisanya sama dengan v14.4)
+-- DistrikPembantai v15.0 (UI hub dirombak: Survivor, Killer, ESP, Anti-lag dipisah per tab dan tanpa kontrol dobel; logika sama dengan v14.5)
 local function __startDP()
 local CFG = {
     keys = {
@@ -6036,7 +6036,7 @@ end
     end
     ENV.__DPAPI = API
 end)()
-notify("v14.5 loaded. hook=" .. tostring(Gun.hookOK) .. " | hub: tombol bulat / RightAlt")
+notify("v15.0 loaded. hook=" .. tostring(Gun.hookOK) .. " | hub: tombol bulat / RightAlt")
 end
 local function __startNono()
 local NX = {}
@@ -7116,7 +7116,7 @@ end
 print("[NONO v6.0] loaded | setfpscap:", HAS_SETFPSCAP, "| sethiddenproperty:", HAS_SETHIDDEN,
     "| file:", HAS_FILE)
 end
-local VERSION = "14.5"
+local VERSION = "15.0"
 local Players      = game:GetService("Players")
 local RunService   = game:GetService("RunService")
 local UIS          = game:GetService("UserInputService")
@@ -7444,6 +7444,14 @@ function K.scanAsync()
         SCAN.busy, SCAN.last = false, os.clock()
     end)
 end
+function K.hideNono()
+    local sg = PGui:FindFirstChild("NonoAntiLag")
+    local main = sg and sg:FindFirstChild("Main")
+    if main then
+        if not LG.origPos0 then LG.origPos0 = main.Position end
+        main.Position = UDim2.new(0, -10000, 0, 0)
+    end
+end
 function K.loadMod(key)
     local m = MOD[key]
     m.state, m.t0, m.err = "loading", os.clock(), nil
@@ -7465,6 +7473,7 @@ function K.loadMod(key)
     if not ok then m.state, m.err = "missing", tostring(e); return end
     m.ended = K.diff(UIS.InputEnded, before)
     m.began = K.diff(UIS.InputBegan, beforeB)
+    pcall(K.hideNono)
 end
 function K.reattach(key)
     local m = MOD[key]
@@ -7544,7 +7553,7 @@ function K.attachLag()
     local apply = scroll:FindFirstChildWhichIsA("TextButton")
     if not (apply and txt["STATUS"] and txt["BEFORE"]) then return false end
     LG.sg, LG.main, LG.scroll, LG.apply, LG.txt = sg, main, scroll, apply, txt
-    LG.origPos = main.Position
+    LG.origPos = LG.origPos0 or main.Position
     LG.status, LG.hidden = sib(txt["STATUS"]), sib(txt["Hidden"])
     LG.before, LG.after = sib(txt["BEFORE"]), sib(txt["AFTER"])
     LG.restore, LG.unload, LG.logLbl = nil, nil, nil
@@ -7868,7 +7877,9 @@ function K.pFlip(key)
     K.pSet(key, not v)
     log((PLABEL[key] or key) .. (not v and " dinyalakan" or " dimatikan"), (not v) and "ok" or "info")
 end
+K.USED, K.recUsed = {}, true
 function K.pbool(key)
+    if K.recUsed then K.USED[key] = true end
     return function()
         local v = K.pGet(key)
         if v == nil then return nil end
@@ -7876,6 +7887,7 @@ function K.pbool(key)
     end, function() K.pFlip(key) end
 end
 function K.pnum(key)
+    if K.recUsed then K.USED[key] = true end
     return function() return K.pGet(key) end,
         function(v, final)
             if MOD.par.state ~= "ready" or not CFG13 or CFG13[key] == nil then return end
@@ -7884,6 +7896,7 @@ function K.pnum(key)
         end
 end
 function K.pstr(key, labels)
+    if K.recUsed then K.USED[key] = true end
     return function()
         local v = K.pGet(key)
         for i, l in ipairs(labels) do if l == v then return i end end
@@ -7906,17 +7919,48 @@ function K.copyAnalysis()
 end
 function K.allOn()
     if MOD.par.state == "ready" then
-        CFG13["parry.enabled"] = true; CFG13["skill.enabled"] = true; CFG13["gun.aimLock"] = true; CFG13["gun.trigger"] = true; K.ptouch()
+        CFG13["parry.enabled"] = true; CFG13["skill.enabled"] = true; CFG13["gun.aimLock"] = true; CFG13["gun.trigger"] = true
+        CFG13["veil.enabled"] = true; CFG13["esp.enabled"] = true; K.ptouch()
     end
     K.lagApply()
     log("Semua sistem dinyalakan", "ok")
 end
 function K.allOff()
     if MOD.par.state == "ready" then
-        CFG13["parry.enabled"] = false; CFG13["skill.enabled"] = false; CFG13["gun.aimLock"] = false; CFG13["gun.trigger"] = false; K.ptouch()
+        CFG13["parry.enabled"] = false; CFG13["skill.enabled"] = false; CFG13["gun.aimLock"] = false; CFG13["gun.trigger"] = false
+        CFG13["veil.enabled"] = false; CFG13["esp.enabled"] = false; K.ptouch()
     end
     K.lagRestore()
     log("Semua sistem dimatikan")
+end
+K.SYSDEF = {
+    srv = { name = "Survivor", keys = { "parry.enabled", "skill.enabled", "gun.aimLock", "gun.trigger", "gun.snap", "gun.silent" },
+        master = { "parry.enabled", "skill.enabled", "gun.aimLock", "gun.trigger" } },
+    klr = { name = "Killer", keys = { "veil.enabled", "veil.silent", "pov.tpp", "speed.enabled" }, master = { "veil.enabled" } },
+    esp = { name = "ESP", keys = { "esp.enabled" }, master = { "esp.enabled" } },
+}
+function K.sysCount(id)
+    if id == "lag" then return (V.lag.applied and 1 or 0), 1, MOD.lag.state == "ready" end
+    local d = K.SYSDEF[id]
+    local rdy = MOD.par.state == "ready" and CFG13 ~= nil
+    local n = 0
+    if rdy then
+        for _, k in ipairs(d.keys) do if CFG13[k] == true then n = n + 1 end end
+    end
+    return n, #d.keys, rdy
+end
+function K.sysFlip(id)
+    if id == "lag" then
+        if V.lag.applied then K.lagRestore() else K.lagApply() end
+        return
+    end
+    if MOD.par.state ~= "ready" or not CFG13 then K.ready(MOD.par); return end
+    local d = K.SYSDEF[id]
+    local any = false
+    for _, k in ipairs(d.master) do if CFG13[k] == true then any = true end end
+    for _, k in ipairs(d.master) do if CFG13[k] ~= nil then CFG13[k] = not any end end
+    K.ptouch()
+    log(d.name .. (not any and " dinyalakan" or " dimatikan"), (not any) and "ok" or "info")
 end
 function K.report()
     local L = {}
@@ -8563,7 +8607,7 @@ function W.iconBtn(parent, kind, pos, onClick)
     end)
     return b
 end
-local TABS = { { "home", "Beranda" }, { "com", "Combat" }, { "esp", "ESP" }, { "lag", "Anti-lag" }, { "opt", "Opsi" }, { "cfg", "Setelan" } }
+local TABS = { { "home", "Beranda" }, { "srv", "Survivor" }, { "klr", "Killer" }, { "esp", "ESP" }, { "lag", "Anti-lag" }, { "cfg", "Setelan" } }
 UI.tabBar = new("Frame", { Size = UDim2.new(1, 0, 0, TABH), Position = UDim2.fromOffset(0, HDR), BackgroundTransparency = 1 }, UI.win)
 new("Frame", { Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = WHITE, BackgroundTransparency = 0.92, BorderSizePixel = 0 }, UI.tabBar)
 UI.pill = new("Frame", { Size = UDim2.new(1 / #TABS, -16, 0, 2), Position = UDim2.new(0, 8, 1, -2), BackgroundColor3 = TH.brand, BorderSizePixel = 0 }, UI.tabBar)
@@ -8581,10 +8625,10 @@ function W.showTab(id)
 end
 for i, t in ipairs(TABS) do
     local b = new("TextButton", { Size = UDim2.new(1 / #TABS, 0, 1, -1), Position = UDim2.new((i - 1) / #TABS, 0, 0, 0), BackgroundTransparency = 1,
-        Text = t[2], TextSize = 12, Font = FD, TextColor3 = TH.mute, AutoButtonColor = false, BorderSizePixel = 0 }, UI.tabBar)
+        Text = t[2], TextSize = 11, Font = FD, TextColor3 = TH.mute, AutoButtonColor = false, BorderSizePixel = 0 }, UI.tabBar)
     b.Activated:Connect(function() W.showTab(t[1]) end)
     UI.tabBtn[t[1]] = b
-    if t[1] == "com" or t[1] == "lag" or t[1] == "esp" then
+    if t[1] == "srv" or t[1] == "klr" or t[1] == "lag" or t[1] == "esp" then
         local d = new("Frame", { Size = UDim2.fromOffset(6, 6), Position = UDim2.new(1, -10, 0, 7), BackgroundColor3 = TH.on, BackgroundTransparency = 1, BorderSizePixel = 0 }, b)
         corner(d, 3)
         UI.badge[t[1]] = d
@@ -8599,10 +8643,12 @@ for i, t in ipairs(TABS) do
 end
 reg(function()
     for id, b in pairs(UI.tabBtn) do b.TextColor3 = (id == curTab) and TH.bone or TH.mute end
+    local function anyOn(id) return function() local n = K.sysCount(id); return n > 0 end end
     local map = {
-        com = { "par", function() return K.pGet("parry.enabled") end },
-        lag = { "lag", function() return V.lag.applied end },
-        esp = { "par", function() return K.pGet("esp.enabled") end },
+        srv = { "par", anyOn("srv") },
+        klr = { "par", anyOn("klr") },
+        esp = { "par", anyOn("esp") },
+        lag = { "lag", anyOn("lag") },
     }
     for id, m in pairs(map) do
         local d, st = UI.badge[id], MOD[m[1]].state
@@ -9032,28 +9078,56 @@ function W.banner(parent, key)
         end
     end)
 end
+function W.sysCard(parent, title, tabId, sub)
+    local b = new("TextButton", { BackgroundColor3 = Color3.fromRGB(24, 28, 48), BackgroundTransparency = 0.15,
+        Text = "", AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = nextLO() }, parent)
+    corner(b, 14)
+    local st = stroke(b, WHITE, 1.5, 0.88)
+    new("UIGradient", { Rotation = 90, Transparency = ns(0, 0, 1, 0.4) }, b)
+    local led = new("Frame", { Size = UDim2.fromOffset(7, 7), Position = UDim2.fromOffset(12, 13), BackgroundColor3 = TH.mute, BorderSizePixel = 0 }, b)
+    corner(led, 4)
+    label(b, title, 13, TH.bone, BLACK, { Size = UDim2.new(1, -54, 0, 20), Position = UDim2.fromOffset(26, 7) })
+    label(b, ">", 16, TH.mute, FD, { Size = UDim2.fromOffset(20, 20), Position = UDim2.new(1, -28, 0, 7), TextXAlignment = Enum.TextXAlignment.Center })
+    local stl = label(b, "--", 10, TH.mute, MONO, { Size = UDim2.new(1, -24, 0, 14), Position = UDim2.fromOffset(12, 30) })
+    label(b, sub, 10, TH.mute, FS, { Size = UDim2.new(1, -24, 0, 12), Position = UDim2.fromOffset(12, 45), TextTruncate = Enum.TextTruncate.AtEnd })
+    b.Activated:Connect(function() W.showTab(tabId) end)
+    local lastKey
+    reg(function()
+        local txt, c, on
+        local m = (tabId == "lag") and MOD.lag or MOD.par
+        if m.state == "loading" then txt, c, on = "MEMUAT", TH.amb, false
+        elseif m.state ~= "ready" then txt, c, on = "N/A", TH.err, false
+        elseif tabId == "lag" then
+            if V.lag.running then txt, c, on = "PROSES " .. V.lag.prog .. "%", TH.amb, true
+            elseif V.lag.applied then txt, c, on = "AKTIF · " .. V.lag.hidden .. " part", TH.on, true
+            else txt, c, on = "BELUM DITERAPKAN", TH.mute, false end
+        elseif tabId == "esp" then
+            local s = V.esp
+            if K.pGet("esp.enabled") ~= true then txt, c, on = "MATI", TH.mute, false
+            elseif s then txt, c, on = string.upper(tostring(s.tier)) .. " " .. math.floor(s.scale * 100 + 0.5) .. "%", (s.scale >= 0.85) and TH.on or TH.amb, true
+            else txt, c, on = "AKTIF", TH.on, true end
+        else
+            local n, total = K.sysCount(tabId)
+            txt, c, on = n .. "/" .. total .. " AKTIF", (n > 0) and TH.on or TH.mute, n > 0
+        end
+        local key = txt .. tostring(on)
+        if key == lastKey then return end
+        lastKey = key
+        stl.Text = txt; stl.TextColor3 = c
+        led.BackgroundColor3 = c
+        tw(st, 0.25, { Color = on and TH.on or WHITE, Transparency = on and 0.15 or 0.88 })
+    end)
+end
 BT = "home"
 do
     local p = UI.panes.home
-    local deck = new("Frame", { Size = UDim2.new(1, 0, 0, 74), BackgroundTransparency = 1, LayoutOrder = nextLO() }, p)
-    hlist(deck, 8)
-    local function tileState(key, on, onTxt)
-        local m = MOD[key]
-        if m.state == "loading" then return "MEMUAT", TH.amb end
-        if m.state ~= "ready" then return "N/A", TH.err end
-        if on then return onTxt or "AKTIF", TH.on end
-        return "MATI", TH.mute
-    end
-    local function ptile(title, key)
-        W.tile(deck, title, function() return K.pGet(key) end, function() return tileState("par", K.pGet(key) == true) end,
-            function() K.pFlip(key) end)
-    end
-    ptile("PARRY", "parry.enabled")
-    ptile("GUN", "gun.aimLock")
-    ptile("SKILL", "skill.enabled")
-    W.tile(deck, "LAG", function() return MOD.lag.state == "ready" and V.lag.applied end,
-        function() return tileState("lag", V.lag.applied, V.lag.running and "PROSES" or "AKTIF") end,
-        function() if V.lag.applied then K.lagRestore() else K.lagApply() end end)
+    W.heading(p, "Sistem")
+    local sysg = new("Frame", { Size = UDim2.new(1, 0, 0, 132), BackgroundTransparency = 1, LayoutOrder = nextLO() }, p)
+    new("UIGridLayout", { CellSize = UDim2.new(0.5, -4, 0, 62), CellPadding = UDim2.fromOffset(8, 8), SortOrder = Enum.SortOrder.LayoutOrder }, sysg)
+    W.sysCard(sysg, "SURVIVOR", "srv", "Parry · Skill check · Gun")
+    W.sysCard(sysg, "KILLER", "klr", "Lock · POV · Speed lari")
+    W.sysCard(sysg, "ESP", "esp", "Outline dan info objek")
+    W.sysCard(sysg, "ANTI-LAG", "lag", "Nono · cap FPS · auto boost")
     local hero = W.card(p)
     local hb = new("Frame", { Size = UDim2.new(1, 0, 0, 124), BackgroundTransparency = 1, LayoutOrder = nextLO() }, hero)
     local setGauge = W.gauge(hb, 104, 9, UDim2.fromOffset(2, 10))
@@ -9071,58 +9145,12 @@ do
     end)
     W.spark(p, HIST.fps, 144, col, "FPS · 40 DETIK TERAKHIR", "")
     W.spark(p, HIST.ping, 300, colPing, "PING · 40 DETIK TERAKHIR", " ms")
-    local ce = W.card(p)
-    local setE = W.chipRow(ce, "ESP", function()
-        local s = V.esp
-        if not s or K.pGet("esp.enabled") ~= true then return "ESP mati atau modul belum siap" end
-        return string.format("%d pemain · %d gen · objek %d/%d · Highlight %d/%d", s.players, s.gens, s.objShown, s.objTotal, s.hl, s.hlBudget)
-    end)
-    reg(function()
-        local s = V.esp
-        if not s or K.pGet("esp.enabled") ~= true then setE("MATI", TH.mute); return end
-        setE(s.tier .. " " .. math.floor(s.scale * 100 + 0.5) .. "%", s.scale >= 0.85 and TH.on or (s.scale >= 0.55 and TH.amb or TH.err))
-    end)
-    local function dotOf(key, onFn)
-        return function()
-            local m = MOD[key]
-            if m.state == "loading" then return TH.amb end
-            if m.state ~= "ready" then return TH.err end
-            return onFn() and TH.on or TH.mute
-        end
-    end
-    local function stateSub(key, readyFn)
-        return function()
-            local m = MOD[key]
-            if m.state == "loading" then return "Memuat modul…" end
-            if m.state == "gone" then return "Dilepas" end
-            if m.state ~= "ready" then return "Tidak tersedia" end
-            return readyFn()
-        end
-    end
-    local c1 = W.card(p)
-    do
-        local row = W.row(c1, "Distrik Pembantai", stateSub("par", function()
-            local v = V.par
-            return string.format("%s · parry %d · tembak %d · skill %d", v.on and "aktif" or "mati", v.parried, v.blocked, v.dodged)
-        end), false, 0, 16)
-        W.dot(row, dotOf("par", function() return V.par.on end))
-    end
-    do
-        local row = W.btnRight(c1, "Anti-lag", stateSub("lag", function()
-            if V.lag.running then return "Memproses " .. V.lag.prog .. "%" end
-            if V.lag.applied then return "Aktif · " .. V.lag.hidden .. " part disembunyikan" end
-            return "Belum diterapkan"
-        end), function() return V.lag.applied and "Terapkan ulang" or "Terapkan" end, K.lagApply)
-        W.dot(row, dotOf("lag", function() return V.lag.applied end))
-    end
     W.btnRow(p, { { "Nyalakan semua", "pri", K.allOn }, { "Matikan semua", "norm", K.allOff } })
     local c4 = W.card(p)
     local lh = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AUTO_Y, BackgroundTransparency = 1, LayoutOrder = nextLO() }, c4)
     padd(lh, 10, 0, 10, 0); vlist(lh, 6)
     local top = new("Frame", { Size = UDim2.new(1, 0, 0, 24), BackgroundTransparency = 1, LayoutOrder = 1 }, lh)
     label(top, "A K T I V I T A S", 10, TH.mute, MONO, { Size = UDim2.new(0.5, 0, 1, 0) })
-    W.btn(top, "Salin laporan", "norm", K.copyReport, { Size = UDim2.fromOffset(0, 24), AutomaticSize = AUTO_X, AnchorPoint = Vector2.new(1, 0),
-        Position = UDim2.new(1, 0, 0, 0), TextSize = 11 })
     UI.log = label(lh, "", 11.5, TH.mute, MONO, { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AUTO_Y, TextWrapped = true, RichText = true, LayoutOrder = 2 })
     renderLog()
 end
@@ -9131,9 +9159,9 @@ function K.act(name)
     local ok, e = pcall(AP.Act[name])
     if not ok then say("err", tostring(name) .. ": " .. tostring(e):sub(1, 70)) end
 end
-BT = "com"
+BT = "srv"
 do
-    local p = UI.panes.com
+    local p = UI.panes.srv
     W.banner(p, "par")
     local c1 = W.card(p)
     W.toggle(c1, "Auto parry", "Parry otomatis dari animasi killer (Parrying Dagger). Hotkey F1", K.pbool("parry.enabled"))
@@ -9142,11 +9170,7 @@ do
     W.toggle(c1, "Auto fire", "Tembak otomatis saat bidikan pas. Hotkey F5", K.pbool("gun.trigger"))
     W.toggle(c1, "Gun snap", "Tembakan manual dibelokkan pas ke badan killer. Hotkey F2", K.pbool("gun.snap"))
     W.toggle(c1, "Silent aim gun", "Peluru dibelokkan ke killer walau crosshair jauh dari badan. Hotkey End", K.pbool("gun.silent"))
-    W.toggle(c1, "ESP", "Outline dan info pemain serta objek. Hotkey F8", K.pbool("esp.enabled"))
     W.toggle(c1, "Cincin dan garis killer", "Jangkauan parry dan kerucut serang killer", K.pbool("ring.enabled"))
-    W.toggle(c1, "Lock killer (semua killer)", "Kamera nempel ke survivor saat kamu jadi killer apa pun (Veil: kamera tidak digerakkan, silent). Veil: spear, Butcher: chain, Cure: flask, killer lain: lurus. Hotkey RightShift", K.pbool("veil.enabled"))
-    W.toggle(c1, "POV killer: TPP", "Ganti kamera killer dari FPP ke TPP. Hotkey RightCtrl atau tombol POV di layar", K.pbool("pov.tpp"))
-    W.toggle(c1, "Speed lari", "Tambahan kecepatan lari kecil dan halus, berhenti kalau ketutup tembok", K.pbool("speed.enabled"))
     local setGun = W.chipRow(c1, "Gun", nil)
     reg(function()
         if MOD.par.state ~= "ready" then setGun("--", TH.mute); return end
@@ -9158,28 +9182,15 @@ do
         local t = V.par.tier
         setSkill(t and tostring(t) or "belum ada", t and TH.on or TH.mute)
     end)
-    local setVeil = W.chipRow(c1, "Lock killer", nil)
-    reg(function()
-        if MOD.par.state ~= "ready" then setVeil("--", TH.mute); return end
-        local kid = V.par.killer
-        setVeil(kid and tostring(kid) or "bukan killer", kid and TH.on or TH.mute)
-    end)
-    local setPov = W.chipRow(c1, "POV", nil)
-    reg(function()
-        if MOD.par.state ~= "ready" then setPov("--", TH.mute); return end
-        local pv = V.par.pov
-        setPov(pv and tostring(pv) or "--", pv == "TPP" and TH.on or TH.mute)
-    end)
     local setSafe = W.chipRow(c1, "Parry sukses", nil)
     reg(function()
         if MOD.par.state ~= "ready" then setSafe("--", TH.mute); return end
         local r = V.par.rate
         setSafe(r .. "%", r >= 80 and TH.on or (r >= 55 and TH.amb or TH.err))
     end)
-    UI.cs = W.grid(p, { { "ping", "Ping" }, { "p", "Parry" }, { "g", "Tembak" }, { "s", "Skill" }, { "m", "Meleset" } })
+    UI.cs = W.grid(p, { { "p", "Parry" }, { "g", "Tembak" }, { "s", "Skill" }, { "m", "Meleset" } })
     reg(function()
         local v, rdy = V.par, MOD.par.state == "ready"
-        UI.cs.ping.Text = rdy and tostring(math.floor(v.rtt + 0.5)) or "--"
         UI.cs.p.Text = rdy and tostring(v.parried) or "--"
         UI.cs.g.Text = rdy and (v.blocked .. "/" .. (v.shots or 0)) or "--"
         UI.cs.s.Text = rdy and tostring(v.dodged) or "--"
@@ -9215,12 +9226,50 @@ do
     W.toggle(c4, "Snap ke tengah zona", "Anti lompat frame di FPS rendah", K.pbool("skill.frameSnap"))
     W.toggle(c4, "Buang Check yang nyangkut", "Check yang jarumnya diam terlalu lama disembunyikan", K.pbool("skill.unstick"))
     W.slider(c4, "Geser titik tekan", -40, 40, 1, " °", K.pnum("skill.offset"))
-    local c6 = W.section(p, "Lock killer", false)
+    local cr = W.section(p, "Cincin dan kerucut", false)
+    W.toggle(cr, "Isi cincin", "Isi tipis di dalam cincin kamu", K.pbool("ring.fill"))
+    W.toggle(cr, "Riak saat killer masuk", "Riak keluar dari cincin kalau killer dalam jangkauan", K.pbool("ring.ripple"))
+    W.toggle(cr, "Kerucut serang killer", "Dua garis tepi dari tiap killer", K.pbool("ring.cone"))
+    W.toggle(cr, "Busur kerucut", "Busur di ujung garis tepi, jadi bentuk kipas", K.pbool("ring.arc"))
+    W.toggle(cr, "Warna pindah halus", nil, K.pbool("ring.smoothCol"))
+    W.toggle(cr, "Tembus tembok", "Cincin dan garis tetap kelihatan di balik tembok", K.pbool("ring.onTop"))
+    W.slider(cr, "Tebal cincin", 0.1, 1.5, 0.05, " stud", K.pnum("ring.thickness"))
+    W.btnRow(p, {
+        { "Salin dump skill", "norm", function() K.act("copyDump") end },
+        { "Probe skill check", "norm", function() K.act("probe") end },
+    })
+    W.btnRow(p, {
+        { "Simpan belajar", "norm", function() K.act("saveLearn") end },
+        { "Hapus belajar", "norm", function() K.act("wipeLearn") end },
+    })
+    W.btnRow(p, { { "Reset state gun dan skill", "norm", function() K.act("resetState") end } })
+end
+BT = "klr"
+do
+    local p = UI.panes.klr
+    W.banner(p, "par")
+    local c1 = W.card(p)
+    W.toggle(c1, "Lock killer (semua killer)", "Kamera nempel ke survivor saat kamu jadi killer apa pun (Veil: kamera tidak digerakkan, silent). Veil: spear, Butcher: chain, Cure: flask, killer lain: lurus. Hotkey RightShift", K.pbool("veil.enabled"))
+    W.toggle(c1, "POV killer: TPP", "Ganti kamera killer dari FPP ke TPP. Hotkey RightCtrl atau tombol POV di layar", K.pbool("pov.tpp"))
+    W.toggle(c1, "Speed lari", "Tambahan kecepatan lari kecil dan halus, berhenti kalau ketutup tembok", K.pbool("speed.enabled"))
+    local setVeil = W.chipRow(c1, "Killer terdeteksi", nil)
+    reg(function()
+        if MOD.par.state ~= "ready" then setVeil("--", TH.mute); return end
+        local kid = V.par.killer
+        setVeil(kid and tostring(kid) or "bukan killer", kid and TH.on or TH.mute)
+    end)
+    local setPov = W.chipRow(c1, "POV", nil)
+    reg(function()
+        if MOD.par.state ~= "ready" then setPov("--", TH.mute); return end
+        local pv = V.par.pov
+        setPov(pv and tostring(pv) or "--", pv == "TPP" and TH.on or TH.mute)
+    end)
+    local c6 = W.section(p, "Lock killer", true)
     W.toggle(c6, "Lock ke semua killer", "Mati = lock cuma jalan kalau kamu Veil", K.pbool("veil.allKillers"))
     W.toggle(c6, "Aim ke survivor", nil, K.pbool("veil.aim"))
+    W.toggle(c6, "Assist (lead dan busur)", nil, K.pbool("veil.assist"))
     W.toggle(c6, "Silent aim spear (Veil)", "Tombak dilempar ke survivor walau crosshair meleset, kamera tidak nempel. Hotkey End", K.pbool("veil.silent"))
     W.slider(c6, "Sudut silent aim", 10, 180, 5, " °", K.pnum("veil.silentFov"))
-    W.toggle(c6, "Assist (lead dan busur)", nil, K.pbool("veil.assist"))
     W.toggle(c6, "Auto lempar (eksperimen)", "Kirim input lempar otomatis saat bidikan pas", K.pbool("veil.autoThrow"))
     W.toggle(c6, "Tombol LOCK di layar", nil, K.pbool("veil.button"))
     W.row(c6, "Mode lock", "hold = tahan RMB atau tombol LOCK")
@@ -9235,7 +9284,6 @@ do
     W.slider(c6, "Batas tahan ketutup (0 = tanpa batas)", 0, 15, 0.5, " dtk", K.pnum("veil.blockedHold"))
     W.slider(c6, "Lead killer jarak dekat", 0, 1, 0.05, " x", K.pnum("veil.meleeLead"))
     local c8 = W.section(p, "POV killer", false)
-    W.toggle(c8, "Mode TPP (mati = FPP)", "Aktif begitu ronde jalan. Hotkey RightCtrl atau tombol POV di layar", K.pbool("pov.tpp"))
     W.slider(c8, "Jarak kamera TPP", 4, 20, 1, " stud", K.pnum("pov.zoom"))
     W.slider(c8, "Tinggi kamera TPP", 0, 4, 0.1, " stud", K.pnum("pov.height"))
     W.toggle(c8, "Tombol POV di layar", nil, K.pbool("pov.button"))
@@ -9244,35 +9292,20 @@ do
     W.slider(c7, "Waktu naik ke penuh", 0.2, 2, 0.1, " dtk", K.pnum("speed.ramp"))
     W.toggle(c7, "Cek tembok di depan", "Berhenti nambah kalau ada tembok atau objek tepat di depan", K.pbool("speed.wallCheck"))
     W.btnRow(p, {
-        { "Salin log", "norm", function() K.act("copyLog") end },
-        { "Salin dump skill", "norm", function() K.act("copyDump") end },
-    })
-    W.btnRow(p, {
-        { "Simpan belajar", "norm", function() K.act("saveLearn") end },
-        { "Hapus belajar", "norm", function() K.act("wipeLearn") end },
-    })
-    W.btnRow(p, {
-        { "Probe skill check", "norm", function() K.act("probe") end },
         { "Dump SpearMath", "norm", function() K.act("dumpMath") end },
-    })
-    W.btnRow(p, {
         { "Reset kalibrasi Veil", "norm", function() K.act("resetCalib") end },
-        { "Reset state gun dan skill", "norm", function() K.act("resetState") end },
     })
-    W.btnRow(p, { { "Kembalikan semua opsi ke bawaan", "dng", function()
-        if MOD.par.state ~= "ready" or not (AP and AP.Store) then K.ready(MOD.par); return end
-        pcall(AP.Store.reset); say("warn", "Opsi Distrik Pembantai dikembalikan ke bawaan")
-    end, 1, true } })
 end
 BT = "esp"
 do
     local p = UI.panes.esp
+    K.USED["esp.minScale"] = true
     W.banner(p, "par")
     local c1 = W.card(p)
     W.toggle(c1, "ESP", "Outline dan info pemain serta objek. Hotkey F8", K.pbool("esp.enabled"))
     W.row(c1, "Mode teks", "full, mini, atau off. Hotkey F10")
     W.seg(c1, { "full", "mini", "off" }, K.pstr("esp.text", { "full", "mini", "off" }))
-    W.heading(p, "Beban dan anti-lag")
+    W.heading(p, "Beban ESP (adaptif)")
     local function tierCol(s) return s >= 0.85 and TH.on or (s >= 0.55 and TH.amb or TH.err) end
     local g1 = W.grid(p, { { "tier", "Kualitas" }, { "fps", "FPS" }, { "hz", "Update/dtk" }, { "ms", "Biaya ms" } })
     local g2 = W.grid(p, { { "obj", "Objek" }, { "hl", "Highlight" }, { "cut", "Dipangkas" }, { "cost", "Beban" } })
@@ -9345,15 +9378,6 @@ do
     W.toggle(c3, "Bar HP berwarna", "Bar HP survivor hijau ke kuning ke merah mengikuti sisa HP", K.pbool("esp.hpColor"))
     W.toggle(c3, "Isi outline berdenyut", "Target lock dan killer dalam jangkauan", K.pbool("esp.pulseLock"))
     W.toggle(c3, "Outline objek jauh memudar", nil, K.pbool("esp.outlineFade"))
-    local cr = W.section(p, "Cincin dan kerucut", false)
-    W.toggle(cr, "Cincin jangkauan", "Jangkauan hit dan parry di tanah", K.pbool("ring.enabled"))
-    W.toggle(cr, "Isi cincin", "Isi tipis di dalam cincin kamu", K.pbool("ring.fill"))
-    W.toggle(cr, "Riak saat killer masuk", "Riak keluar dari cincin kalau killer dalam jangkauan", K.pbool("ring.ripple"))
-    W.toggle(cr, "Kerucut serang killer", "Dua garis tepi dari tiap killer", K.pbool("ring.cone"))
-    W.toggle(cr, "Busur kerucut", "Busur di ujung garis tepi, jadi bentuk kipas", K.pbool("ring.arc"))
-    W.toggle(cr, "Warna pindah halus", nil, K.pbool("ring.smoothCol"))
-    W.toggle(cr, "Tembus tembok", "Cincin dan garis tetap kelihatan di balik tembok", K.pbool("ring.onTop"))
-    W.slider(cr, "Tebal cincin", 0.1, 1.5, 0.05, " stud", K.pnum("ring.thickness"))
     local c4 = W.section(p, "Jarak", false)
     W.slider(c4, "Jarak maksimal (0 = tanpa batas)", 0, 1500, 50, " stud", K.pnum("esp.maxDist"))
     W.slider(c4, "Teks pallet, hook, trap sampai", 0, 300, 10, " stud", K.pnum("esp.textDistObjs"))
@@ -9361,80 +9385,7 @@ do
     local c5 = W.section(p, "Lanjutan", false)
     W.toggle(c5, "Lewati objek di luar pandangan", "Objek di belakang atau samping kamera tidak dapat jatah Highlight", K.pbool("esp.cullView"))
     W.slider(c5, "Laju update penuh", 3, 30, 1, " Hz", K.pnum("esp.updateHz"))
-    W.btnRow(p, {
-        { "Reset skala ESP", "norm", function() K.act("espReset") end },
-        { "Salin log", "norm", function() K.act("copyLog") end },
-    })
-end
-BT = "opt"
-do
-    local p = UI.panes.opt
-    W.banner(p, "par")
-    local st = { q = "", mode = 1, cap = 30, tok = 0 }
-    local top = W.card(p)
-    local hold = new("Frame", { Size = UDim2.new(1, 0, 0, 52), BackgroundTransparency = 1, LayoutOrder = nextLO() }, top)
-    local box = new("TextBox", { Position = UDim2.fromOffset(0, 8), Size = UDim2.new(1, 0, 0, 36), PlaceholderText = "cari opsi: range, aim, esp, veil…",
-        Text = "", ClearTextOnFocus = false, Font = FS, TextSize = 13, TextColor3 = TH.bone, PlaceholderColor3 = TH.mute,
-        BackgroundColor3 = Color3.fromRGB(8, 6, 16), BackgroundTransparency = 0.35, BorderSizePixel = 0,
-        TextXAlignment = Enum.TextXAlignment.Left, ClipsDescendants = true }, hold)
-    corner(box, 10); stroke(box, WHITE, 1, 0.9); padd(box, 0, 10, 0, 10)
-    W.seg(p, { "Semua", "Diubah", "Aktif" }, function() return st.mode end, function(i) st.mode = i; st.cap = 30; K.optRebuild() end)
-    local info = label(p, "", 11, TH.mute, FS, { Size = UDim2.new(1, 0, 0, 14), LayoutOrder = nextLO() })
-    local lst = W.card(p)
-    local more = W.btn(p, "", "norm", function() st.cap = st.cap + 30; K.optRebuild() end,
-        { Size = UDim2.new(1, 0, 0, 34), LayoutOrder = nextLO(), TextSize = 12, Visible = false })
-    local built, rstart = false, nil
-    function K.optRebuild()
-        if rstart then
-            for i = #REF, rstart, -1 do table.remove(REF, i) end
-        end
-        for _, ch in ipairs(lst:GetChildren()) do
-            if ch:IsA("GuiObject") then ch:Destroy() end
-        end
-        lst:SetAttribute("n", 0)
-        rstart = #REF + 1
-        local oldBT = BT
-        BT = "opt"
-        local q = st.q:lower()
-        local shown, total = 0, 0
-        local ok, err = pcall(function()
-            if MOD.par.state ~= "ready" or not (AP and AP.Store) then return end
-            local keys = {}
-            for k, def in pairs(AP.Store.defaults) do
-                local t = type(def)
-                if not OPT_HIDE[k] and (t == "boolean" or t == "number" or (t == "string" and OPT_ENUM[k])) then keys[#keys + 1] = k end
-            end
-            table.sort(keys)
-            for _, k in ipairs(keys) do
-                local cur, def, hint = CFG13[k], AP.Store.defaults[k], OPT_DESC[k]
-                local match = true
-                if q ~= "" then
-                    match = (k:lower():find(q, 1, true) ~= nil) or (hint ~= nil and hint:lower():find(q, 1, true) ~= nil)
-                end
-                if match and st.mode == 2 then match = cur ~= def end
-                if match and st.mode == 3 then match = cur == true end
-                if match then
-                    total = total + 1
-                    if shown < st.cap then shown = shown + 1; K.optItem(lst, k) end
-                end
-            end
-        end)
-        BT = oldBT
-        if not ok then log("Opsi: " .. tostring(err):sub(1, 80), "err") end
-        info.Text = string.format("%d opsi cocok · tampil %d", total, shown)
-        more.Visible = total > shown
-        more.Text = string.format("Tampilkan lebih banyak (+30) · sisa %d", total - shown)
-    end
-    track(box:GetPropertyChangedSignal("Text"):Connect(function()
-        st.tok = st.tok + 1
-        local my = st.tok
-        task.delay(0.3, function()
-            if alive and st.tok == my then st.q = box.Text; st.cap = 30; K.optRebuild() end
-        end)
-    end))
-    reg(function()
-        if not built and MOD.par.state == "ready" then built = true; K.optRebuild() end
-    end)
+    W.btnRow(p, { { "Reset skala ESP", "norm", function() K.act("espReset") end } })
 end
 BT = "lag"
 do
@@ -9476,6 +9427,18 @@ do
     W.slider(c2, "Jarak render", 64, 1024, 64, "",
         function() return K.lagSlGet("Render Distance") end,
         function(v, final) K.lagSlSet("Render Distance", 64, 1024, 64, v, final) end)
+    do
+        local CAPS_UI = { 60, 120, 165, 240, 300 }
+        local sc = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AUTO_Y, BackgroundTransparency = 1, LayoutOrder = nextLO() }, c2)
+        padd(sc, 8, 0, 10, 0); vlist(sc, 6)
+        label(sc, "Preset batas FPS (MAX = tanpa batas)", 11, TH.mute, FS, { Size = UDim2.new(1, 0, 0, 14), LayoutOrder = nextLO() })
+        W.seg(sc, { "60", "120", "165", "240", "MAX" }, function() return S.bst.cap end,
+            function(i)
+                S.bst.cap = i; K.saveSoon(); K.capReset()
+                if S.bst.unlock then K.setCap() end
+                K.lagSlSet("FPS Cap (bypass)", 30, 300, 5, math.min(CAPS_UI[i], 300), true)
+            end)
+    end
     local c3 = W.section(p, "Pengaturan Nono", false)
     local names = { "Hapus tekstur", "Matikan bayangan", "Matikan efek post", "Sembunyikan daun", "Matikan partikel dan FX",
         "Anchor part", "Matikan skybox", "Mode agresif", "FPS adaptif", "Terapkan otomatis" }
@@ -9507,17 +9470,6 @@ do
     local cp = W.section(p, "Opsi lanjutan", false)
     W.toggle(cp, "Buka batas FPS", "Batas bawaan Roblox 60 FPS. Butuh setfpscap.",
         function() return K.boostGet("unlock") end, function() K.boostFlip("unlock") end)
-    do
-        local sc = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AUTO_Y, BackgroundTransparency = 1, LayoutOrder = nextLO() }, cp)
-        padd(sc, 8, 0, 10, 0); vlist(sc, 6)
-        label(sc, "Batas FPS (MAX = tanpa batas)", 11, TH.mute, FS, { Size = UDim2.new(1, 0, 0, 14), LayoutOrder = nextLO() })
-        W.seg(sc, { "60", "120", "165", "240", "MAX" }, function() return S.bst.cap end,
-            function(i)
-                S.bst.cap = i; K.saveSoon(); K.capReset()
-                if S.bst.unlock then K.setCap() end
-                K.lagSlSet("FPS Cap (bypass)", 30, 300, 5, math.min(CAPS_UI[i], 300), true)
-            end)
-    end
     W.toggle(cp, "Mode AFK", "Matikan render 3D. Layar game hitam, GUI tetap. Aman buat AFK farming.",
         function() return K.boostGet("render3d") end, function() K.boostFlip("render3d") end)
     W.toggle(cp, "Kualitas grafis minimum", "Rendering Level 1 dan kualitas tersimpan",
@@ -9571,7 +9523,7 @@ do
     end
     W.slider(ca, "Target FPS", 30, 240, 5, "", function() return S.ab.target end,
         function(v, final) S.ab.target = v; if final then K.saveSoon() end end)
-    W.btnRow(p, { { "TURBO", "pri", K.turbo, 2 }, { "Benchmark", "norm", K.benchmark, 1 }, { "Pulihkan", "norm", K.abReset, 1 } })
+    W.btnRow(p, { { "TURBO", "pri", K.turbo, 2 }, { "Benchmark", "norm", K.benchmark, 1 }, { "Reset boost", "norm", K.abReset, 1 } })
 end
 BT = "cfg"
 local BIND = { id = nil }
@@ -9646,7 +9598,7 @@ do
                 end
             end
         end)
-        local hint = label(c2, "Ketuk tombol lalu tekan tombol baru. Escape membatalkan. Hotkey Distrik Pembantai: F1 parry · F2 snap · F3 skill · F5 auto fire · F6 aim lock · F7 sembunyi UI skill · F8 ESP · F10 teks ESP · RightShift veil", 11, TH.mute, FS,
+        local hint = label(c2, "Ketuk tombol lalu tekan tombol baru. Escape membatalkan. Hotkey Distrik Pembantai: F1 parry · F2 snap · F3 skill · F5 auto fire · F6 aim lock · F7 sembunyi UI skill · F8 ESP · F10 teks ESP · RightShift veil · End silent aim", 11, TH.mute, FS,
             { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AUTO_Y, TextWrapped = true, LayoutOrder = nextLO() })
         padd(hint, 8, 0, 10, 0)
     end
@@ -9684,6 +9636,7 @@ do
         diag("Hotkey diredam", function() return #MUTED > 0, tostring(#MUTED) end)
         diag("Slider anti-lag", function() return #MOD.lag.ended > 0, #MOD.lag.ended > 0 and "siap" or "tidak" end)
         W.btn(c4, "Salin laporan diagnostik", "norm", K.copyReport, { Size = UDim2.new(1, 0, 0, 34), LayoutOrder = nextLO(), TextSize = 12 })
+        W.btn(c4, "Salin log script", "norm", function() K.act("copyLog") end, { Size = UDim2.new(1, 0, 0, 34), LayoutOrder = nextLO(), TextSize = 12 })
         local sp = new("Frame", { Size = UDim2.new(1, 0, 0, 10), BackgroundTransparency = 1, LayoutOrder = nextLO() }, c4)
     end
     W.btnRow(p, {
@@ -9699,7 +9652,78 @@ do
     })
     W.btnRow(p, { { "Matikan semua dan tutup", "dng", K.shutdownAll, 1, true } })
     local c5 = W.card(p)
-    W.row(c5, "Distrik Pembantai v" .. VERSION, "By Duke · ESP adaptif, anti-lag Nono, dan auto parry dikendalikan dari hub ini", false, 0)
+    W.row(c5, "Distrik Pembantai v" .. VERSION, "By Duke · Survivor, Killer, ESP, dan anti-lag Nono dikendalikan dari hub ini", false, 0)
+end
+BT = "cfg"
+do
+    local p = UI.panes.cfg
+    W.heading(p, "Opsi lain (belum punya tampilan sendiri)")
+    local st = { q = "", mode = 1, cap = 30, tok = 0 }
+    local top = W.card(p)
+    local hold = new("Frame", { Size = UDim2.new(1, 0, 0, 52), BackgroundTransparency = 1, LayoutOrder = nextLO() }, top)
+    local box = new("TextBox", { Position = UDim2.fromOffset(0, 8), Size = UDim2.new(1, 0, 0, 36), PlaceholderText = "cari opsi: range, aim, esp, veil…",
+        Text = "", ClearTextOnFocus = false, Font = FS, TextSize = 13, TextColor3 = TH.bone, PlaceholderColor3 = TH.mute,
+        BackgroundColor3 = Color3.fromRGB(8, 6, 16), BackgroundTransparency = 0.35, BorderSizePixel = 0,
+        TextXAlignment = Enum.TextXAlignment.Left, ClipsDescendants = true }, hold)
+    corner(box, 10); stroke(box, WHITE, 1, 0.9); padd(box, 0, 10, 0, 10)
+    W.seg(p, { "Semua", "Diubah", "Aktif" }, function() return st.mode end, function(i) st.mode = i; st.cap = 30; K.optRebuild() end)
+    local info = label(p, "", 11, TH.mute, FS, { Size = UDim2.new(1, 0, 0, 14), LayoutOrder = nextLO() })
+    local lst = W.card(p)
+    local more = W.btn(p, "", "norm", function() st.cap = st.cap + 30; K.optRebuild() end,
+        { Size = UDim2.new(1, 0, 0, 34), LayoutOrder = nextLO(), TextSize = 12, Visible = false })
+    local built, rstart = false, nil
+    function K.optRebuild()
+        if rstart then
+            for i = #REF, rstart, -1 do table.remove(REF, i) end
+        end
+        for _, ch in ipairs(lst:GetChildren()) do
+            if ch:IsA("GuiObject") then ch:Destroy() end
+        end
+        lst:SetAttribute("n", 0)
+        rstart = #REF + 1
+        local oldBT = BT
+        BT = "cfg"
+        K.recUsed = false
+        local q = st.q:lower()
+        local shown, total = 0, 0
+        local ok, err = pcall(function()
+            if MOD.par.state ~= "ready" or not (AP and AP.Store) then return end
+            local keys = {}
+            for k, def in pairs(AP.Store.defaults) do
+                local t = type(def)
+                if not OPT_HIDE[k] and not K.USED[k] and (t == "boolean" or t == "number" or (t == "string" and OPT_ENUM[k])) then keys[#keys + 1] = k end
+            end
+            table.sort(keys)
+            for _, k in ipairs(keys) do
+                local cur, def, hint = CFG13[k], AP.Store.defaults[k], OPT_DESC[k]
+                local match = true
+                if q ~= "" then
+                    match = (k:lower():find(q, 1, true) ~= nil) or (hint ~= nil and hint:lower():find(q, 1, true) ~= nil)
+                end
+                if match and st.mode == 2 then match = cur ~= def end
+                if match and st.mode == 3 then match = cur == true end
+                if match then
+                    total = total + 1
+                    if shown < st.cap then shown = shown + 1; K.optItem(lst, k) end
+                end
+            end
+        end)
+        BT = oldBT
+        if not ok then log("Opsi: " .. tostring(err):sub(1, 80), "err") end
+        info.Text = string.format("%d opsi cocok · tampil %d", total, shown)
+        more.Visible = total > shown
+        more.Text = string.format("Tampilkan lebih banyak (+30) · sisa %d", total - shown)
+    end
+    track(box:GetPropertyChangedSignal("Text"):Connect(function()
+        st.tok = st.tok + 1
+        local my = st.tok
+        task.delay(0.3, function()
+            if alive and st.tok == my then st.q = box.Text; st.cap = 30; K.optRebuild() end
+        end)
+    end))
+    reg(function()
+        if not built and MOD.par.state == "ready" then built = true; K.optRebuild() end
+    end)
 end
 BT = nil
 UI.fab = new("Frame", { Name = "Fab", Size = UDim2.fromOffset(44, 44), Position = UDim2.fromOffset(12, 96), BackgroundTransparency = 1,
@@ -9727,7 +9751,7 @@ onTheme(function()
     UI.mgrad.Color = ColorSequence.new({ ColorSequenceKeypoint.new(0, TH.brand), ColorSequenceKeypoint.new(0.5, TH.brand2), ColorSequenceKeypoint.new(1, TH.brand) })
 end)
 do
-    local specs = { { "PRY", "parry" }, { "GUN", "gun" }, { "SKL", "skill" }, { "LAG", "lag" } }
+    local specs = { { "SRV", "srv" }, { "KLR", "klr" }, { "ESP", "esp" }, { "LAG", "lag" } }
     local chips = {}
     for i, s in ipairs(specs) do
         local b = new("TextButton", { Size = UDim2.fromOffset(46, 26), Position = UDim2.fromOffset(8 + (i - 1) * 50, 6), BackgroundColor3 = Color3.fromRGB(40, 36, 62),
@@ -9735,17 +9759,15 @@ do
         corner(b, 8)
         b.Activated:Connect(function()
             if os.clock() - LASTDRAG < 0.25 then return end
-            if s[2] == "parry" then K.pFlip("parry.enabled")
-            elseif s[2] == "gun" then K.pFlip("gun.aimLock")
-            elseif s[2] == "skill" then K.pFlip("skill.enabled")
-            elseif V.lag.applied then K.lagRestore() else K.lagApply() end
+            K.sysFlip(s[2])
         end)
         chips[s[2]] = b
     end
     UI.mfps = label(UI.mini, "-- fps", 11, TH.on, MONO, { Position = UDim2.fromOffset(212, 0), Size = UDim2.fromOffset(46, 38), TextXAlignment = Enum.TextXAlignment.Center })
     W.iconBtn(UI.mini, "expand", UDim2.fromOffset(260, 5), function() K.setMini(false); K.setOpen(true) end)
     reg(function()
-        local st = { parry = K.pGet("parry.enabled") == true, gun = K.pGet("gun.aimLock") == true, skill = K.pGet("skill.enabled") == true, lag = V.lag.applied and MOD.lag.state == "ready" }
+        local st = {}
+        for _, id in ipairs({ "srv", "klr", "esp", "lag" }) do local n, _, rdy = K.sysCount(id); st[id] = rdy and n > 0 end
         for k, b in pairs(chips) do
             b.BackgroundColor3 = st[k] and TH.on or Color3.fromRGB(40, 36, 62)
             b.BackgroundTransparency = st[k] and 0 or 0.2
@@ -9815,9 +9837,8 @@ end))
 reg(function()
     local f = V.sys.fps
     UI.hfps.Text = f .. " fps"; UI.hfps.TextColor3 = col(f)
-    local on = { K.pGet("parry.enabled") == true, K.pGet("gun.aimLock") == true, K.pGet("skill.enabled") == true, MOD.lag.state == "ready" and V.lag.applied }
     local n = 0
-    for i = 1, 4 do if on[i] then n = n + 1 end end
+    for _, id in ipairs({ "srv", "klr", "esp", "lag" }) do local c, _, rdy = K.sysCount(id); if rdy and c > 0 then n = n + 1 end end
     UI.cap.Text = "v" .. VERSION .. " · By Duke · " .. n .. "/4 aktif"
     UI.fabTxt.TextColor3 = (OPEN or MINI) and TH.brand or TH.bone
 end, true)
