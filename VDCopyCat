@@ -12,6 +12,7 @@ lock=Enum.KeyCode.F6,
 hide=Enum.KeyCode.F7,
 esp=Enum.KeyCode.F8,
 text=Enum.KeyCode.F10,
+dodge=Enum.KeyCode.F9,
 veil=Enum.KeyCode.RightShift,
 vault=Enum.KeyCode.Insert,
 melee=Enum.KeyCode.Delete,
@@ -40,6 +41,17 @@ pollWindow=0.5,
 lead=0.12,
 useServerCd=true,
 minPriority=Enum.AnimationPriority.Action,
+},
+dodge={
+enabled=true,
+range=11,
+frontDot=0.1,
+minPriority=Enum.AnimationPriority.Action,
+holdTime=0.4,
+clearMargin=3,
+backWeight=0.55,
+strafeWeight=1,
+gap=0.3,
 },
 gun={
 snap=true,
@@ -92,6 +104,8 @@ zoneLo=102,
 zoneHi=116,
 maxWait=6,
 latency=0.01,
+fastThreshold=260,
+catchUp=true,
 learn=true,
 unstick=true,
 hideUI=false,
@@ -227,8 +241,9 @@ vault={
 enabled=true,
 fast=true,
 speed=1.8,
-range=5,
+range=9,
 minSpeed=7,
+runRatio=0.92,
 angle=55,
 gap=0.55,
 },
@@ -263,6 +278,7 @@ local TOKEN={}
 ENV.DP3_TOKEN=TOKEN
 local function alive()return ENV.DP3_TOKEN==TOKEN end
 pcall(function()RunService:UnbindFromRenderStep("DP3_CamLock")end)
+pcall(function()RunService:UnbindFromRenderStep("DP3_Dodge")end)
 local Conns=ENV.DP3_CONNS
 if type(Conns)=="table"then
 for _,c in ipairs(Conns)do pcall(function()c:Disconnect()end)end
@@ -1370,6 +1386,112 @@ end
 task.wait(0.25)
 end
 end)
+----------------------------------------------------------------- AUTO DODGE (survivor)
+-- sama kaya parry (nonton animasi serang killer + cek jarak/arah) tapi aksinya beda: begitu
+-- kena deteksi langsung paksa gerak keluar range, ga nunggu delay/timing kayak parry.
+local Dodge={watched=setmetatable({},{__mode="k"}),lastFire=0}
+local function dflat(v)return Vector3.new(v.X,0,v.Z)end
+local function dodgeThreat(k,lead)
+local me=myRoot()
+if not me or not k.root.Parent then return false end
+local vel=Vector3.new(0,0,0)
+local tr=Track[k.char]
+if tr and os.clock()-tr.t<0.25 then vel=tr.vel
+else pcall(function()vel=k.root.AssemblyLinearVelocity end)end
+vel=dflat(vel)
+if vel.Magnitude>70 then vel=vel.Unit*70 end
+local pos=k.root.Position+vel*(lead or 0)
+local to=me.Position-pos
+local dist=to.Magnitude
+if dist>CFG.dodge.range then return false end
+if dist<0.01 or dist<=4 then return true end
+return k.root.CFrame.LookVector:Dot(to.Unit)>=CFG.dodge.frontDot
+end
+local DodgeDrive={active=false,dir=Vector3.new(),k=nil,until_=0,side=1}
+local function dodgeDirFor(k)
+local me=myRoot()
+if not(me and k.root.Parent)then return Vector3.new()end
+local away=dflat(me.Position-k.root.Position)
+if away.Magnitude<0.05 then away=Vector3.new(1,0,0)else away=away.Unit end
+local right=Vector3.new(-away.Z,0,away.X)
+local dir=away*CFG.dodge.backWeight+right*DodgeDrive.side*CFG.dodge.strafeWeight
+if dir.Magnitude>0.001 then return dir.Unit end
+return away
+end
+local function dodgeBlocked(ch,hum)
+if hum.Health<=0 then return true end
+if ch:GetAttribute("IsCarried")or ch:GetAttribute("IsHooked")then return true end
+local root=ch:FindFirstChild("HumanoidRootPart")
+return root~=nil and root:HasTag("doing action")
+end
+local function dodgeFire(k)
+local now=os.clock()
+if now-Dodge.lastFire<CFG.dodge.gap then return end
+local ch,hum,me=myChar(),myHum(),myRoot()
+if not(ch and hum and me)or dodgeBlocked(ch,hum)then return end
+Dodge.lastFire=now
+local right=dflat(me.CFrame.RightVector)
+local toMe=dflat(me.Position-k.root.Position)
+DodgeDrive.side=(right:Dot(toMe)>=0)and 1 or-1
+DodgeDrive.active,DodgeDrive.k=true,k
+DodgeDrive.until_=now+CFG.dodge.holdTime
+DodgeDrive.dir=dodgeDirFor(k)
+log("DODGE",string.format("ngehindar dari %s (anim ketangkep, dalam jangkauan)",k.player and k.player.Name or"?"))
+end
+keep(RunService.Heartbeat:Connect(function()
+if not(DodgeDrive.active and alive())then return end
+local now=os.clock()
+local k,hum,me=DodgeDrive.k,myHum(),myRoot()
+local stillClose=k and k.root and k.root.Parent and me and dflat(me.Position-k.root.Position).Magnitude<CFG.dodge.range+CFG.dodge.clearMargin
+if now>=DodgeDrive.until_ or not(hum and me and stillClose)then
+DodgeDrive.active=false
+return
+end
+DodgeDrive.dir=dodgeDirFor(k)
+end))
+RunService:BindToRenderStep("DP3_Dodge",Enum.RenderPriority.Last.Value+3,function()
+if not(DodgeDrive.active and alive()and CFG.dodge.enabled)then return end
+local hum=myHum()
+if hum then pcall(function()hum:Move(DodgeDrive.dir,false)end)end
+end)
+local function watchKillerDodge(k)
+local animator=k.hum:FindFirstChildOfClass("Animator")
+if not animator or Dodge.watched[animator]then return end
+Dodge.watched[animator]=true
+local seenTrack=setmetatable({},{__mode="k"})
+local function onTrack(track)
+if seenTrack[track]then return end
+seenTrack[track]=true
+if not alive()or not CFG.dodge.enabled or not amSurvivor()then return end
+if track.Looped then return end
+if track.Priority.Value<CFG.dodge.minPriority.Value then return end
+if not dodgeThreat(k,0.1)then return end
+dodgeFire(k)
+end
+keep(animator.AnimationPlayed:Connect(onTrack))
+task.spawn(function()
+while alive()and animator.Parent do
+if CFG.dodge.enabled then
+local ok,tracks=pcall(animator.GetPlayingAnimationTracks,animator)
+if ok and tracks then
+for _,t in ipairs(tracks)do
+if not seenTrack[t]and t.IsPlaying and t.TimePosition<0.3 then pcall(onTrack,t)end
+end
+end
+end
+task.wait(0.04)
+end
+end)
+end
+task.spawn(function()
+while alive()do
+if CFG.dodge.enabled then
+for _,k in ipairs(killers())do watchKillerDodge(k)end
+end
+task.wait(0.25)
+end
+end)
+log("DODGE","modul auto dodge survivor dimuat")
 local NO_AIM_FLAGS={"isVaulting","isSliding","isDroppingPallet","isRepairing","isHealing","isUnhooking","isExiting"}
 local function equippedGun()
 local c=myChar()
@@ -3305,7 +3427,7 @@ if not okV then log("VEIL","modul gagal dimuat: "..tostring(errV))end
 end
 local Skill={
 active=false,lastDump="(belum ada dump)",tune=CFG.skill.latency,
-pressClock=-10,lastResult=-10,lastEvent=-10,cur=nil,gen=0,w0=nil,
+pressClock=-10,lastResult=-10,lastEvent=-10,cur=nil,gen=0,w0=nil,w0Tbl={slow=nil,fast=nil},
 tierName=nil,tierGood={},owners={},events={},retried=false,
 hidden={},stuck={},
 resultN=0,tuneDelta={},tierFail={},ladder=nil,probed=false,actBtn=nil,
@@ -3678,10 +3800,16 @@ table.insert(list,1,first)
 end
 return list
 end
+local function speedBucket(w)
+return(w and math.abs(w)>=CFG.skill.fastThreshold)and"fast"or"slow"
+end
+local function tuneKey(tier)
+return tier.."|"..speedBucket(Skill.cur and Skill.cur.w)
+end
 local function curTune(frame)
 local t=Skill.tierName or(Skill.ladder and Skill.ladder[1])or"?"
 local base=CFG.skill.latency+(VIM_RUNG[t]and frame or 0)
-return base+(Skill.tuneDelta[t]or 0)
+return base+(Skill.tuneDelta[tuneKey(t)]or 0)
 end
 local function pressLadder()
 local raw=getBind("kb_skillcheck","Space")
@@ -3863,7 +3991,7 @@ local function tr(s)
 if#trace<40 then trace[#trace+1]=string.format("%.2f %s",os.clock()-t0,s)end
 end
 local act,samples,moved=nil,{},false
-local lastRot
+local lastRot,lastRem
 local seedW=Skill.seedOmega(evtInfo)
 local pAt=t0
 while os.clock()-t0<5 and alive()and CFG.skill.enabled and Skill.gen==gen do
@@ -3895,7 +4023,7 @@ tostring(cur~=nil),p.line.Rotation,p.goal.Rotation))
 end
 if cur then
 if cur~=act then
-act,samples,lastRot=cur,{},nil
+act,samples,lastRot,lastRem=cur,{},nil,nil
 Skill.cur={line=cur.line,goal=cur.goal,w=0}
 local kids={}
 for _,c in ipairs(cur.goal:GetChildren())do kids[#kids+1]=c.ClassName..":"..c.Name end
@@ -3913,7 +4041,7 @@ end
 local w
 if#samples>=3 then
 w=slope(samples)
-if w and math.abs(w)>20 then Skill.w0=w end
+if w and math.abs(w)>20 then Skill.w0=w;Skill.w0Tbl[speedBucket(w)]=w end
 else
 w=seedW or Skill.w0 or((#samples==2)and slope(samples)or nil)
 end
@@ -3924,17 +4052,22 @@ local last=samples[#samples]
 local zone=act.goal.Rotation+zoneMid()+CFG.skill.offset
 local dir=(w>=0)and 1 or-1
 local rem=((zone-last[2])*dir)%360
-rem=rem-w*dir*(now-last[1])*0+0
 local frame=math.clamp(dtf,1/120,1/20)
 if rem>360-math.abs(w)*frame*0.5 then rem=0 end
+-- mode cepat: 1 frame hitch/lag spike bisa bikin jarum lompat ngelewatin seluruh zona sebelum
+-- "T<=tune" sempat ke-cek (rem wrap ke ~360 bukan minus). Ketauan dari lastRem yang tadinya udah
+-- deket (hampir pencet) terus tau-tau rem jadi gede lagi -> itu overshoot, susul tekan sekarang juga
+-- daripada nunggu putaran berikutnya (yang keburu abis duluan di mode cepat).
+local overshoot=CFG.skill.catchUp and lastRem and lastRem<math.max(math.abs(w)*frame*3,8)and rem>180
 local T=rem/math.abs(w)
-if T<=curTune(frame)+frame*0.5 then
+if overshoot or T<=curTune(frame)+frame*0.5 then
 Skill.retried=false
-log("SKILL",string.format("TEKAN sisa=%.1f deg (%.0f ms) kecepatan=%.0f deg/s fps~%.0f sample=%d",
-rem,T*1000,w,1/frame,#samples))
+log("SKILL",string.format("%s sisa=%.1f deg (%.0f ms) kecepatan=%.0f deg/s fps~%.0f sample=%d",
+overshoot and"TEKAN susulan (lompat frame)"or"TEKAN",rem,T*1000,w,1/frame,#samples))
 pressLadder()
 return true
 end
+lastRem=rem
 end
 elseif act then
 break
@@ -3967,7 +4100,7 @@ log("SKILL",string.format("HASIL %s %s %s | err=%+.1f deg (%+.0f ms %s) | tekan-
 tostring(name),tostring(args[1]),tostring(args[2]),err,errT*1000,errT>0 and"telat"or"kecepatan",
 since*1000,mine and("tekanan skrip via "..tostring(Skill.pressTier))or"BUKAN dari tekanan skrip"))
 if mine and CFG.skill.learn and math.abs(errT)<0.25 and Skill.pressRung==1 then
-local k=Skill.pressTier or"?"
+local k=tuneKey(Skill.pressTier or"?")
 Skill.tuneDelta[k]=math.clamp((Skill.tuneDelta[k]or 0)+0.5*errT,-0.08,0.25)
 end
 Skill.cur=nil
@@ -5749,6 +5882,9 @@ notify("Auto Vault: "..(CFG.vault.enabled and"ON"or"OFF"))
 elseif k==CFG.keys.melee then
 CFG.melee.enabled=not CFG.melee.enabled
 notify("Auto Hit: "..(CFG.melee.enabled and"ON"or"OFF"))
+elseif k==CFG.keys.dodge then
+CFG.dodge.enabled=not CFG.dodge.enabled
+notify("Auto Dodge: "..(CFG.dodge.enabled and"ON"or"OFF"))
 end
 end))
 do
@@ -6031,7 +6167,11 @@ local md=hum.MoveDirection
 local mv=Vector3.new(md.X,0,md.Z)
 if mv.Magnitude<0.1 then return nil end
 local vel=root.AssemblyLinearVelocity
-if Vector3.new(vel.X,0,vel.Z).Magnitude<VC.minSpeed then return nil end
+local spd=Vector3.new(vel.X,0,vel.Z).Magnitude
+-- game cuma kasih vault cepat/perfect kalo nabrak jendela masih full sprint; kalo udah pelan deket jendela,
+-- biarin dulu, nunggu sampe speed balik ke ambang lari baru fire (bukan sekedar minSpeed asal gerak)
+local runFloor=math.max(VC.minSpeed,hum.WalkSpeed*VC.runRatio)
+if spd<runFloor then return nil end
 mv=mv.Unit
 local pos=root.Position
 local cosA=math.cos(math.rad(VC.angle))
@@ -6563,7 +6703,7 @@ function API.Stop()
 if ENV.DP3_TOKEN==TOKEN then ENV.DP3_TOKEN=nil end
 for _,c in ipairs(Conns)do pcall(function()c:Disconnect()end)end
 pcall(function()local ax=ENV.DP3_AUTOX;if ax and ax.restore then ax.restore()end end)
-for _,n in ipairs({"DP3_CamLock","DP3_AimLock","DP3_VeilAim","DP3_HideSkillUI","DP3_POV","DP3_MeleeFace"})do
+for _,n in ipairs({"DP3_CamLock","DP3_AimLock","DP3_VeilAim","DP3_HideSkillUI","DP3_POV","DP3_MeleeFace","DP3_Dodge"})do
 pcall(function()RunService:UnbindFromRenderStep(n)end)
 end
 pcall(function()
@@ -8404,7 +8544,7 @@ end
 end
 local PLABEL={["parry.enabled"]="Auto parry",["skill.enabled"]="Auto skill check",["gun.aimLock"]="Aim lock gun",
 ["gun.trigger"]="Auto fire",["gun.snap"]="Gun snap",["gun.silent"]="Silent aim gun",["veil.silent"]="Silent aim spear",["esp.enabled"]="ESP",["ring.enabled"]="Cincin killer",
-["veil.enabled"]="Lock killer",["vault.enabled"]="Auto vault",["melee.enabled"]="Auto hit",["vault.fast"]="Vault cepat",["skill.hideUI"]="Sembunyikan UI skill check"}
+["veil.enabled"]="Lock killer",["vault.enabled"]="Auto vault",["melee.enabled"]="Auto hit",["vault.fast"]="Vault cepat",["skill.hideUI"]="Sembunyikan UI skill check",["dodge.enabled"]="Auto dodge"}
 function K.pGet(key)
 if MOD.par.state~="ready"or not CFG13 then return nil end
 return CFG13[key]
@@ -8468,7 +8608,7 @@ end
 function K.allOn()
 if MOD.par.state=="ready"then
 CFG13["parry.enabled"]=true;CFG13["skill.enabled"]=true;CFG13["gun.aimLock"]=true;CFG13["gun.trigger"]=true
-CFG13["veil.enabled"]=true;CFG13["esp.enabled"]=true;CFG13["vault.enabled"]=true;CFG13["melee.enabled"]=true;K.ptouch()
+CFG13["veil.enabled"]=true;CFG13["esp.enabled"]=true;CFG13["vault.enabled"]=true;CFG13["melee.enabled"]=true;CFG13["dodge.enabled"]=true;K.ptouch()
 end
 K.lagApply()
 log("Semua sistem dinyalakan","ok")
@@ -8476,13 +8616,13 @@ end
 function K.allOff()
 if MOD.par.state=="ready"then
 CFG13["parry.enabled"]=false;CFG13["skill.enabled"]=false;CFG13["gun.aimLock"]=false;CFG13["gun.trigger"]=false
-CFG13["veil.enabled"]=false;CFG13["esp.enabled"]=false;CFG13["vault.enabled"]=false;CFG13["melee.enabled"]=false;K.ptouch()
+CFG13["veil.enabled"]=false;CFG13["esp.enabled"]=false;CFG13["vault.enabled"]=false;CFG13["melee.enabled"]=false;CFG13["dodge.enabled"]=false;K.ptouch()
 end
 K.lagRestore()
 log("Semua sistem dimatikan")
 end
 K.SYSDEF={
-srv={name="Survivor",keys={"parry.enabled","skill.enabled","gun.aimLock","gun.trigger","gun.snap","gun.silent","vault.enabled"},
+srv={name="Survivor",keys={"parry.enabled","skill.enabled","gun.aimLock","gun.trigger","gun.snap","gun.silent","vault.enabled","dodge.enabled"},
 master={"parry.enabled","skill.enabled","gun.aimLock","gun.trigger"}},
 klr={name="Killer",keys={"veil.enabled","veil.silent","pov.tpp","speed.enabled","melee.enabled"},master={"veil.enabled"}},
 esp={name="ESP",keys={"esp.enabled"},master={"esp.enabled"}},
@@ -9720,6 +9860,7 @@ W.toggle(c1,"Gun snap","Tembakan manual dibelokkan pas ke badan killer. Hotkey F
 W.toggle(c1,"Silent aim gun","Peluru dibelokkan ke killer walau crosshair jauh dari badan. Hotkey End",K.pbool("gun.silent"))
 W.toggle(c1,"Cincin dan garis killer","Jangkauan parry dan kerucut serang killer",K.pbool("ring.enabled"))
 W.toggle(c1,"Auto vault jendela","Lompat jendela otomatis saat kamu lari menuju jendela. Hotkey Insert",K.pbool("vault.enabled"))
+W.toggle(c1,"Auto dodge","Paksa gerak keluar jangkauan begitu animasi serang killer kebaca, ga pakai delay. Hotkey F9",K.pbool("dodge.enabled"))
 W.toggle(c1,"Animasi vault cepat","Animasi lompat jendela dipercepat (client saja, semua vault)",K.pbool("vault.fast"))
 local setGun=W.chipRow(c1,"Gun",nil)
 reg(function()
