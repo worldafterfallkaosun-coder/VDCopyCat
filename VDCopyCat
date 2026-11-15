@@ -1,5 +1,5 @@
 --!nonstrict
--- DistrikPembantai v15.0 (UI hub dirombak: Survivor, Killer, ESP, Anti-lag dipisah per tab dan tanpa kontrol dobel; logika sama dengan v14.5)
+-- DistrikPembantai v15.1 (anti-lag: scan ESP/getgc dipangkas, bidik gun + tombak Veil diperkuat) | basis v15.0 (UI hub dirombak: Survivor, Killer, ESP, Anti-lag dipisah per tab dan tanpa kontrol dobel; logika sama dengan v14.5)
 local function __startDP()
 local CFG = {
     keys = {
@@ -280,7 +280,8 @@ task.spawn(function()
         if ok and type(ms) == "number" and ms > 0 then
             local s = ms / 1000
             Net.jitter = Net.jitter * 0.8 + math.abs(s - Net.rtt) * 0.2
-            Net.rtt = Net.rtt * 0.8 + s * 0.2
+            local a = (s > Net.rtt * 1.35) and 0.55 or 0.2
+            Net.rtt = Net.rtt * (1 - a) + s * a
         end
         task.wait(0.25)
     end
@@ -602,6 +603,8 @@ keep(RunService.Heartbeat:Connect(function()
                     tr.vs = Vector3.new(0, 0, 0)
                 else
                     local raw = (pos - tr.pos) / dt
+                    local rv = k.root.AssemblyLinearVelocity
+                    if rv.Magnitude < 90 then raw = raw:Lerp(rv, 0.5) end
                     local a = 1 - math.exp(-dt / 0.06)
                     tr.vel = tr.vel:Lerp(raw, a)
                     tr.vs = (tr.vs or tr.vel):Lerp(raw, 1 - math.exp(-dt / 0.12))
@@ -658,6 +661,10 @@ function Gun.aimOf(part, origin, force)
         local tr = Track[ch]
         local spd = tr and Vector3.new(tr.vel.X, 0, tr.vel.Z).Magnitude or 0
         if spd > (G.headMaxSpeed or 14) or (part.Position - origin).Magnitude > (G.headMaxDist or 120) then want = false end
+        if want then
+            local tt = (part.Position - origin).Magnitude / math.max(G.bulletSpeed or 800, 1) + Net.rtt * (G.leadPing or 1) + (G.leadBase or 0)
+            if spd * (Net.jitter * 2 + 0.05) + spd * 0.1 * math.min(tt, 0.7) > (G.headMaxErr or 1.0) then want = false end
+        end
     end
     local now = os.clock()
     local ak = Gun.aimK[ch]
@@ -968,7 +975,7 @@ local function pgIsClient(t)
     end)
     return ok and res == true
 end
-local function pgScan()
+function PG.scanRaw()
     PG.scanAt = os.clock()
     if not getgc then
         PG.noGc = true
@@ -978,6 +985,7 @@ local function pgScan()
     if not ok or type(list) ~= "table" then return nil, 0 end
     local best, bestScore, n = nil, 0, 0
     for i = 1, #list do
+        if i % 1500 == 0 then task.wait() end
         local t = list[i]
         if type(t) == "table" and rawget(t, "parryEvent") ~= nil and pgIsClient(t) then
             n = n + 1
@@ -986,6 +994,15 @@ local function pgScan()
         end
     end
     return best, n
+end
+local function pgScan()
+    if PG.busy then return nil, 0 end
+    PG.busy = true
+    local okp, best, n = pcall(PG.scanRaw)
+    PG.busy = false
+    PG.scanAt = os.clock()
+    if okp then return best, n end
+    return nil, 0
 end
 local function pgCached()
     local c = PG.inst
@@ -1006,13 +1023,13 @@ local function pgPrewarm()
     end
     if not tool or pgCached() then return end
     local now = os.clock()
-    if now - PG.scanAt < PG.gap then return end
+    if now - PG.scanAt < PG.gap or PG.busy then return end
     local c, n = pgScan()
     if c then
         PG.inst, PG.gap = c, 1.5
         log("PARRY", "ParryClient game ketemu: animasi + cooldown UI sekarang ikut game")
     else
-        PG.gap = math.min(PG.gap * 1.6, 10)
+        PG.gap = math.min(PG.gap * 1.6, 45)
         if now - PG.missAt > 8 then
             PG.missAt = now
             log("PARRY", string.format("ParryClient game belum ketemu (kandidat %d, cari lagi %.0fs) -> sementara pakai input", n, PG.gap))
@@ -2033,7 +2050,10 @@ do
                         if dt > 0.4 or (pos - tr.pos).Magnitude > 40 then
                             tr.vel = ZERO
                         else
-                            tr.vel = tr.vel:Lerp((pos - tr.pos) / dt, 1 - math.exp(-dt / 0.12))
+                            local raw = (pos - tr.pos) / dt
+                            local rv = k.root.AssemblyLinearVelocity
+                            if rv.Magnitude < 90 then raw = raw:Lerp(rv, 0.5) end
+                            tr.vel = tr.vel:Lerp(raw, 1 - math.exp(-dt / 0.08))
                         end
                         tr.pos, tr.t = pos, now
                         tr.grounded = k.hum.FloorMaterial ~= Enum.Material.Air
@@ -2219,6 +2239,15 @@ do
             c[tag] = { t = now, v = v }
             return v
         end
+        local function aimErr(k, dist)
+            local tr = VT[k.char]
+            if not tr then return 0 end
+            local spd = Vector3.new(tr.vel.X, 0, tr.vel.Z).Magnitude
+            local S0 = V.speed()
+            local ahead = leadTime() + ((S0 and S0 > 0) and dist / S0 or 0)
+            local k2 = (C.steady and not V.steady(k.char)) and 1.6 or 1
+            return (spd * (Net.jitter * 2 + 0.05) + spd * 0.1 * math.min(ahead, 0.7)) * k2
+        end
         local function chooseAim(k, origin)
             local root = k.root
             local head = k.char:FindFirstChild("Head")
@@ -2231,6 +2260,7 @@ do
             local tr = VT[k.char]
             local spd = tr and Vector3.new(tr.vel.X, 0, tr.vel.Z).Magnitude or 0
             if (root.Position - origin).Magnitude > 90 and spd > 12 then return bodyOff, "BODY" end
+            if aimErr(k, (root.Position - origin).Magnitude) > (C.headMaxErr or 1.0) then return bodyOff, "BODY" end
             if los(origin, head.Position, k.char, "HEAD") then return headOff, "HEAD" end
             return bodyOff, "BODY"
         end
@@ -2260,6 +2290,7 @@ do
                                 score = ang + (k.hum.Health / math.max(k.hum.MaxHealth, 1)) * 25 - (isCur and C.stickBonus or 0)
                             else score = ang - (isCur and C.stickBonus or 0) end
                             if ch:GetAttribute("Trapped") then score = score - 6 end
+                            score = score + (C.certWeight or 5) * math.min(aimErr(k, dist), 4)
                             if not best or score < best.score then
                                 best = { k = k, off = off, kind = kindName, T = T, dir = dir, flight = flight, reach = reach,
                                          P = P, ang = ang, dist = dist, score = score }
@@ -3393,6 +3424,8 @@ local function findActionButton()
             return act
         end
     end
+    if os.clock() - (Skill.actScanAt or -10) < 3 then return nil end
+    Skill.actScanAt = os.clock()
     for _, d in ipairs(pg:GetDescendants()) do
         if d.Name == "action" and d:IsA("GuiObject") and d.Parent and d.Parent.Name == "Controls" and d.AbsoluteSize.X > 0 then
             Skill.actBtn = d
@@ -3519,10 +3552,16 @@ local function refreshGameFns(force)
     if now - Skill.gameScanAt < 2.5 then return end
     Skill.gameScanAt = now
     if not (getgc and debug and debug.info) then return end
+    if Skill.gameScanBusy and now - (Skill.gameScanBusyAt or 0) < 15 then return end
+    Skill.gameScanBusy, Skill.gameScanBusyAt = true, now
     local okg, list = pcall(getgc, false)
-    if not okg or type(list) ~= "table" then return end
+    if not okg or type(list) ~= "table" then
+        Skill.gameScanBusy = false
+        return
+    end
     local out, names = {}, {}
     for i = 1, #list do
+        if i % 1500 == 0 then task.wait() end
         local f = list[i]
         if type(f) == "function" then
             local okn, name = pcall(debug.info, f, "n")
@@ -3536,6 +3575,7 @@ local function refreshGameFns(force)
             end
         end
     end
+    Skill.gameScanBusy = false
     Skill.gameFns = out
     log("SKILL", string.format("handler game: %d ketemu {%s}", #out, table.concat(names, ",")))
 end
@@ -4768,7 +4808,7 @@ do
                         local nm = d.Name
                         if #nm <= 32 then
                             local ln = nm:lower()
-                            if wantHook and nameHas(ln, C.hookNames) then kind, tgt = "hook", d
+                            if wantHook and nameHas(ln, C.hookNames) and (d:IsA("Model") or d:FindFirstChildWhichIsA("ProximityPrompt") ~= nil) then kind, tgt = "hook", d
                             elseif wantExit and nameHas(ln, C.exitNames) then kind, tgt = "exit", d end
                         end
                     end
@@ -4790,6 +4830,19 @@ do
                     end
                 end
             end)
+            local hookN = 0
+            for _, kd in pairs(hits) do
+                if kd == "hook" then hookN = hookN + 1 end
+            end
+            if hookN > 24 then
+                for t, kd in pairs(hits) do
+                    if kd == "hook" then hits[t] = nil end
+                end
+                if not E.hookFlood then
+                    E.hookFlood = true
+                    log("ESP", string.format("scan nama nemu %d 'hook' (kebanyakan dekorasi) -> diabaikan, pakai tag game", hookN))
+                end
+            end
             E.nameHits = hits
             local sig = tostring(cnt)
             if sig == E.nameSig then
@@ -4900,7 +4953,7 @@ do
                 end
             end
         end
-        local needHookName = on.hook
+        local needHookName = on.hook and n.hook == 0
         if on.exit or needHookName then E.nameKick(scanRoot, needHookName) end
         for d, kind in pairs(E.nameHits) do
             if d.Parent and ((kind == "exit" and on.exit) or (kind == "hook" and needHookName)) then
@@ -6036,7 +6089,7 @@ end
     end
     ENV.__DPAPI = API
 end)()
-notify("v15.0 loaded. hook=" .. tostring(Gun.hookOK) .. " | hub: tombol bulat / RightAlt")
+notify("v15.1 loaded. hook=" .. tostring(Gun.hookOK) .. " | hub: tombol bulat / RightAlt")
 end
 local function __startNono()
 local NX = {}
@@ -7116,7 +7169,7 @@ end
 print("[NONO v6.0] loaded | setfpscap:", HAS_SETFPSCAP, "| sethiddenproperty:", HAS_SETHIDDEN,
     "| file:", HAS_FILE)
 end
-local VERSION = "15.0"
+local VERSION = "15.1"
 local Players      = game:GetService("Players")
 local RunService   = game:GetService("RunService")
 local UIS          = game:GetService("UserInputService")
