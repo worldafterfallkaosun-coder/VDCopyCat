@@ -280,6 +280,17 @@ enabled=false,
 pct=8,
 ramp=0.6,
 wallCheck=true,
+adapt=true,
+cap=6,
+},
+light={
+enabled=false,
+level=60,
+noFog=true,
+noDark=true,
+day=false,
+killFx=true,
+hideOverlay=true,
 },
 }
 local Players=game:GetService("Players")
@@ -6271,35 +6282,214 @@ rp.FilterType=Enum.RaycastFilterType.Exclude
 pcall(function()rp.RespectCanCollide=true end)
 local fchar,cur,phase=nil,0,math.random()*6.28
 local RUN,RUNNP=Enum.HumanoidStateType.Running,Enum.HumanoidStateType.RunningNoPhysics
+local ST={ahead=0,scale=1,capNow=nil,lastPos=nil,lastDir=nil,pauseUntil=0,cleanAt=os.clock(),snaps=0}
 keep(RunService.Heartbeat:Connect(function(dt)
 if not alive()then return end
 local hum,root=myHum(),myRoot()
+local now=os.clock()
+-- deteksi kepental: posisi mundur tiba-tiba setelah kita nambah jarak
+if ST.lastPos and ST.lastDir and hum and root and ST.ahead>0.5 then
+local d=root.Position-ST.lastPos
+local back=-(d.X*ST.lastDir.X+d.Z*ST.lastDir.Z)
+local lim=1.5+hum.WalkSpeed*math.min(dt,0.25)*0.5
+if back>lim then
+ST.snaps=ST.snaps+1
+local capCfg=math.max(1,tonumber(S.cap)or 6)
+if S.adapt~=false then
+ST.scale=math.max(0.2,ST.scale*0.7)
+ST.capNow=math.max(1.5,math.min(ST.capNow or capCfg,ST.ahead)*0.6)
+end
+ST.pauseUntil,ST.ahead,cur,ST.cleanAt=now+1.5,0,0,now
+ST.lastPos=nil
+log("SPEED",string.format("kepental balik %.1f stud (ke-%d) -> tambahan jadi x%.2f, batas %.1f stud",back,ST.snaps,ST.scale,ST.capNow or capCfg))
+return
+end
+end
+ST.lastPos=nil
 local goal=0
-if S.enabled==true and hum and root and hum.Health>0 and dt>0 and dt<0.05 then
+if S.enabled==true and hum and root and hum.Health>0 and dt>0 then
 local st=hum:GetState()
-if hum.MoveDirection.Magnitude>0.1 and hum.WalkSpeed>=6 and not hum.Sit and not hum.PlatformStand
+if now>=ST.pauseUntil and hum.MoveDirection.Magnitude>0.1 and hum.WalkSpeed>=6 and not hum.Sit and not hum.PlatformStand
 and not root.Anchored and(st==RUN or st==RUNNP)then
 local v=root.AssemblyLinearVelocity
 if Vector3.new(v.X,0,v.Z).Magnitude>=hum.WalkSpeed*0.7 then goal=1 end
 end
 end
-local step=dt/math.max(0.1,tonumber(S.ramp)or 0.6)
+local edt=math.min(dt,0.1)
+local step=edt/math.max(0.1,tonumber(S.ramp)or 0.6)
 if goal>cur then cur=math.min(goal,cur+step)else cur=math.max(goal,cur-step*2)end
-if cur<=0.001 or not hum or not root then return end
-local pct=math.clamp(tonumber(S.pct)or 0,0,25)
+if S.adapt~=false and now-ST.cleanAt>20 then
+ST.cleanAt=now
+ST.scale=math.min(1,ST.scale*1.12)
+if ST.capNow then ST.capNow=math.min(math.max(1,tonumber(S.cap)or 6),ST.capNow*1.15)end
+end
+if cur<=0.001 or not hum or not root then ST.ahead=math.max(0,ST.ahead-edt*2);return end
+local capCfg=math.max(1,tonumber(S.cap)or 6)
+local cap=math.min(capCfg,ST.capNow or capCfg)
+local pct=math.clamp(tonumber(S.pct)or 0,0,25)*ST.scale
 if pct<=0 then return end
 local md=hum.MoveDirection
-local dir=Vector3.new(md.X,0,md.Z)
+local v=root.AssemblyLinearVelocity
+local hv=Vector3.new(v.X,0,v.Z)
+local dir
+if hv.Magnitude>=hum.WalkSpeed*0.5 then
+dir=hv.Unit
+else
+dir=Vector3.new(md.X,0,md.Z)
 if dir.Magnitude<0.1 then return end
 dir=dir.Unit
+end
 phase=phase+dt*0.7
-local extra=hum.WalkSpeed*(pct/100)*(1+0.12*math.sin(phase))*cur*dt
+local base=hum.WalkSpeed*(pct/100)
+ST.ahead=math.max(0,ST.ahead-math.max(0.3,base*0.5)*edt)
+local extra=math.min(base*(1+0.12*math.sin(phase))*cur*edt,math.max(cap-ST.ahead,0))
+if extra<0.002 then return end
 if S.wallCheck then
 local ch=hum.Parent
 if ch~=fchar then fchar=ch;rp.FilterDescendantsInstances={ch}end
 if workspace:Raycast(root.Position,dir*(extra+2.2),rp)then return end
 end
 root.CFrame=root.CFrame+dir*extra
+ST.ahead=ST.ahead+extra
+ST.lastPos,ST.lastDir=root.Position,dir
+end))
+end
+do
+local L=CFG.light
+local Lighting=game:GetService("Lighting")
+do
+local old=ENV.DP3_LIGHT
+if type(old)=="table"and type(old.restore)=="function"then pcall(old.restore)end
+end
+local Lt={on=false,dirty=true,flags=nil,lv=nil,orig={},last={},eff=setmetatable({},{__mode="k"}),gui=setmetatable({},{__mode="k"}),fullAt=0}
+ENV.DP3_LIGHT=Lt
+local WATCH={Brightness=true,Ambient=true,OutdoorAmbient=true,ExposureCompensation=true,FogStart=true,FogEnd=true,ClockTime=true}
+function Lt.same(a,b)
+if typeof(a)=="Color3"and typeof(b)=="Color3"then return math.abs(a.R-b.R)+math.abs(a.G-b.G)+math.abs(a.B-b.B)<0.01 end
+if type(a)=="number"and type(b)=="number"then return math.abs(a-b)<=math.max(0.005,math.abs(b)*1e-6)end
+return a==b
+end
+function Lt.put(inst,p,v)
+local ok,cur=pcall(function()return inst[p]end)
+if ok and not Lt.same(cur,v)then pcall(function()inst[p]=v end)end
+end
+function Lt.remember(inst,props)
+local rec=Lt.eff[inst]
+if not rec then rec={};Lt.eff[inst]=rec end
+for _,p in ipairs(props)do
+if rec[p]==nil then
+local ok,cur=pcall(function()return inst[p]end)
+if ok then rec[p]=cur end
+end
+end
+end
+function Lt.targets()
+local lv=math.clamp(tonumber(L.level)or 60,0,100)/100
+local t={}
+if L.noDark then
+local g=70+lv*150
+local c=Color3.fromRGB(g,g,g)
+t.Brightness=1+lv*4
+t.Ambient=c
+t.OutdoorAmbient=c
+t.ExposureCompensation=lv*0.8
+if L.day then t.ClockTime=14 end
+end
+if L.noFog then t.FogStart=9.9e5;t.FogEnd=1e6 end
+return t
+end
+function Lt.applyFx()
+local roots={Lighting}
+local cam=workspace.CurrentCamera
+if cam then roots[2]=cam end
+for _,r in ipairs(roots)do
+for _,v in ipairs(r:GetChildren())do
+if v:IsA("Atmosphere")then
+if L.noFog then
+Lt.remember(v,{"Density","Haze"})
+Lt.put(v,"Density",0);Lt.put(v,"Haze",0)
+end
+elseif v:IsA("ColorCorrectionEffect")then
+if L.noDark then
+Lt.remember(v,{"Brightness","TintColor"})
+if v.Brightness<0 then Lt.put(v,"Brightness",0)end
+local t=v.TintColor
+if t.R+t.G+t.B<2.4 then Lt.put(v,"TintColor",Color3.new(1,1,1))end
+end
+elseif v:IsA("BlurEffect")or v:IsA("DepthOfFieldEffect")then
+if L.killFx then
+Lt.remember(v,{"Enabled"})
+Lt.put(v,"Enabled",false)
+end
+end
+end
+end
+end
+function Lt.applyGui()
+if not L.hideOverlay then return end
+local pg=LP:FindFirstChildOfClass("PlayerGui")
+local d=pg and pg:FindFirstChild("Darkness")
+if d and d:IsA("ScreenGui")then
+if Lt.gui[d]==nil then Lt.gui[d]=d.Enabled end
+if d.Enabled then d.Enabled=false end
+end
+end
+function Lt.restore()
+Lt.on=false
+for p,v in pairs(Lt.orig)do pcall(function()Lighting[p]=v end)end
+Lt.orig,Lt.last={},{}
+for inst,rec in pairs(Lt.eff)do
+if inst.Parent then for p,v in pairs(rec)do pcall(function()inst[p]=v end)end end
+end
+Lt.eff=setmetatable({},{__mode="k"})
+for d,en in pairs(Lt.gui)do
+if d.Parent then pcall(function()d.Enabled=en end)end
+end
+Lt.gui=setmetatable({},{__mode="k"})
+end
+function Lt.enable(quiet)
+Lt.on=true
+Lt.orig,Lt.last={},{}
+for p in pairs(WATCH)do
+local ok,cur=pcall(function()return Lighting[p]end)
+if ok then Lt.orig[p]=cur end
+end
+Lt.dirty=true
+if not quiet then log("LIGHT","terang peta nyala")end
+end
+keep(Lighting.Changed:Connect(function(p)
+if not Lt.on or not WATCH[p]then return end
+local ok,cur=pcall(function()return Lighting[p]end)
+if not ok then return end
+local lastv=Lt.last[p]
+if lastv==nil then
+Lt.orig[p]=cur
+elseif not Lt.same(cur,lastv)then
+Lt.orig[p]=cur
+Lt.dirty=true
+end
+end))
+keep(Lighting.ChildAdded:Connect(function()Lt.dirty=true end))
+keep(RunService.Heartbeat:Connect(function()
+if not alive()then return end
+local want=L.enabled==true
+if want~=Lt.on then
+if want then Lt.enable()else Lt.restore();log("LIGHT","terang peta mati")end
+end
+if not Lt.on then return end
+local flags=(L.noFog and 1 or 0)+(L.noDark and 2 or 0)+(L.day and 4 or 0)+(L.killFx and 8 or 0)+(L.hideOverlay and 16 or 0)
+if Lt.flags~=flags then
+local had=Lt.flags~=nil
+if had then Lt.restore();Lt.enable(true)end
+Lt.flags=flags;Lt.dirty=true
+end
+if Lt.lv~=L.level then Lt.lv=L.level;Lt.dirty=true end
+local now=os.clock()
+if Lt.dirty or now-Lt.fullAt>0.5 then
+Lt.dirty=false;Lt.fullAt=now
+for p,v in pairs(Lt.targets())do Lt.put(Lighting,p,v);Lt.last[p]=v end
+Lt.applyFx();Lt.applyGui()
+end
 end))
 end
 do
@@ -7109,7 +7299,7 @@ if ENV.__DPAPI==API then ENV.__DPAPI=nil end
 end
 ENV.__DPAPI=API
 end)()
-notify("v20.0 loaded. hook="..tostring(Gun.hookOK).." | hub: tombol bulat / RightAlt")
+notify("v20.1 loaded. hook="..tostring(Gun.hookOK).." | hub: tombol bulat / RightAlt")
 end
 local function __startNono()
 local NX={}
@@ -8189,7 +8379,7 @@ end
 print("[NONO v6.0] loaded | setfpscap:",HAS_SETFPSCAP,"| sethiddenproperty:",HAS_SETHIDDEN,
 "| file:",HAS_FILE)
 end
-local VERSION="20.0"
+local VERSION="20.1"
 local Players=game:GetService("Players")
 local RunService=game:GetService("RunService")
 local UIS=game:GetService("UserInputService")
@@ -8927,7 +9117,7 @@ W.seg(parent,labels,K.pstr(k,labels))
 end
 end
 end
-local PLABEL={["parry.enabled"]="Auto parry",["skill.enabled"]="Auto skill check",["gun.aimLock"]="Aim lock gun",
+local PLABEL={["light.enabled"]="Terang peta",["speed.adapt"]="Adaptif anti kepental",["parry.enabled"]="Auto parry",["skill.enabled"]="Auto skill check",["gun.aimLock"]="Aim lock gun",
 ["gun.trigger"]="Auto fire",["gun.snap"]="Gun snap",["gun.silent"]="Silent aim gun",["veil.silent"]="Silent aim spear",["esp.enabled"]="ESP",["ring.enabled"]="Cincin killer",
 ["veil.enabled"]="Lock killer",["vault.enabled"]="Auto vault",["melee.enabled"]="Auto hit",["vault.fast"]="Vault cepat",["skill.hideUI"]="Sembunyikan UI skill check",["dodge.enabled"]="Auto dodge"}
 function K.pGet(key)
@@ -10281,6 +10471,11 @@ W.slider(cvt,"Jarak picu ke jendela",2,8,0.5," stud",K.pnum("vault.range"))
 W.slider(cvt,"Kecepatan lari minimal",0,16,1," st/dtk",K.pnum("vault.minSpeed"))
 W.slider(cvt,"Toleransi sudut ke jendela",20,80,5," °",K.pnum("vault.angle"))
 W.slider(cvt,"Jeda antar vault",0.2,2,0.05," dtk",K.pnum("vault.gap"))
+local csp=W.section(p,"Speed lari",false)
+W.toggle(csp,"Speed lari","Tambahan kecepatan lari kecil dan halus, otomatis turun kalau game narik balik posisi",K.pbool("speed.enabled"))
+W.slider(csp,"Tambahan kecepatan",0,20,1," %",K.pnum("speed.pct"))
+W.toggle(csp,"Adaptif anti kepental","Kalau game narik posisi balik, tambahan otomatis dikecilkan lalu naik pelan lagi",K.pbool("speed.adapt"))
+W.slider(csp,"Batas keunggulan jarak",2,12,0.5," stud",K.pnum("speed.cap"))
 local c2=W.section(p,"Parry",true)
 W.slider(c2,"Jangkauan parry",4,30,1," stud",K.pnum("parry.range"))
 W.slider(c2,"Parry nyampe sebelum kena",0,0.4,0.01," dtk",K.pnum("parry.arriveLead"))
@@ -10337,7 +10532,7 @@ W.banner(p,"par")
 local c1=W.card(p)
 W.toggle(c1,"Lock killer (semua killer)","Kamera nempel ke survivor saat kamu jadi killer apa pun (Veil: kamera tidak digerakkan, silent). Veil: spear, Butcher: chain, Cure: flask, killer lain: lurus. Hotkey RightShift",K.pbool("veil.enabled"))
 W.toggle(c1,"POV killer: TPP","Ganti kamera killer dari FPP ke TPP. Hotkey RightCtrl atau tombol POV di layar",K.pbool("pov.tpp"))
-W.toggle(c1,"Speed lari","Tambahan kecepatan lari kecil dan halus, berhenti kalau ketutup tembok",K.pbool("speed.enabled"))
+W.toggle(c1,"Speed lari","Tambahan kecepatan lari kecil dan halus, otomatis turun kalau game narik balik posisi",K.pbool("speed.enabled"))
 W.toggle(c1,"Auto hit","Serang otomatis saat survivor masuk jangkauan hit. Badan dan kamera langsung menghadap survivor. Hotkey Delete",K.pbool("melee.enabled"))
 local setVeil=W.chipRow(c1,"Killer terdeteksi",nil)
 reg(function()
@@ -10386,6 +10581,8 @@ local c7=W.section(p,"Speed lari",false)
 W.slider(c7,"Tambahan kecepatan",0,20,1," %",K.pnum("speed.pct"))
 W.slider(c7,"Waktu naik ke penuh",0.2,2,0.1," dtk",K.pnum("speed.ramp"))
 W.toggle(c7,"Cek tembok di depan","Berhenti nambah kalau ada tembok atau objek tepat di depan",K.pbool("speed.wallCheck"))
+W.toggle(c7,"Adaptif anti kepental","Kalau game narik posisi balik, tambahan otomatis dikecilkan lalu naik pelan lagi",K.pbool("speed.adapt"))
+W.slider(c7,"Batas keunggulan jarak",2,12,0.5," stud",K.pnum("speed.cap"))
 W.btnRow(p,{
 {"Dump SpearMath","norm",function()K.act("dumpMath")end},
 {"Reset kalibrasi Veil","norm",function()K.act("resetCalib")end},
@@ -10480,6 +10677,14 @@ W.slider(c4,"Teks pemain sampai",0,300,10," stud",K.pnum("esp.textDistPlayers"))
 local c5=W.section(p,"Lanjutan",false)
 W.toggle(c5,"Lewati objek di luar pandangan","Objek di belakang atau samping kamera tidak dapat jatah Highlight",K.pbool("esp.cullView"))
 W.slider(c5,"Laju update penuh",3,30,1," Hz",K.pnum("esp.updateHz"))
+local cl=W.section(p,"Terang dan kabut",false)
+W.toggle(cl,"Terang peta","Hilangkan kabut dan gelap di peta. Opsi di bawah dipakai saat ini nyala",K.pbool("light.enabled"))
+W.slider(cl,"Tingkat terang",0,100,5," %",K.pnum("light.level"))
+W.toggle(cl,"Hilangkan kabut","Fog dan Atmosphere dinolkan",K.pbool("light.noFog"))
+W.toggle(cl,"Terangkan peta","Naikkan brightness, cahaya sekitar, dan exposure sesuai tingkat terang",K.pbool("light.noDark"))
+W.toggle(cl,"Paksa siang","Kunci jam ke 14:00 supaya peta tidak malam",K.pbool("light.day"))
+W.toggle(cl,"Matikan blur dan depth of field","Efek yang bikin layar buram dimatikan",K.pbool("light.killFx"))
+W.toggle(cl,"Sembunyikan layar gelap game","Overlay Darkness milik game (lights out) disembunyikan",K.pbool("light.hideOverlay"))
 W.btnRow(p,{{"Reset skala ESP","norm",function()K.act("espReset")end}})
 end
 BT="lag"
