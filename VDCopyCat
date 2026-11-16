@@ -41,17 +41,34 @@ pollWindow=0.5,
 lead=0.12,
 useServerCd=true,
 minPriority=Enum.AnimationPriority.Action,
+predict=true,
+preRange=9.5,
+preDot=0.5,
+preClose=3,
+preHold=0.08,
+preGap=2.5,
+preMemory=30,
 },
 dodge={
 enabled=true,
 range=11,
 frontDot=0.1,
 minPriority=Enum.AnimationPriority.Action,
-holdTime=0.4,
+holdTime=0.5,
 clearMargin=3,
 backWeight=0.55,
 strafeWeight=1,
 gap=0.3,
+pollWindow=0.6,
+lunge=4,
+predict=true,
+preRange=8,
+preDot=0.55,
+preClose=4,
+preHold=0.06,
+preGap=1.1,
+yieldParry=true,
+fromAction=true,
 },
 gun={
 snap=true,
@@ -114,6 +131,8 @@ verifyVim=0.11,
 allowAll=true,
 frameSnap=true,
 snapFrames=1.5,
+precise=true,
+native=false,
 },
 esp={
 enabled=true,
@@ -336,7 +355,7 @@ local shown=false
 if ENV.DP_TOAST and not inHook then shown=pcall(ENV.DP_TOAST,msg)end
 if not shown then
 pcall(function()
-StarterGui:SetCore("SendNotification",{Title="DP v14.5",Text=msg,Duration=2.5})
+StarterGui:SetCore("SendNotification",{Title="DP v18",Text=msg,Duration=2.5})
 end)
 end
 log("INFO",msg)
@@ -1196,8 +1215,13 @@ log("PARRY","PERINGATAN: via remote = tanpa animasi & UI cooldown game ga ikut. 
 end
 ev:FireServer(char)
 end
+if entry.pre then
+log("PARRY",string.format("kirim parry ANTISIPASI via %s (killer %.1f stud | ping %.0f ms | fps %.0f)",
+gcl and"GAME"or via:upper(),entry.dist or 0,Net.rtt*1000,1/Net.frameDt))
+else
 log("PARRY",string.format("kirim parry [%s] via %s delay %.2f (%.0f ms setelah animasi mulai, ping %.0f ms, fps %.0f)",
 shortKey(entry.key),gcl and"GAME"or via:upper(),plan or 0,(Parry.last-entry.t0)*1000,Net.rtt*1000,1/Net.frameDt))
+end
 task.delay(0.9,function()
 if not alive()then return end
 local after=(myChar()==char)and(char:GetAttribute("ParryLands")or 0)or before
@@ -1261,6 +1285,7 @@ and(me.Position-k.root.Position).Magnitude<=CFG.parry.range*2.2
 if entry.near then
 local st=statOf(key)
 st.plays=st.plays+1
+Parry.animAt=t0
 end
 local rec=Parry.recent
 rec[#rec+1]=entry
@@ -1271,6 +1296,7 @@ local st=statOf(key)
 if known and st.plays>=CFG.parry.minPlays and st.hits/st.plays<CFG.parry.minChance then return end
 if(not known)and not CFG.parry.fireUnknown then return end
 if known and CFG.parry.skipHopeless and d<-CFG.parry.slack then
+Parry.hopeAt=os.clock()
 if os.clock()-parryHopeAt>2 then
 parryHopeAt=os.clock()
 log("PARRY",string.format("[%s] ga kekejar: kena %.0f ms, ping %.0f ms, lead %.0f ms (telat %.0f ms) -> ga dikirim",
@@ -1370,6 +1396,10 @@ keep(pd:WaitForChild("parryResult",10).OnClientEvent:Connect(function(success,co
 local cd=tonumber(cooldown)
 if success==true then Parry.nOk=(Parry.nOk or 0)+1
 elseif success==false then Parry.nMiss=(Parry.nMiss or 0)+1 end
+if Parry.preAt and os.clock()-Parry.preAt<1.5 and success~=nil then
+if success==true then Parry.preOk=(Parry.preOk or 0)+1 else Parry.preMiss=(Parry.preMiss or 0)+1 end
+Parry.preAt=nil
+end
 if cd and cd>0 then Parry.cdUntil=os.clock()+cd end
 if permanent==true then Parry.cdUntil=os.clock()+30 end
 if chained==true then Parry.cdUntil=0 end
@@ -1386,78 +1416,195 @@ end
 task.wait(0.25)
 end
 end)
------------------------------------------------------------------ AUTO DODGE (survivor)
--- sama kaya parry (nonton animasi serang killer + cek jarak/arah) tapi aksinya beda: begitu
--- kena deteksi langsung paksa gerak keluar range, ga nunggu delay/timing kayak parry.
-local Dodge={watched=setmetatable({},{__mode="k"}),lastFire=0}
-local function dflat(v)return Vector3.new(v.X,0,v.Z)end
-local function dodgeThreat(k,lead)
+----------------------------------------------------------------- PARRY ANTISIPASI (v18)
+-- animasi serang baru nyampe ke client setelah ~ping/2, dan damage-nya nyusul cuma ~93 ms kemudian.
+-- kalau ping > waktu animasi->kena, parry reaksi MUSTAHIL ngejar (nyampe server pas udah kena) -> itu yang
+-- dulu dilog "ga kekejar". Solusi: parry dikirim DULUAN waktu killer udah nempel, ngadep, dan ngedeketin,
+-- jadi jendela parry udah kebuka pas serangan mendarat. Cuma aktif kalau baru-baru ini ada "ga kekejar".
+function Parry.approach(k,lead)
 local me=myRoot()
-if not me or not k.root.Parent then return false end
-local vel=Vector3.new(0,0,0)
+if not(me and k.root and k.root.Parent)then return nil end
 local tr=Track[k.char]
+local vel=Vector3.new(0,0,0)
 if tr and os.clock()-tr.t<0.25 then vel=tr.vel
 else pcall(function()vel=k.root.AssemblyLinearVelocity end)end
-vel=dflat(vel)
+vel=Vector3.new(vel.X,0,vel.Z)
 if vel.Magnitude>70 then vel=vel.Unit*70 end
 local pos=k.root.Position+vel*(lead or 0)
-local to=me.Position-pos
+local to=Vector3.new(me.Position.X-pos.X,0,me.Position.Z-pos.Z)
 local dist=to.Magnitude
-if dist>CFG.dodge.range then return false end
-if dist<0.01 or dist<=4 then return true end
-return k.root.CFrame.LookVector:Dot(to.Unit)>=CFG.dodge.frontDot
+if dist<0.01 then return 0,1,99 end
+local dir=to/dist
+local mv=Vector3.new(0,0,0)
+pcall(function()mv=me.AssemblyLinearVelocity end)
+mv=Vector3.new(mv.X,0,mv.Z)
+local facing=k.root.CFrame.LookVector:Dot(dir)
+local closing=(vel-mv):Dot(dir)
+return dist,facing,closing
 end
-local DodgeDrive={active=false,dir=Vector3.new(),k=nil,until_=0,side=1}
-local function dodgeDirFor(k)
+do
+local PP={since=nil,k=nil}
+keep(RunService.Heartbeat:Connect(function()
+if not(alive()and CFG.parry.enabled and CFG.parry.predict and amSurvivor())then PP.since=nil return end
+local now=os.clock()
+if now-(Parry.hopeAt or-1e9)>CFG.parry.preMemory then PP.since=nil return end
+if now-(Parry.preFireAt or-1e9)<CFG.parry.preGap then return end
+if now-(Parry.animAt or-1e9)<0.5 then PP.since=nil return end
+local me,hum=myRoot(),myHum()
+if not(me and hum and hum.Health>0)then PP.since=nil return end
+local lead=math.clamp(Net.rtt*0.5+0.08,0.08,0.4)
+local best,bestD
+for _,k in ipairs(killers())do
+local ch=k.char
+if not(ch:GetAttribute("IsCarrying")or ch:GetAttribute("IsStunned"))then
+local dist,facing,closing=Parry.approach(k,lead)
+if dist and dist<=CFG.parry.preRange and facing>=CFG.parry.preDot and(closing>=CFG.parry.preClose or dist<=5)then
+if not bestD or dist<bestD then best,bestD=k,dist end
+end
+end
+end
+if not best then PP.since=nil return end
+if PP.k~=best or not PP.since then PP.k,PP.since=best,now return end
+if now-PP.since<CFG.parry.preHold then return end
+if not parryReady(now)then return end
+Parry.preFireAt=now
+PP.since=nil
+local entry={key="antisipasi",t0=now,k=best,near=true,pre=true,dist=bestD}
+task.spawn(function()
+if parryNow(entry,0)then
+Parry.preN=(Parry.preN or 0)+1
+Parry.preAt=os.clock()
+end
+end)
+end))
+end
+----------------------------------------------------------------- AUTO DODGE (survivor) v18
+-- perbaikan v18:
+-- 1) dulu animasi serang cuma dicek SEKALI pas mulai; killer yang masih jauh waktu animasi mulai (lunge)
+--    langsung dibuang selamanya. Sekarang dipantau terus selama pollWindow kayak parry.
+-- 2) dulu arah geser dipilih dari vektor kamera sendiri (acak); sekarang tegak lurus arah hadap killer,
+--    ke sisi yang bebas tembok.
+-- 3) ping tinggi bikin reaksi telat -> ada dodge antisipasi (sebelum animasi) sebagai cadangan kalau parry
+--    ga bisa dipakai. Parry yang baru dikirim ga ditabrak dodge (yieldParry).
+-- 4) tiap alasan dodge ga jalan sekarang dilog (dulu diem-diem).
+do
+local DG={n=0,anim=0,pre=0,seen=0,blocked=0,why=nil}
+Parry.dg=DG
+local lastFire=0
+local whyAt={}
+local drive={active=false,dir=Vector3.new(0,0,0),k=nil,until_=0,side=1}
+local function dflat(v)return Vector3.new(v.X,0,v.Z)end
+local function say(tag,msg,gap)
+local now=os.clock()
+if now-(whyAt[tag]or-10)>(gap or 3)then
+whyAt[tag]=now
+DG.why=msg
+log("DODGE",msg)
+end
+end
+local function blockedBy(ch,hum)
+if hum.Health<=0 then return"mati"end
+if ch:GetAttribute("IsCarried")then return"lagi digendong"end
+if ch:GetAttribute("IsHooked")then return"lagi digantung"end
+if ch:GetAttribute("Knocked")or ch:GetAttribute("Trapped")or ch:GetAttribute("Rooted")then return"knocked/trapped"end
+if ch:GetAttribute("IsStunned")or ch:GetAttribute("Immobile")then return"stun/immobile (gerak dikunci game)"end
+local ms=ch:FindFirstChild("CheckInterractable")
+if ms and ms:GetAttribute("isVaulting")==true then return"lagi vault"end
+local root=ch:FindFirstChild("HumanoidRootPart")
+if root and root:HasTag("doing action")and not CFG.dodge.fromAction then return"lagi action"end
+return nil
+end
+local function sideClear(me,dir,dist)
+local ok,hit=pcall(function()
+local rp=RaycastParams.new()
+rp.FilterType=Enum.RaycastFilterType.Exclude
+rp.FilterDescendantsInstances={myChar()}
+return workspace:Raycast(me.Position,dir*dist,rp)
+end)
+return ok and hit==nil
+end
+local function latOf(k)
+local fwd=dflat(k.root.CFrame.LookVector)
+if fwd.Magnitude>0.05 then
+fwd=fwd.Unit
+return Vector3.new(-fwd.Z,0,fwd.X)
+end
+return Vector3.new(1,0,0)
+end
+local function pickSide(k)
 local me=myRoot()
-if not(me and k.root.Parent)then return Vector3.new()end
+local lat=latOf(k)
+local off=lat:Dot(dflat(me.Position-k.root.Position))
+local side=(off>=0)and 1 or-1
+if not sideClear(me,lat*side,4)and sideClear(me,lat*(-side),4)then side=-side end
+return side
+end
+local function dirFor(k)
+local me=myRoot()
+if not(me and k.root.Parent)then return Vector3.new(0,0,0)end
 local away=dflat(me.Position-k.root.Position)
 if away.Magnitude<0.05 then away=Vector3.new(1,0,0)else away=away.Unit end
-local right=Vector3.new(-away.Z,0,away.X)
-local dir=away*CFG.dodge.backWeight+right*DodgeDrive.side*CFG.dodge.strafeWeight
+local dir=away*CFG.dodge.backWeight+latOf(k)*drive.side*CFG.dodge.strafeWeight
 if dir.Magnitude>0.001 then return dir.Unit end
 return away
 end
-local function dodgeBlocked(ch,hum)
-if hum.Health<=0 then return true end
-if ch:GetAttribute("IsCarried")or ch:GetAttribute("IsHooked")then return true end
-local root=ch:FindFirstChild("HumanoidRootPart")
-return root~=nil and root:HasTag("doing action")
+local function threat(k,lead,extra)
+local dist,facing=Parry.approach(k,lead)
+if not dist then return false,"killer ga ada"end
+local range=CFG.dodge.range+(extra or 0)
+if dist>range then return false,string.format("killer %.1f stud (batas %.1f)",dist,range)end
+if dist<=4 then return true end
+if facing<CFG.dodge.frontDot then return false,string.format("killer ga ngadep (dot %.2f)",facing)end
+return true
 end
-local function dodgeFire(k)
+local function fire(k,why)
 local now=os.clock()
-if now-Dodge.lastFire<CFG.dodge.gap then return end
+if now-lastFire<CFG.dodge.gap then return false end
 local ch,hum,me=myChar(),myHum(),myRoot()
-if not(ch and hum and me)or dodgeBlocked(ch,hum)then return end
-Dodge.lastFire=now
-local right=dflat(me.CFrame.RightVector)
-local toMe=dflat(me.Position-k.root.Position)
-DodgeDrive.side=(right:Dot(toMe)>=0)and 1 or-1
-DodgeDrive.active,DodgeDrive.k=true,k
-DodgeDrive.until_=now+CFG.dodge.holdTime
-DodgeDrive.dir=dodgeDirFor(k)
-log("DODGE",string.format("ngehindar dari %s (anim ketangkep, dalam jangkauan)",k.player and k.player.Name or"?"))
+if not(ch and hum and me)then return false end
+local blk=blockedBy(ch,hum)
+if blk then
+DG.blocked=DG.blocked+1
+say("blk","ga dodge: "..blk,2.5)
+return false
+end
+if CFG.dodge.yieldParry and CFG.parry.enabled and now-Parry.last<0.8 then
+say("yield","dodge ngalah: parry baru dikirim (jendela parry lagi kebuka)",2.5)
+return false
+end
+lastFire=now
+DG.n=DG.n+1
+drive.side=pickSide(k)
+drive.active,drive.k=true,k
+drive.until_=now+CFG.dodge.holdTime
+drive.dir=dirFor(k)
+local root=ch:FindFirstChild("HumanoidRootPart")
+log("DODGE",string.format("ngehindar dari %s [%s] | %.1f stud | ping %.0f ms | fps %.0f%s",
+k.player and k.player.Name or"?",why,dflat(me.Position-k.root.Position).Magnitude,Net.rtt*1000,1/Net.frameDt,
+(root and root:HasTag("doing action"))and" | lagi action (gerak bisa ketahan game)"or""))
+return true
 end
 keep(RunService.Heartbeat:Connect(function()
-if not(DodgeDrive.active and alive())then return end
+if not(drive.active and alive())then return end
 local now=os.clock()
-local k,hum,me=DodgeDrive.k,myHum(),myRoot()
-local stillClose=k and k.root and k.root.Parent and me and dflat(me.Position-k.root.Position).Magnitude<CFG.dodge.range+CFG.dodge.clearMargin
-if now>=DodgeDrive.until_ or not(hum and me and stillClose)then
-DodgeDrive.active=false
+local k,hum,me=drive.k,myHum(),myRoot()
+local stillClose=k and k.root and k.root.Parent and me and dflat(me.Position-k.root.Position).Magnitude<CFG.dodge.range+CFG.dodge.lunge+CFG.dodge.clearMargin
+if now>=drive.until_ or not(hum and me and stillClose)then
+drive.active=false
 return
 end
-DodgeDrive.dir=dodgeDirFor(k)
+drive.dir=dirFor(k)
 end))
 RunService:BindToRenderStep("DP3_Dodge",Enum.RenderPriority.Last.Value+3,function()
-if not(DodgeDrive.active and alive()and CFG.dodge.enabled)then return end
+if not(drive.active and alive()and CFG.dodge.enabled)then return end
 local hum=myHum()
-if hum then pcall(function()hum:Move(DodgeDrive.dir,false)end)end
+if hum then pcall(function()hum:Move(drive.dir,false)end)end
 end)
+local watched=setmetatable({},{__mode="k"})
 local function watchKillerDodge(k)
 local animator=k.hum:FindFirstChildOfClass("Animator")
-if not animator or Dodge.watched[animator]then return end
-Dodge.watched[animator]=true
+if not animator or watched[animator]then return end
+watched[animator]=true
 local seenTrack=setmetatable({},{__mode="k"})
 local function onTrack(track)
 if seenTrack[track]then return end
@@ -1465,8 +1612,22 @@ seenTrack[track]=true
 if not alive()or not CFG.dodge.enabled or not amSurvivor()then return end
 if track.Looped then return end
 if track.Priority.Value<CFG.dodge.minPriority.Value then return end
-if not dodgeThreat(k,0.1)then return end
-dodgeFire(k)
+DG.seen=DG.seen+1
+task.spawn(function()
+local t0=os.clock()
+local lead=math.clamp(Net.rtt*0.5+0.08,0.08,0.4)
+local why="?"
+while alive()and CFG.dodge.enabled and track.IsPlaying and os.clock()-t0<CFG.dodge.pollWindow do
+local ok,reason=threat(k,lead,CFG.dodge.lunge)
+if ok then
+if fire(k,"animasi serang")then DG.anim=DG.anim+1 end
+return
+end
+why=reason or why
+RunService.Heartbeat:Wait()
+end
+say("ng","animasi serang kebaca tapi ga ngancam: "..tostring(why),4)
+end)
 end
 keep(animator.AnimationPlayed:Connect(onTrack))
 task.spawn(function()
@@ -1491,7 +1652,41 @@ end
 task.wait(0.25)
 end
 end)
-log("DODGE","modul auto dodge survivor dimuat")
+-- antisipasi: killer nempel + ngadep + ngedeketin -> geser duluan (cuma kalau parry ga bisa dipakai)
+local pre={since=nil,k=nil,chk=-10,pr=false}
+keep(RunService.Heartbeat:Connect(function()
+if not(alive()and CFG.dodge.enabled and CFG.dodge.predict and amSurvivor())then pre.since=nil return end
+local now=os.clock()
+if drive.active or now-lastFire<CFG.dodge.preGap then pre.since=nil return end
+local me,hum=myRoot(),myHum()
+if not(me and hum and hum.Health>0)then pre.since=nil return end
+if CFG.dodge.yieldParry and CFG.parry.enabled and CFG.parry.predict then
+if now-pre.chk>0.1 then
+pre.chk=now
+local okR,rd=pcall(parryReady,now)
+pre.pr=okR and rd==true
+end
+if pre.pr then pre.since=nil return end
+end
+local lead=math.clamp(Net.rtt*0.5+0.08,0.08,0.4)
+local best,bestD
+for _,k in ipairs(killers())do
+local ch=k.char
+if not(ch:GetAttribute("IsCarrying")or ch:GetAttribute("IsStunned"))then
+local dist,facing,closing=Parry.approach(k,lead)
+if dist and dist<=CFG.dodge.preRange and facing>=CFG.dodge.preDot and(closing>=CFG.dodge.preClose or dist<=4)then
+if not bestD or dist<bestD then best,bestD=k,dist end
+end
+end
+end
+if not best then pre.since=nil return end
+if pre.k~=best or not pre.since then pre.k,pre.since=best,now return end
+if now-pre.since<CFG.dodge.preHold then return end
+pre.since=nil
+if fire(best,"antisipasi")then DG.pre=DG.pre+1 end
+end))
+log("DODGE","modul auto dodge v18 dimuat (pantau animasi terus + antisipasi)")
+end
 local NO_AIM_FLAGS={"isVaulting","isSliding","isDroppingPallet","isRepairing","isHealing","isUnhooking","isExiting"}
 local function equippedGun()
 local c=myChar()
@@ -3685,6 +3880,34 @@ return c~=nil and sc.Parent==c
 end
 return true
 end
+function Skill.introspect(f)
+local rows={}
+if debug and debug.getconstants then
+local ok,cs=pcall(debug.getconstants,f)
+if ok and type(cs)=="table"then
+local out={}
+for _,v in pairs(cs)do
+local tv=type(v)
+if tv=="string"or tv=="number"or tv=="boolean"then out[#out+1]=tostring(v)end
+end
+rows[#rows+1]="consts="..table.concat(out,","):sub(1,700)
+end
+end
+if debug and debug.getupvalues then
+local ok,us=pcall(debug.getupvalues,f)
+if ok and type(us)=="table"then
+local out={}
+for i,v in pairs(us)do
+local tv=typeof(v)
+if tv=="number"or tv=="boolean"or tv=="string"then out[#out+1]=tostring(i)..":"..tv.."="..tostring(v)
+else out[#out+1]=tostring(i)..":"..tv end
+end
+rows[#rows+1]="upvalues="..table.concat(out,","):sub(1,700)
+end
+end
+Skill.intro=(#rows>0)and table.concat(rows," | ")or"debug.getconstants/getupvalues ga ada"
+log("SKILL","introspeksi handler game: "..Skill.intro:sub(1,400))
+end
 local function refreshGameFns(force)
 local ok0=#Skill.gameFns>0
 for _,f in ipairs(Skill.gameFns)do
@@ -3721,6 +3944,13 @@ end
 Skill.gameScanBusy=false
 Skill.gameFns=out
 log("SKILL",string.format("handler game: %d ketemu {%s}",#out,table.concat(names,",")))
+Skill.introDone=Skill.introDone or setmetatable({},{__mode="k"})
+for _,f in ipairs(out)do
+if not Skill.introDone[f]then
+Skill.introDone[f]=true
+pcall(Skill.introspect,f)
+end
+end
 end
 local function fireGameHandlers()
 local n=0
@@ -3797,6 +4027,13 @@ local at=first and indexOf(list,first)
 if at then
 table.remove(list,at)
 table.insert(list,1,first)
+end
+if CFG.skill.native then
+local gi=indexOf(list,"game")
+if gi then
+table.remove(list,gi)
+list[#list+1]="game"
+end
 end
 return list
 end
@@ -4060,7 +4297,18 @@ if rem>360-math.abs(w)*frame*0.5 then rem=0 end
 -- daripada nunggu putaran berikutnya (yang keburu abis duluan di mode cepat).
 local overshoot=CFG.skill.catchUp and lastRem and lastRem<math.max(math.abs(w)*frame*3,8)and rem>180
 local T=rem/math.abs(w)
-if overshoot or T<=curTune(frame)+frame*0.5 then
+local tune=curTune(frame)
+if CFG.skill.precise and not overshoot and T>tune and T<=tune+frame*1.5 then
+-- jarum bakal lewat titik tekan sebelum frame berikutnya: tunggu pas waktunya (sub-frame) biar waktu tekan
+-- ga dibulatin ke frame (di 30 fps 1 frame = ~9 derajat)
+local dl=now+(T-tune)
+if dl-os.clock()<=0.12 then
+while os.clock()<dl do end
+Skill.spunAt,Skill.spunErr=os.clock(),(os.clock()-dl)*math.abs(w)*dir
+T=tune
+end
+end
+if overshoot or T<=tune+frame*0.5 then
 Skill.retried=false
 log("SKILL",string.format("%s sisa=%.1f deg (%.0f ms) kecepatan=%.0f deg/s fps~%.0f sample=%d",
 overshoot and"TEKAN susulan (lompat frame)"or"TEKAN",rem,T*1000,w,1/frame,#samples))
@@ -4084,6 +4332,9 @@ end
 SkillHook.judged=function(args,name)
 Skill.resultN=Skill.resultN+1
 Skill.lastResult=os.clock()
+local qk=tostring(args[1])..":"..tostring(args[2])
+Skill.qHist=Skill.qHist or{}
+Skill.qHist[qk]=(Skill.qHist[qk]or 0)+1
 local c=Skill.cur
 if not c or not c.line.Parent then return end
 local since=os.clock()-Skill.pressClock
@@ -4094,6 +4345,8 @@ if Skill.snapAt and Skill.snapDelta and os.clock()-Skill.snapAt<0.3 then
 err=-Skill.snapDelta
 end
 Skill.snapAt=nil
+if Skill.spunAt and os.clock()-Skill.spunAt<0.4 then err=Skill.spunErr or 0 end
+Skill.spunAt=nil
 local errT=(math.abs(w)>1)and(err/math.abs(w))or 0
 local mine=since>=0 and since<0.3
 log("SKILL",string.format("HASIL %s %s %s | err=%+.1f deg (%+.0f ms %s) | tekan->hasil %.0f ms | %s",
@@ -4224,6 +4477,21 @@ end
 end
 local function runSkillCheck(info)
 if not CFG.skill.enabled then return end
+if type(info)=="string"then
+if info:sub(1,3)=="gui"then
+-- check muncul di layar TANPA event server. Kalau event server lagi normal, itu bukan check baru:
+-- handler game masih megang token lama, jadi kalau ditekan token basi dikirim ulang ke server.
+if Skill.realEventAt and os.clock()-Skill.realEventAt<60 then
+if os.clock()-(Skill.phantomAt or-10)>5 then
+Skill.phantomAt=os.clock()
+log("SKILL","check muncul tanpa event server -> ga ditekan (anti token basi)")
+end
+return
+end
+else
+Skill.realEventAt=os.clock()
+end
+end
 Skill.gen=Skill.gen+1
 Skill.lastEvent=os.clock()
 unhideChecks()
@@ -5655,7 +5923,7 @@ task.spawn(function()
 local errAt=0
 while alive()do
 local dt=RunService.RenderStepped:Wait()
-local ok,err=pcall(function()
+local ok,err=xpcall(function()
 local C=CFG.ring
 local me,hum=myRoot(),myHum()
 if not(C.enabled and me and hum and hum.Health>0 and amSurvivor())then
@@ -5831,7 +6099,7 @@ rip.Visible=true
 else
 rip.Visible=false
 end
-end)
+end,function(e)return tostring(e).." | "..(tostring(debug.traceback()):gsub("%s*\n%s*"," > "):sub(1,260))end)
 if not ok and os.clock()-errAt>5 then
 errAt=os.clock()
 log("RING","error: "..tostring(err))
@@ -6665,11 +6933,17 @@ return{locked=Gun.lockTarget~=nil,gun=Gun.status,tier=Skill.tierName,veil=Veil.i
 killer=Veil.killerId,pov=(pv and pv.state)and pv.state()or nil}
 end
 function API.Summary()
+local dg=Parry.dg or{n=0,anim=0,pre=0,seen=0,blocked=0}
+local qh={}
+for k2,v2 in pairs(Skill.qHist or{})do qh[#qh+1]=k2.."x"..v2 end
+table.sort(qh)
 local L={
-string.format("DP v14.5 | ping %.0f ms | fps %.0f",Net.rtt*1000,1/Net.frameDt),
-string.format("parry: kirim %d | ok %d | meleset %d",Parry.nFire or 0,Parry.nOk or 0,Parry.nMiss or 0),
+string.format("DP v18 | ping %.0f ms | fps %.0f",Net.rtt*1000,1/Net.frameDt),
+string.format("parry: kirim %d | ok %d | meleset %d | antisipasi %d (ok %d, meleset %d)",Parry.nFire or 0,Parry.nOk or 0,Parry.nMiss or 0,Parry.preN or 0,Parry.preOk or 0,Parry.preMiss or 0),
+string.format("dodge: %d kali (animasi %d, antisipasi %d) | diblok %d | animasi kebaca %d | terakhir: %s",dg.n,dg.anim,dg.pre,dg.blocked,dg.seen,tostring(dg.why or"-")),
 string.format("gun: %s | hit %d/%d",tostring(Gun.status),Gun.hits,Gun.shots),
-string.format("skill: rung %s | hasil %d",tostring(Skill.tierName or"-"),Skill.resultN or 0),
+string.format("skill: rung %s | hasil %d | args %s",tostring(Skill.tierName or"-"),Skill.resultN or 0,#qh>0 and table.concat(qh," ")or"-"),
+"skill handler: "..tostring(Skill.intro or"(belum ketemu)"),
 string.format("esp: %s %d%% | fps %.0f | %.0f Hz | %.2f ms | HL %d/%d | objek %d/%d | beban %d/%d",tostring(ESP.stat.tier),
 math.floor(ESP.stat.scale*100+0.5),ESP.stat.fps,ESP.stat.hz,ESP.stat.stepMs,ESP.stat.hl,ESP.stat.hlBudget,
 ESP.stat.objShown,ESP.stat.objTotal,math.floor(ESP.stat.cost+0.5),ESP.stat.costBudget),
@@ -6724,7 +6998,7 @@ if ENV.__DPAPI==API then ENV.__DPAPI=nil end
 end
 ENV.__DPAPI=API
 end)()
-notify("v15.2 loaded. hook="..tostring(Gun.hookOK).." | hub: tombol bulat / RightAlt")
+notify("v18.0 loaded. hook="..tostring(Gun.hookOK).." | hub: tombol bulat / RightAlt")
 end
 local function __startNono()
 local NX={}
@@ -7804,7 +8078,7 @@ end
 print("[NONO v6.0] loaded | setfpscap:",HAS_SETFPSCAP,"| sethiddenproperty:",HAS_SETHIDDEN,
 "| file:",HAS_FILE)
 end
-local VERSION="15.2"
+local VERSION="18.0"
 local Players=game:GetService("Players")
 local RunService=game:GetService("RunService")
 local UIS=game:GetService("UserInputService")
@@ -9861,6 +10135,7 @@ W.toggle(c1,"Silent aim gun","Peluru dibelokkan ke killer walau crosshair jauh d
 W.toggle(c1,"Cincin dan garis killer","Jangkauan parry dan kerucut serang killer",K.pbool("ring.enabled"))
 W.toggle(c1,"Auto vault jendela","Lompat jendela otomatis saat kamu lari menuju jendela. Hotkey Insert",K.pbool("vault.enabled"))
 W.toggle(c1,"Auto dodge","Paksa gerak keluar jangkauan begitu animasi serang killer kebaca, ga pakai delay. Hotkey F9",K.pbool("dodge.enabled"))
+W.toggle(c1,"Dodge antisipasi","Geser sebelum animasi serang kalau parry ga bisa dipakai (ping tinggi bikin reaksi telat)",K.pbool("dodge.predict"))
 W.toggle(c1,"Animasi vault cepat","Animasi lompat jendela dipercepat (client saja, semua vault)",K.pbool("vault.fast"))
 local setGun=W.chipRow(c1,"Gun",nil)
 reg(function()
@@ -9903,6 +10178,7 @@ W.row(c2,"Cara kirim parry","game = ParryClient asli (animasi dan cooldown ikut)
 W.seg(c2,{"game","input","remote"},K.pstr("parry.via",{"game","input","remote"}))
 W.toggle(c2,"Belajar waktu kena","Waktu kena per animasi dipelajari dari damage",K.pbool("parry.learn"))
 W.toggle(c2,"Coba animasi baru","Animasi yang belum pernah kena tetap dicoba",K.pbool("parry.fireUnknown"))
+W.toggle(c2,"Parry antisipasi","Kalau ping lebih lambat dari waktu animasi ke kena (reaksi mustahil), parry dikirim duluan pas killer nempel dan ngedeketin",K.pbool("parry.predict"))
 local c3=W.section(p,"Gun",false)
 W.slider(c3,"Sudut lock",10,180,5," °",K.pnum("gun.lockFov"))
 W.slider(c3,"Sudut silent aim",10,180,5," °",K.pnum("gun.silentFov"))
@@ -9921,6 +10197,8 @@ W.toggle(c3,"Cek tembok","Tembak cuma kalau killer tidak ketutup tembok",K.pbool
 local c4=W.section(p,"Skill check",false)
 W.toggle(c4,"Sembunyikan UI skill check","Jarum, zona, dan tombol disembunyikan. Hotkey F7",K.pbool("skill.hideUI"))
 W.toggle(c4,"Snap ke tengah zona","Anti lompat frame di FPS rendah",K.pbool("skill.frameSnap"))
+W.toggle(c4,"Tekan presisi sub-frame","Tunggu pas waktunya, ga dibulatin ke frame (nolong di FPS rendah)",K.pbool("skill.precise"))
+W.toggle(c4,"EKSPERIMEN: tekan lewat tombol asli","Pakai handler tombol game (penilaian asli) dulu, handler paksa 'success' jadi cadangan. Bisa bikin gagal kalau FPS di bawah 20",K.pbool("skill.native"))
 W.toggle(c4,"Buang Check yang nyangkut","Check yang jarumnya diam terlalu lama disembunyikan",K.pbool("skill.unstick"))
 W.slider(c4,"Geser titik tekan",-40,40,1," °",K.pnum("skill.offset"))
 local cr=W.section(p,"Cincin dan kerucut",false)
