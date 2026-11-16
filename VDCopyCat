@@ -842,6 +842,10 @@ if nd and Gun.rec then Gun.rec(best,origin,nd)end
 return nd
 end
 local function onGunFire(args)
+if not Gun.selfFire and Gun.jamHold then
+local okH,hold=pcall(Gun.jamHold,args)
+if okH and hold then return true end
+end
 local now=os.clock()
 Gun.fireCount=Gun.fireCount+1
 Gun.fireSeen=now
@@ -875,7 +879,11 @@ if name and alive()then
 local n=select("#",...)
 local args={...}
 inHook=true
-if name=="gun.Fire"then pcall(onGunFire,args)end
+local dropIt=false
+if name=="gun.Fire"then
+local okF,held=pcall(onGunFire,args)
+if okF and held==true then dropIt=true end
+end
 if name=="Generator.Result"or name=="Healing.Result"
 or name=="Generator.Fail"or name=="Healing.Fail"then
 pcall(SkillHook.judged,args,name)
@@ -883,10 +891,11 @@ end
 if string.sub(name,1,5)=="veil."then
 local vf=Gun.veilFire
 if vf then pcall(vf,name,args,n)end
-else
+elseif not dropIt then
 pcall(logSpy,name,args,n)
 end
 inHook=false
+if dropIt then return end
 setnamecallmethod(method)
 return oldNC(self,table.unpack(args,1,n))
 end
@@ -1811,6 +1820,28 @@ local defs={{0.75,0.4,0.8},{ranked and 1.3 or 1.8,0.2,0.65},{ranked and 2.0 or 3
 local d=defs[n]or defs[3]
 return d[1],d[2],d[3]
 end
+Gun.jamAt,Gun.jamRoll=0,nil
+function Gun.jamHold(args)
+local tool,step=args[1],args[3]
+if typeof(tool)~="Instance"or not amSurvivor()then return false end
+local roll=tool:GetAttribute("tofRoll")
+if type(roll)~="number"then return false end
+local shots=tool:GetAttribute("shots")
+local hasShots=(shots==nil and 1 or shots)>0
+local n=math.clamp(math.floor(tonumber(step)or 1),1,3)
+local _,jam,empty=stepInfo(n)
+local limit=hasShots and jam or empty
+if type(limit)~="number"or roll>=limit then Gun.jamAt=0 return false end
+local now=os.clock()
+if now-Gun.jamAt<=4 and Gun.jamRoll==roll then
+Gun.jamAt=0
+log("GUN","tembakan dipaksa walau roll jelek")
+return false
+end
+Gun.jamAt,Gun.jamRoll=now,roll
+log("GUN",string.format("tembakan ditahan: roll %.2f < %.2f (step %d, %s) | tekan lagi dalam 4 dtk kalau mau dipaksa",roll,limit,n,hasShots and"ada peluru"or"peluru habis"))
+return true
+end
 local function gameAimDir()
 local cam=workspace.CurrentCamera
 if EffectsMod==nil then
@@ -2118,7 +2149,7 @@ if spd>=5 then
 local resid=Vector3.new(actual.X-s.pred.X,0,actual.Z-s.pred.Z)
 local along=resid:Dot(s.vel.Unit)
 if math.abs(along)<=8 then
-Gun.leadAdj=math.clamp(Gun.leadAdj+0.3*(along/spd),-0.12,0.3)
+Gun.leadAdj=math.clamp(Gun.leadAdj+0.3*(along/spd),-0.12,0.08)
 note=string.format(" | lead %+.0f ms",Gun.leadAdj*1000)
 end
 elseif spd<1.5 and not hit and mySpd<3 and dist>=8
@@ -2790,6 +2821,18 @@ local cam=Workspace.CurrentCamera
 local origin=spawnOrigin()
 local me=myRoot()
 if not(cam and origin and me)then return end
+local po
+for i=1,n do
+local a=args[i]
+if typeof(a)=="table"and typeof(a.Origin)=="Vector3"then po=a.Origin break end
+end
+if po and(po-me.Position).Magnitude<=12 then
+if(V.originLogged or 0)<4 then
+V.originLogged=(V.originLogged or 0)+1
+log("VEIL",string.format("origin payload vs hitung: %.1f stud (dipakai: payload)",(po-origin).Magnitude))
+end
+origin=po
+end
 local best=V.silentPick(origin,cam)
 if not best then return end
 local dir,P=best.dir,best.P
@@ -2798,8 +2841,8 @@ local ctx={dir=dir,P=P,S=V.speed(),origin=origin,camPos=camPos,mePos=me.Position
 for i=1,n do args[i]=V.retarget(args[i],0,ctx)end
 local changed=ctx.n
 if changed>0 then
-log("VEIL",string.format("silent aim %s -> %s (%.0f stud, %d arg diganti, %.1f deg dari crosshair)",
-rn,best.k.player.DisplayName,best.dist,changed,best.ang))
+log("VEIL",string.format("silent aim %s -> %s (%.0f stud, %d arg diganti, %.1f deg dari crosshair | lead %.0f ms | terbang %.2fs)",
+rn,best.k.player.DisplayName,best.dist,changed,best.ang,V.leadTime()*1000,best.flight or 0))
 end
 end
 Gun.veilFire=V.onFire
@@ -3590,7 +3633,7 @@ if seen>40 then return end
 local parts={}
 for i=1,math.min(select("#",...),6)do
 local v=(select(i,...))
-parts[#parts+1]=typeof(v).."="..tostring(v)
+parts[#parts+1]=(typeof(v)=="table")and V.describe(v,0)or(typeof(v).."="..tostring(v))
 end
 log("SPEAR state",table.concat(parts,", "))
 end))
@@ -4760,7 +4803,7 @@ if type(k)=="string"and x then Parry.shift[k]=x end
 end
 end
 local g=type(d.gun)=="table"and d.gun or{}
-Gun.leadAdj=num(g.leadAdj,-0.12,0.3)or Gun.leadAdj
+Gun.leadAdj=num(g.leadAdj,-0.12,0.08)or Gun.leadAdj
 Gun.biasR=num(g.biasR,-0.06,0.06)or Gun.biasR
 Gun.biasU=num(g.biasU,-0.06,0.06)or Gun.biasU
 CFG.gun.originLag=num(g.originLag,0,0.15)or CFG.gun.originLag
