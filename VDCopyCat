@@ -16,6 +16,7 @@ dodge=Enum.KeyCode.F9,
 veil=Enum.KeyCode.RightShift,
 vault=Enum.KeyCode.Insert,
 melee=Enum.KeyCode.Delete,
+speed=Enum.KeyCode.End,
 pov=Enum.KeyCode.RightControl,
 silent=Enum.KeyCode.End,
 },
@@ -277,11 +278,11 @@ skipDown=true,
 },
 speed={
 enabled=false,
-pct=8,
+pct=15,
 ramp=0.6,
 wallCheck=true,
 adapt=true,
-cap=6,
+cap=8,
 },
 light={
 enabled=false,
@@ -327,7 +328,10 @@ for i,x in ipairs(alive2)do Conns[i]=x end
 end
 return c
 end
-local Net={frameDt=1/60,rtt=0.10,jitter=0.01}
+local Net={frameDt=1/60,rtt=0.10,jitter=0.01,leadRtt=0.10}
+function Net.aimLag()
+return(Net.leadRtt or Net.rtt)+math.clamp(Net.frameDt-0.025,-0.01,0.1)
+end
 do
 local hbConn
 hbConn=keep(RunService.Heartbeat:Connect(function(dt)
@@ -348,6 +352,15 @@ local s=ms/1000
 Net.jitter=Net.jitter*0.8+math.abs(s-Net.rtt)*0.2
 local a=(s>Net.rtt*1.35)and 0.55 or 0.2
 Net.rtt=Net.rtt*(1-a)+s*a
+local hs=Net.hist
+if not hs then hs={};Net.hist=hs end
+hs[#hs+1]=s
+if#hs>7 then table.remove(hs,1)end
+local tmp={}
+for i=1,#hs do tmp[i]=hs[i]end
+table.sort(tmp)
+local med=tmp[math.ceil(#tmp/2)]
+Net.leadRtt=Net.leadRtt*0.7+med*0.3
 end
 task.wait(0.25)
 end
@@ -706,7 +719,7 @@ end
 local function leadTime(dist)
 local G=CFG.gun
 local t=0
-if G.leadPing>0 then t=t+Net.rtt*G.leadPing+G.leadBase+Gun.leadAdj end
+if G.leadPing>0 then t=t+Net.aimLag()*G.leadPing+G.leadBase+Gun.leadAdj end
 if G.lead>0 and G.bulletSpeed>0 then t=t+(dist/G.bulletSpeed)*G.lead end
 return math.clamp(t,0,G.leadMax)
 end
@@ -728,7 +741,7 @@ local tr=Track[ch]
 local spd=tr and Vector3.new(tr.vel.X,0,tr.vel.Z).Magnitude or 0
 if spd>(G.headMaxSpeed or 14)or(part.Position-origin).Magnitude>(G.headMaxDist or 120)then want=false end
 if want then
-local tt=(part.Position-origin).Magnitude/math.max(G.bulletSpeed or 800,1)+Net.rtt*(G.leadPing or 1)+(G.leadBase or 0)
+local tt=(part.Position-origin).Magnitude/math.max(G.bulletSpeed or 800,1)+Net.aimLag()*(G.leadPing or 1)+(G.leadBase or 0)
 if spd*(Net.jitter*2+0.05)+spd*0.1*math.min(tt,0.7)>(G.headMaxErr or 1.0)then want=false end
 end
 end
@@ -762,7 +775,7 @@ local pos=Gun.aimOf(part,origin)
 local tr=Track[part.Parent]
 if not tr then return pos end
 local G=CFG.gun
-local base=(G.leadPing>0)and(Net.rtt*G.leadPing+G.leadBase+Gun.leadAdj)or 0
+local base=(G.leadPing>0)and(Net.aimLag()*G.leadPing+G.leadBase+Gun.leadAdj)or 0
 if base<=0 and G.lead<=0 then return pos end
 local v=tr.vs or tr.vel
 if tr.grounded then v=Vector3.new(v.X,0,v.Z)end
@@ -781,7 +794,7 @@ end
 local function leadInfo(part,origin)
 local tr=Track[part.Parent]
 local spd=tr and Vector3.new(tr.vel.X,0,tr.vel.Z).Magnitude or 0
-return string.format("spd %.0f lead %.0fms ping %.0fms",spd,leadTime((part.Position-origin).Magnitude)*1000,Net.rtt*1000)
+return string.format("spd %.0f lead %.0fms ping %.0fms (dipakai %.0f) fps %.0f",spd,leadTime((part.Position-origin).Magnitude)*1000,Net.rtt*1000,Net.aimLag()*1000,1/Net.frameDt)
 end
 local function dirTo(origin,part)
 local pos=predictPos(part,origin)
@@ -1843,6 +1856,16 @@ local n=math.clamp(math.floor(tonumber(step)or 1),1,3)
 local _,jam,empty=stepInfo(n)
 local limit=hasShots and jam or empty
 if type(limit)~="number"or roll>=limit then Gun.jamAt=0 return false end
+local safe,safeAt
+for m=n+1,3 do
+local at2,j2,e2=stepInfo(m)
+local l2=hasShots and j2 or e2
+if type(l2)=="number"and roll>=l2 then safe,safeAt=m,at2 break end
+end
+if not safe then
+log("GUN",string.format("roll %.2f jelek di semua step (%s) -> tetap ditembak, macet ngacak ulang roll",roll,hasShots and"ada peluru"or"peluru habis"))
+return false
+end
 local now=os.clock()
 if now-Gun.jamAt<=4 and Gun.jamRoll==roll then
 Gun.jamAt=0
@@ -1850,7 +1873,9 @@ log("GUN","tembakan dipaksa walau roll jelek")
 return false
 end
 Gun.jamAt,Gun.jamRoll=now,roll
-log("GUN",string.format("tembakan ditahan: roll %.2f < %.2f (step %d, %s) | tekan lagi dalam 4 dtk kalau mau dipaksa",roll,limit,n,hasShots and"ada peluru"or"peluru habis"))
+local msg=string.format("Roll %.2f jelek di step %d. Tahan charge sampai step %d (%.1f dtk)",roll,n,safe,tonumber(safeAt)or 0)
+log("GUN",msg.." | tekan lagi dalam 4 dtk kalau mau dipaksa")
+notify(msg)
 return true
 end
 local function gameAimDir()
@@ -2156,7 +2181,7 @@ end
 local spd,mySpd=s.vel.Magnitude,s.my.Magnitude
 local note=""
 if CFG.gun.learn then
-if spd>=5 then
+if spd>=5 and Net.rtt<(Net.leadRtt or Net.rtt)*1.4+0.04 then
 local resid=Vector3.new(actual.X-s.pred.X,0,actual.Z-s.pred.Z)
 local along=resid:Dot(s.vel.Unit)
 if math.abs(along)<=8 then
@@ -2520,7 +2545,7 @@ if not C.assist then return 0 end
 local t=0
 local pk=V.prof and V.prof.kind or"spear"
 local adj=(pk=="spear")and V.leadAdj or 0
-if C.leadPing>0 then t=Net.rtt*C.leadPing+C.leadBase+adj end
+if C.leadPing>0 then t=Net.aimLag()*C.leadPing+C.leadBase+adj end
 if pk=="spear"and C.useThrowDelay and V.math.throwDelay then t=t+V.math.throwDelay end
 if pk=="melee"then t=t*math.clamp(C.meleeLead or 0.5,0,1.5)end
 return math.clamp(t,0,C.leadMax)
@@ -4302,7 +4327,7 @@ local frame=math.clamp(Net.frameDt,1/120,1/15)
 local target=c.goal.Rotation+zoneMid()
 local delta=angDiff(target,c.line.Rotation)*dir
 local span=math.abs(w)*frame
-if delta<-span or delta>span*C.snapFrames or math.abs(delta)<0.4 then return end
+if delta<-span or delta>span*C.snapFrames+math.abs(w)*0.03 or math.abs(delta)<0.4 then return end
 local okS=pcall(function()c.line.Rotation=target end)
 if okS then
 Skill.snapAt,Skill.snapDelta=os.clock(),delta
@@ -6282,11 +6307,82 @@ rp.FilterType=Enum.RaycastFilterType.Exclude
 pcall(function()rp.RespectCanCollide=true end)
 local fchar,cur,phase=nil,0,math.random()*6.28
 local RUN,RUNNP=Enum.HumanoidStateType.Running,Enum.HumanoidStateType.RunningNoPhysics
-local ST={ahead=0,scale=1,capNow=nil,lastPos=nil,lastDir=nil,pauseUntil=0,cleanAt=os.clock(),snaps=0}
+local BAD={}
+for _,nm in ipairs({"Seated","Dead","Climbing","Swimming","PlatformStanding","Ragdoll","FallingDown","GettingUp"})do
+local okE,stE=pcall(function()return Enum.HumanoidStateType[nm]end)
+if okE and stE then BAD[stE]=true end
+end
+local ST={ahead=0,scale=1,capNow=nil,lastPos=nil,lastDir=nil,pauseUntil=0,cleanAt=os.clock(),snaps=0,diagAt=0,why=nil,wasOn=nil,btnOn=nil,statAt=0}
+local function setSpeed(on)
+S.enabled=on and true or false
+notify("Speed lari: "..(S.enabled and"ON"or"OFF"))
+pcall(function()local a=ENV.__DPAPI;if a and a.Store then a.Store.touch()end end)
+end
+local btn
+do
+local par=(gethui and gethui())or game:GetService("CoreGui")
+pcall(function()local o=par:FindFirstChild("DP3_SpeedBtn");if o then o:Destroy()end end)
+local okB,gui=pcall(function()
+local g=Instance.new("ScreenGui")
+g.Name="DP3_SpeedBtn"
+g.ResetOnSpawn=false
+g.IgnoreGuiInset=true
+g.DisplayOrder=50
+g.Parent=par
+return g
+end)
+if okB and gui then
+ENV.DP3_SPEEDGUI=gui
+btn=Instance.new("TextButton")
+btn.Size=UDim2.fromOffset(54,40)
+btn.Position=UDim2.new(0,10,0,64)
+btn.BackgroundColor3=Color3.fromRGB(90,40,40)
+btn.BackgroundTransparency=0.15
+btn.TextColor3=Color3.new(1,1,1)
+btn.Font=Enum.Font.GothamBold
+btn.TextSize=12
+btn.Text="SPD\nOFF"
+btn.Parent=gui
+local cr=Instance.new("UICorner")
+cr.CornerRadius=UDim.new(0,10)
+cr.Parent=btn
+btn.Activated:Connect(function()setSpeed(not S.enabled)end)
+end
+end
+keep(UIS.InputBegan:Connect(function(i,gp)
+if gp or not alive()then return end
+local kk=CFG.keys.speed
+if kk and i.KeyCode==kk then setSpeed(not S.enabled)end
+end))
+local function speedWhy(hum,root,now)
+if not(hum and root)then return"karakter belum siap"end
+if hum.Health<=0 then return"mati"end
+if now<ST.pauseUntil then return"jeda abis kepental"end
+if hum.Sit or hum.PlatformStand or root.Anchored then return"duduk atau terkunci"end
+local st=hum:GetState()
+if BAD[st]then return"state "..st.Name end
+if hum.MoveDirection.Magnitude<=0.1 then return"ga lagi gerak"end
+if not(st==RUN or st==RUNNP or hum.FloorMaterial~=Enum.Material.Air)then return"di udara ("..st.Name..")"end
+local v=root.AssemblyLinearVelocity
+local hs=Vector3.new(v.X,0,v.Z).Magnitude
+if hs<math.max(hum.WalkSpeed,6)*0.6 then return string.format("kecepatan lari rendah (%.1f, WalkSpeed %.1f)",hs,hum.WalkSpeed)end
+return nil
+end
 keep(RunService.Heartbeat:Connect(function(dt)
 if not alive()then return end
 local hum,root=myHum(),myRoot()
 local now=os.clock()
+local want=S.enabled==true
+if btn and btn.Parent and ST.btnOn~=want then
+ST.btnOn=want
+btn.Text=want and"SPD\nON"or"SPD\nOFF"
+btn.BackgroundColor3=want and Color3.fromRGB(40,140,80)or Color3.fromRGB(90,40,40)
+end
+if ST.wasOn~=want then
+ST.wasOn=want
+ST.why=nil
+log("SPEED",want and"nyala"or"mati")
+end
 -- deteksi kepental: posisi mundur tiba-tiba setelah kita nambah jarak
 if ST.lastPos and ST.lastDir and hum and root and ST.ahead>0.5 then
 local d=root.Position-ST.lastPos
@@ -6294,7 +6390,7 @@ local back=-(d.X*ST.lastDir.X+d.Z*ST.lastDir.Z)
 local lim=1.5+hum.WalkSpeed*math.min(dt,0.25)*0.5
 if back>lim then
 ST.snaps=ST.snaps+1
-local capCfg=math.max(1,tonumber(S.cap)or 6)
+local capCfg=math.max(1,tonumber(S.cap)or 8)
 if S.adapt~=false then
 ST.scale=math.max(0.2,ST.scale*0.7)
 ST.capNow=math.max(1.5,math.min(ST.capNow or capCfg,ST.ahead)*0.6)
@@ -6307,12 +6403,16 @@ end
 end
 ST.lastPos=nil
 local goal=0
-if S.enabled==true and hum and root and hum.Health>0 and dt>0 then
-local st=hum:GetState()
-if now>=ST.pauseUntil and hum.MoveDirection.Magnitude>0.1 and hum.WalkSpeed>=6 and not hum.Sit and not hum.PlatformStand
-and not root.Anchored and(st==RUN or st==RUNNP)then
-local v=root.AssemblyLinearVelocity
-if Vector3.new(v.X,0,v.Z).Magnitude>=hum.WalkSpeed*0.7 then goal=1 end
+if want then
+local why=speedWhy(hum,root,now)
+if why then
+if why~=ST.why and now-ST.diagAt>2 then
+ST.why,ST.diagAt=why,now
+log("SPEED","nunggu: "..why)
+end
+else
+ST.why=nil
+goal=1
 end
 end
 local edt=math.min(dt,0.1)
@@ -6321,18 +6421,18 @@ if goal>cur then cur=math.min(goal,cur+step)else cur=math.max(goal,cur-step*2)en
 if S.adapt~=false and now-ST.cleanAt>20 then
 ST.cleanAt=now
 ST.scale=math.min(1,ST.scale*1.12)
-if ST.capNow then ST.capNow=math.min(math.max(1,tonumber(S.cap)or 6),ST.capNow*1.15)end
+if ST.capNow then ST.capNow=math.min(math.max(1,tonumber(S.cap)or 8),ST.capNow*1.15)end
 end
 if cur<=0.001 or not hum or not root then ST.ahead=math.max(0,ST.ahead-edt*2);return end
-local capCfg=math.max(1,tonumber(S.cap)or 6)
+local capCfg=math.max(1,tonumber(S.cap)or 8)
 local cap=math.min(capCfg,ST.capNow or capCfg)
-local pct=math.clamp(tonumber(S.pct)or 0,0,25)*ST.scale
+local pct=math.clamp(tonumber(S.pct)or 0,0,40)*ST.scale
 if pct<=0 then return end
 local md=hum.MoveDirection
 local v=root.AssemblyLinearVelocity
 local hv=Vector3.new(v.X,0,v.Z)
 local dir
-if hv.Magnitude>=hum.WalkSpeed*0.5 then
+if hv.Magnitude>=math.max(hum.WalkSpeed*0.5,1)then
 dir=hv.Unit
 else
 dir=Vector3.new(md.X,0,md.Z)
@@ -6340,8 +6440,8 @@ if dir.Magnitude<0.1 then return end
 dir=dir.Unit
 end
 phase=phase+dt*0.7
-local base=hum.WalkSpeed*(pct/100)
-ST.ahead=math.max(0,ST.ahead-math.max(0.3,base*0.5)*edt)
+local base=math.max(hum.WalkSpeed,hv.Magnitude)*(pct/100)
+ST.ahead=math.max(0,ST.ahead-math.max(0.3,base*0.85)*edt)
 local extra=math.min(base*(1+0.12*math.sin(phase))*cur*edt,math.max(cap-ST.ahead,0))
 if extra<0.002 then return end
 if S.wallCheck then
@@ -6352,6 +6452,10 @@ end
 root.CFrame=root.CFrame+dir*extra
 ST.ahead=ST.ahead+extra
 ST.lastPos,ST.lastDir=root.Position,dir
+if now-ST.statAt>4 then
+ST.statAt=now
+log("SPEED",string.format("aktif +%.1f st/dtk | pct %.0f | jarak depan %.1f/%.1f stud | WalkSpeed %.0f | lari %.0f",base,pct,ST.ahead,cap,hum.WalkSpeed,hv.Magnitude))
+end
 end))
 end
 do
@@ -7286,7 +7390,7 @@ local pv=ENV.DP3_POV
 if pv and pv.restore then pv.restore()end
 end)
 pcall(ESP.clear)
-for _,k in ipairs({"DP3_VEILFOLDER","DP3_ESPFOLDER","DP3_RINGFOLDER"})do
+for _,k in ipairs({"DP3_VEILFOLDER","DP3_ESPFOLDER","DP3_RINGFOLDER","DP3_SPEEDGUI"})do
 local f=ENV[k]
 if f then pcall(function()f:Destroy()end);ENV[k]=nil end
 end
@@ -10473,7 +10577,7 @@ W.slider(cvt,"Toleransi sudut ke jendela",20,80,5," °",K.pnum("vault.angle"))
 W.slider(cvt,"Jeda antar vault",0.2,2,0.05," dtk",K.pnum("vault.gap"))
 local csp=W.section(p,"Speed lari",false)
 W.toggle(csp,"Speed lari","Tambahan kecepatan lari kecil dan halus, otomatis turun kalau game narik balik posisi",K.pbool("speed.enabled"))
-W.slider(csp,"Tambahan kecepatan",0,20,1," %",K.pnum("speed.pct"))
+W.slider(csp,"Tambahan kecepatan",0,40,1," %",K.pnum("speed.pct"))
 W.toggle(csp,"Adaptif anti kepental","Kalau game narik posisi balik, tambahan otomatis dikecilkan lalu naik pelan lagi",K.pbool("speed.adapt"))
 W.slider(csp,"Batas keunggulan jarak",2,12,0.5," stud",K.pnum("speed.cap"))
 local c2=W.section(p,"Parry",true)
@@ -10578,7 +10682,7 @@ W.slider(c8,"Jarak kamera TPP",4,20,1," stud",K.pnum("pov.zoom"))
 W.slider(c8,"Tinggi kamera TPP",0,4,0.1," stud",K.pnum("pov.height"))
 W.toggle(c8,"Tombol POV di layar",nil,K.pbool("pov.button"))
 local c7=W.section(p,"Speed lari",false)
-W.slider(c7,"Tambahan kecepatan",0,20,1," %",K.pnum("speed.pct"))
+W.slider(c7,"Tambahan kecepatan",0,40,1," %",K.pnum("speed.pct"))
 W.slider(c7,"Waktu naik ke penuh",0.2,2,0.1," dtk",K.pnum("speed.ramp"))
 W.toggle(c7,"Cek tembok di depan","Berhenti nambah kalau ada tembok atau objek tepat di depan",K.pbool("speed.wallCheck"))
 W.toggle(c7,"Adaptif anti kepental","Kalau game narik posisi balik, tambahan otomatis dikecilkan lalu naik pelan lagi",K.pbool("speed.adapt"))
