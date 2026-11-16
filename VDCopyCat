@@ -2459,7 +2459,7 @@ else
 local raw=(pos-tr.pos)/dt
 local rv=k.root.AssemblyLinearVelocity
 if rv.Magnitude<90 then raw=raw:Lerp(rv,0.5)end
-tr.vel=tr.vel:Lerp(raw,1-math.exp(-dt/0.08))
+tr.vel=tr.vel:Lerp(raw,1-math.exp(-dt/0.05))
 end
 tr.pos,tr.t=pos,now
 tr.grounded=k.hum.FloorMaterial~=Enum.Material.Air
@@ -2938,6 +2938,10 @@ bx.Transparency=0.45
 AD.arcCol=nil
 arc[#arc+1]=bx
 end
+local la=AD.arcLast
+if la and AD.arcShown and AD.arcCol==col and la.col==col and la.S==S and la.g==g
+and(origin-la.o).Magnitude<0.03 and la.d:Dot(dir)>0.999995 and math.abs(la.f-flight)<0.003 then return end
+AD.arcLast={o=origin,d=dir,f=flight,col=col,S=S,g=g}
 local tcf=TERR.CFrame
 local v0=dir*S
 local prev=origin
@@ -3463,6 +3467,12 @@ elseif hud.mOn then
 hud.mOn=false
 hud.marker.Visible=false
 end
+if best and V.isVeil then
+local acol=best.blocked and Color3.fromRGB(150,155,170)or((not best.reach)and Color3.fromRGB(255,80,80)or(V.cdLeft(now)<=0.05 and Color3.fromRGB(80,255,140)or Color3.fromRGB(255,190,70)))
+drawArc(origin,best.dir,V.speed(),V.grav(),best.flight,acol)
+else
+hideArc()
+end
 if not hudTick then return end
 local vp=cam.ViewportSize
 local R=math.tan(math.rad(math.clamp(C.fov,1,80)))/math.tan(math.rad(cam.FieldOfView/2))*(vp.Y/2)
@@ -3480,7 +3490,6 @@ if hud.marker.BackgroundColor3~=col then hud.marker.BackgroundColor3=col end
 local txt=string.format("%s %s\n%.0fst  %.2fs%s",best.k.player.DisplayName,best.kind,best.dist,best.flight,
 best.blocked and"  KETUTUP"or(best.reach and""or"  JAUH"))
 if hud.mlabel.Text~=txt then hud.mlabel.Text=txt end
-if V.isVeil then drawArc(origin,best.dir,V.speed(),V.grav(),best.flight,col)else hideArc()end
 else
 hideArc()
 end
