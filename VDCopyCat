@@ -26,9 +26,9 @@ range=12,
 frontDot=0.15,
 hitGuess=0.16,
 arriveLead=0.38,
-slack=0.43,
+slack=0.33,
 skipHopeless=true,
-fireUnknown=true,
+fireUnknown=false,
 minChance=0.15,
 minPlays=6,
 jitter=0.004,
@@ -41,8 +41,8 @@ pollWindow=0.5,
 lead=0.12,
 useServerCd=true,
 minPriority=Enum.AnimationPriority.Action,
-predict=true,
-preRange=9.5,
+predict=false,
+preRange=13,
 preDot=0.5,
 preClose=3,
 preHold=0.08,
@@ -67,7 +67,7 @@ preDot=0.55,
 preClose=4,
 preHold=0.06,
 preGap=1.1,
-yieldParry=true,
+onlyCooldown=true,
 fromAction=true,
 },
 gun={
@@ -132,7 +132,6 @@ allowAll=true,
 frameSnap=true,
 snapFrames=1.5,
 precise=true,
-native=false,
 },
 esp={
 enabled=true,
@@ -346,7 +345,7 @@ local LOG,logLabel,logDirty,inHook={},nil,false,false
 local function log(tag,msg)
 local line=string.format("[%.1f] %s %s",os.clock()%1000,tag,tostring(msg))
 LOG[#LOG+1]=line
-if#LOG>120 then table.remove(LOG,1)end
+if#LOG>260 then table.remove(LOG,1)end
 logDirty=true
 if not inHook then print("[DP3] "..line)end
 end
@@ -355,7 +354,7 @@ local shown=false
 if ENV.DP_TOAST and not inHook then shown=pcall(ENV.DP_TOAST,msg)end
 if not shown then
 pcall(function()
-StarterGui:SetCore("SendNotification",{Title="DP v18",Text=msg,Duration=2.5})
+StarterGui:SetCore("SendNotification",{Title="DP v20",Text=msg,Duration=2.5})
 end)
 end
 log("INFO",msg)
@@ -1123,6 +1122,15 @@ local function parryNow(entry,plan)
 if not CFG.parry.enabled then return false end
 local now=os.clock()
 if now-Parry.last<CFG.parry.spacing then return false end
+-- v19: dodge + parry nembak barengan di animasi yang sama -> dodge lolos, parry kosong, kena cooldown 60 dtk.
+-- Sekarang kalau dodge mau jalan, parry ngalah (kecuali parryFirst dinyalain).
+if not entry.pre and not CFG.dodge.onlyCooldown and Parry.dodgeWants and entry.k and Parry.dodgeWants(entry.k)then
+if now-(Parry.dgYieldAt or-10)>2 then
+Parry.dgYieldAt=now
+log("PARRY","parry ngalah: dodge yang jalan (parry meleset = cooldown 60 dtk)")
+end
+return false
+end
 local hum,char=myHum(),myChar()
 if not hum or hum.Health<=0 or not char then return false end
 local via=CFG.parry.via
@@ -1442,6 +1450,13 @@ local facing=k.root.CFrame.LookVector:Dot(dir)
 local closing=(vel-mv):Dot(dir)
 return dist,facing,closing
 end
+-- parry masih bisa dipakai? (nyala, ada dagger, ga cooldown / silence / HP < 50% / lagi action lain)
+function Parry.usable()
+if not CFG.parry.enabled then return false end
+if not findDagger()then return false end
+local okR,rd=pcall(parryReady,os.clock())
+return okR and rd==true
+end
 do
 local PP={since=nil,k=nil}
 keep(RunService.Heartbeat:Connect(function()
@@ -1450,6 +1465,7 @@ local now=os.clock()
 if now-(Parry.hopeAt or-1e9)>CFG.parry.preMemory then PP.since=nil return end
 if now-(Parry.preFireAt or-1e9)<CFG.parry.preGap then return end
 if now-(Parry.animAt or-1e9)<0.5 then PP.since=nil return end
+if not CFG.dodge.onlyCooldown and CFG.dodge.enabled and CFG.dodge.predict then PP.since=nil return end
 local me,hum=myRoot(),myHum()
 if not(me and hum and hum.Health>0)then PP.since=nil return end
 local lead=math.clamp(Net.rtt*0.5+0.08,0.08,0.4)
@@ -1488,7 +1504,7 @@ end
 --    ga bisa dipakai. Parry yang baru dikirim ga ditabrak dodge (yieldParry).
 -- 4) tiap alasan dodge ga jalan sekarang dilog (dulu diem-diem).
 do
-local DG={n=0,anim=0,pre=0,seen=0,blocked=0,why=nil}
+local DG={n=0,anim=0,pre=0,seen=0,blocked=0,ok=0,hit=0,wait=0,why=nil}
 Parry.dg=DG
 local lastFire=0
 local whyAt={}
@@ -1503,11 +1519,11 @@ log("DODGE",msg)
 end
 end
 local function blockedBy(ch,hum)
-if hum.Health<=0 then return"mati"end
-if ch:GetAttribute("IsCarried")then return"lagi digendong"end
-if ch:GetAttribute("IsHooked")then return"lagi digantung"end
-if ch:GetAttribute("Knocked")or ch:GetAttribute("Trapped")or ch:GetAttribute("Rooted")then return"knocked/trapped"end
-if ch:GetAttribute("IsStunned")or ch:GetAttribute("Immobile")then return"stun/immobile (gerak dikunci game)"end
+if hum.Health<=0 then return"mati",true end
+if ch:GetAttribute("IsCarried")then return"lagi digendong",true end
+if ch:GetAttribute("IsHooked")then return"lagi digantung",true end
+if ch:GetAttribute("Knocked")or ch:GetAttribute("Trapped")or ch:GetAttribute("Rooted")then return"knocked/trapped",true end
+if ch:GetAttribute("IsStunned")or ch:GetAttribute("Immobile")then return"stun/immobile (gerak dikunci game)",true end
 local ms=ch:FindFirstChild("CheckInterractable")
 if ms and ms:GetAttribute("isVaulting")==true then return"lagi vault"end
 local root=ch:FindFirstChild("HumanoidRootPart")
@@ -1557,23 +1573,45 @@ if dist<=4 then return true end
 if facing<CFG.dodge.frontDot then return false,string.format("killer ga ngadep (dot %.2f)",facing)end
 return true
 end
+function Parry.dodgeWants(k)
+if not(CFG.dodge.enabled and amSurvivor())then return false end
+local ch,hum=myChar(),myHum()
+if not(ch and hum)then return false end
+if blockedBy(ch,hum)then return false end
+local lead=math.clamp(Net.rtt*0.5+0.08,0.08,0.4)
+return(threat(k,lead,CFG.dodge.lunge))==true
+end
 local function fire(k,why)
 local now=os.clock()
 if now-lastFire<CFG.dodge.gap then return false end
 local ch,hum,me=myChar(),myHum(),myRoot()
 if not(ch and hum and me)then return false end
-local blk=blockedBy(ch,hum)
+local blk,expected=blockedBy(ch,hum)
 if blk then
+if not expected then
 DG.blocked=DG.blocked+1
 say("blk","ga dodge: "..blk,2.5)
+end
 return false
 end
-if CFG.dodge.yieldParry and CFG.parry.enabled and now-Parry.last<0.8 then
+if CFG.dodge.onlyCooldown and Parry.usable()then
+DG.wait=DG.wait+1
+return false
+end
+if CFG.parry.enabled and now-Parry.last<0.9 then
 say("yield","dodge ngalah: parry baru dikirim (jendela parry lagi kebuka)",2.5)
 return false
 end
 lastFire=now
 DG.n=DG.n+1
+local hp0=hum.Health
+task.delay(1.2,function()
+if not alive()then return end
+local h=myHum()
+local lost=(h==hum)and(hp0-h.Health)or 0
+if lost>0.5 then DG.hit=DG.hit+1 else DG.ok=DG.ok+1 end
+log("DODGE",string.format("hasil dodge [%s]: %s",why,lost>0.5 and string.format("KENA -%.0f HP",lost)or"ga kena damage"))
+end)
 drive.side=pickSide(k)
 drive.active,drive.k=true,k
 drive.until_=now+CFG.dodge.holdTime
@@ -1660,11 +1698,10 @@ local now=os.clock()
 if drive.active or now-lastFire<CFG.dodge.preGap then pre.since=nil return end
 local me,hum=myRoot(),myHum()
 if not(me and hum and hum.Health>0)then pre.since=nil return end
-if CFG.dodge.yieldParry and CFG.parry.enabled and CFG.parry.predict then
+if CFG.dodge.onlyCooldown then
 if now-pre.chk>0.1 then
 pre.chk=now
-local okR,rd=pcall(parryReady,now)
-pre.pr=okR and rd==true
+pre.pr=Parry.usable()
 end
 if pre.pr then pre.since=nil return end
 end
@@ -3952,6 +3989,10 @@ pcall(Skill.introspect,f)
 end
 end
 end
+keep(LP.CharacterAdded:Connect(function()
+task.delay(2.5,function()if alive()then pcall(refreshGameFns,true)end end)
+task.delay(8,function()if alive()then pcall(refreshGameFns)end end)
+end))
 local function fireGameHandlers()
 local n=0
 for _,f in ipairs(Skill.gameFns)do
@@ -4028,11 +4069,15 @@ if at then
 table.remove(list,at)
 table.insert(list,1,first)
 end
-if CFG.skill.native then
 local gi=indexOf(list,"game")
-if gi then
+if gi and gi>1 then
+local live=false
+for _,f in ipairs(Skill.gameFns)do
+if gameFnLive(f)then live=true break end
+end
+if live then
 table.remove(list,gi)
-list[#list+1]="game"
+table.insert(list,1,"game")
 end
 end
 return list
@@ -4067,7 +4112,7 @@ local ok,how=sendTier(tier,raw)
 log("SKILL",string.format("rung %d/%d %s: %s",idx,#list,tier,tostring(how)))
 if ok then
 local win=VIM_RUNG[tier]and CFG.skill.verifyVim or CFG.skill.verifySync
-local deadline=os.clock()+math.max(win,Net.frameDt*3.5)
+local deadline=os.clock()+math.max(win,Net.frameDt*3.5,(tier=="game")and 0.35 or 0)
 local prev,still,frozen=(ln0 and ln0.Parent)and ln0.Rotation or nil,0,false
 while alive()and Skill.resultN==n0 and os.clock()<deadline do
 RunService.Heartbeat:Wait()
@@ -4352,6 +4397,10 @@ local mine=since>=0 and since<0.3
 log("SKILL",string.format("HASIL %s %s %s | err=%+.1f deg (%+.0f ms %s) | tekan->hasil %.0f ms | %s",
 tostring(name),tostring(args[1]),tostring(args[2]),err,errT*1000,errT>0 and"telat"or"kecepatan",
 since*1000,mine and("tekanan skrip via "..tostring(Skill.pressTier))or"BUKAN dari tekanan skrip"))
+Skill.hist=Skill.hist or{}
+Skill.hist[#Skill.hist+1]=string.format("[%.0f] %s:%s err=%+.1f deg (%+.0f ms) rung=%s fps=%.0f %s",os.clock()%1000,
+tostring(args[1]),tostring(args[2]),err,errT*1000,tostring(Skill.pressTier),1/Net.frameDt,mine and"skrip"or"MANUAL")
+if#Skill.hist>12 then table.remove(Skill.hist,1)end
 if mine and CFG.skill.learn and math.abs(errT)<0.25 and Skill.pressRung==1 then
 local k=tuneKey(Skill.pressTier or"?")
 Skill.tuneDelta[k]=math.clamp((Skill.tuneDelta[k]or 0)+0.5*errT,-0.08,0.25)
@@ -5872,6 +5921,14 @@ end)
 do
 local R={folder=nil,ring=nil,fill=nil,rip=nil,killers={},lastHum=nil,lastHp=0,readyAt=-10,ready=true,col=nil,ARC_N=10}
 local FLAT=0.06
+-- v19: executor nolak baca .Parent silinder ring ("lacking capability Plugin") -> dulu error tiap frame.
+-- Objek ini bikinan sendiri, jadi kalau Parent ga bisa dibaca anggap masih ada.
+local function okInst(o)
+if not o then return false end
+local ok,p=pcall(function()return o.Parent end)
+if not ok then return true end
+return p~=nil
+end
 local function dropAll()
 if R.folder then pcall(function()R.folder:Destroy()end)end
 R.folder,R.ring,R.fill,R.rip,R.killers=nil,nil,nil,nil,{}
@@ -6045,15 +6102,15 @@ R.ready=true
 end
 end
 local ring,disc,rip=R.ring,R.fill,R.rip
-if not(ring and ring.Parent)then
+if not okInst(ring)then
 ring=R.newCyl(f,"ring",3)
 R.ring=ring
 end
-if not(disc and disc.Parent)then
+if not okInst(disc)then
 disc=R.newCyl(f,"disc",1)
 R.fill=disc
 end
-if not(rip and rip.Parent)then
+if not okInst(rip)then
 rip=R.newCyl(f,"rip",2)
 R.rip=rip
 end
@@ -6938,12 +6995,14 @@ local qh={}
 for k2,v2 in pairs(Skill.qHist or{})do qh[#qh+1]=k2.."x"..v2 end
 table.sort(qh)
 local L={
-string.format("DP v18 | ping %.0f ms | fps %.0f",Net.rtt*1000,1/Net.frameDt),
+string.format("DP v20 | ping %.0f ms | fps %.0f",Net.rtt*1000,1/Net.frameDt),
 string.format("parry: kirim %d | ok %d | meleset %d | antisipasi %d (ok %d, meleset %d)",Parry.nFire or 0,Parry.nOk or 0,Parry.nMiss or 0,Parry.preN or 0,Parry.preOk or 0,Parry.preMiss or 0),
-string.format("dodge: %d kali (animasi %d, antisipasi %d) | diblok %d | animasi kebaca %d | terakhir: %s",dg.n,dg.anim,dg.pre,dg.blocked,dg.seen,tostring(dg.why or"-")),
+string.format("dodge: %d kali (animasi %d, antisipasi %d) | ga kena %d | kena %d | nunggu parry %d | diblok %d | animasi kebaca %d | terakhir: %s",dg.n,dg.anim,dg.pre,dg.ok or 0,dg.hit or 0,dg.wait or 0,dg.blocked,dg.seen,tostring(dg.why or"-")),
+string.format("cfg: parry.predict=%s fireUnknown=%s slack=%.2f | dodge.predict=%s onlyCooldown=%s | skill.precise=%s",tostring(CFG.parry.predict),tostring(CFG.parry.fireUnknown),CFG.parry.slack,tostring(CFG.dodge.predict),tostring(CFG.dodge.onlyCooldown),tostring(CFG.skill.precise)),
 string.format("gun: %s | hit %d/%d",tostring(Gun.status),Gun.hits,Gun.shots),
 string.format("skill: rung %s | hasil %d | args %s",tostring(Skill.tierName or"-"),Skill.resultN or 0,#qh>0 and table.concat(qh," ")or"-"),
 "skill handler: "..tostring(Skill.intro or"(belum ketemu)"),
+"skill riwayat:\n"..((Skill.hist and#Skill.hist>0)and table.concat(Skill.hist,"\n")or"(kosong)"),
 string.format("esp: %s %d%% | fps %.0f | %.0f Hz | %.2f ms | HL %d/%d | objek %d/%d | beban %d/%d",tostring(ESP.stat.tier),
 math.floor(ESP.stat.scale*100+0.5),ESP.stat.fps,ESP.stat.hz,ESP.stat.stepMs,ESP.stat.hl,ESP.stat.hlBudget,
 ESP.stat.objShown,ESP.stat.objTotal,math.floor(ESP.stat.cost+0.5),ESP.stat.costBudget),
@@ -6998,7 +7057,7 @@ if ENV.__DPAPI==API then ENV.__DPAPI=nil end
 end
 ENV.__DPAPI=API
 end)()
-notify("v18.0 loaded. hook="..tostring(Gun.hookOK).." | hub: tombol bulat / RightAlt")
+notify("v20.0 loaded. hook="..tostring(Gun.hookOK).." | hub: tombol bulat / RightAlt")
 end
 local function __startNono()
 local NX={}
@@ -8078,7 +8137,7 @@ end
 print("[NONO v6.0] loaded | setfpscap:",HAS_SETFPSCAP,"| sethiddenproperty:",HAS_SETHIDDEN,
 "| file:",HAS_FILE)
 end
-local VERSION="18.0"
+local VERSION="20.0"
 local Players=game:GetService("Players")
 local RunService=game:GetService("RunService")
 local UIS=game:GetService("UserInputService")
@@ -10134,8 +10193,9 @@ W.toggle(c1,"Gun snap","Tembakan manual dibelokkan pas ke badan killer. Hotkey F
 W.toggle(c1,"Silent aim gun","Peluru dibelokkan ke killer walau crosshair jauh dari badan. Hotkey End",K.pbool("gun.silent"))
 W.toggle(c1,"Cincin dan garis killer","Jangkauan parry dan kerucut serang killer",K.pbool("ring.enabled"))
 W.toggle(c1,"Auto vault jendela","Lompat jendela otomatis saat kamu lari menuju jendela. Hotkey Insert",K.pbool("vault.enabled"))
-W.toggle(c1,"Auto dodge","Paksa gerak keluar jangkauan begitu animasi serang killer kebaca, ga pakai delay. Hotkey F9",K.pbool("dodge.enabled"))
-W.toggle(c1,"Dodge antisipasi","Geser sebelum animasi serang kalau parry ga bisa dipakai (ping tinggi bikin reaksi telat)",K.pbool("dodge.predict"))
+W.toggle(c1,"Auto dodge","Hindar otomatis begitu animasi serang killer kebaca. Default cuma jalan pas parry lagi cooldown. Hotkey F9",K.pbool("dodge.enabled"))
+W.toggle(c1,"Dodge antisipasi","Geser sebelum animasi serang kalau killer nempel, ngadep, dan ngedeketin (ping tinggi bikin reaksi telat)",K.pbool("dodge.predict"))
+W.toggle(c1,"Dodge cuma pas parry cooldown","Nyala = dodge jalan kalau parry lagi ga bisa dipakai (cooldown, HP di bawah 50%, silence). Mati = dodge selalu duluan dan parry ngalah",K.pbool("dodge.onlyCooldown"))
 W.toggle(c1,"Animasi vault cepat","Animasi lompat jendela dipercepat (client saja, semua vault)",K.pbool("vault.fast"))
 local setGun=W.chipRow(c1,"Gun",nil)
 reg(function()
@@ -10178,7 +10238,7 @@ W.row(c2,"Cara kirim parry","game = ParryClient asli (animasi dan cooldown ikut)
 W.seg(c2,{"game","input","remote"},K.pstr("parry.via",{"game","input","remote"}))
 W.toggle(c2,"Belajar waktu kena","Waktu kena per animasi dipelajari dari damage",K.pbool("parry.learn"))
 W.toggle(c2,"Coba animasi baru","Animasi yang belum pernah kena tetap dicoba",K.pbool("parry.fireUnknown"))
-W.toggle(c2,"Parry antisipasi","Kalau ping lebih lambat dari waktu animasi ke kena (reaksi mustahil), parry dikirim duluan pas killer nempel dan ngedeketin",K.pbool("parry.predict"))
+W.toggle(c2,"Parry antisipasi (judi)","Parry dikirim duluan pas killer nempel dan ngedeketin. Parry meleset = cooldown 60 dtk. Default mati",K.pbool("parry.predict"))
 local c3=W.section(p,"Gun",false)
 W.slider(c3,"Sudut lock",10,180,5," °",K.pnum("gun.lockFov"))
 W.slider(c3,"Sudut silent aim",10,180,5," °",K.pnum("gun.silentFov"))
@@ -10198,7 +10258,6 @@ local c4=W.section(p,"Skill check",false)
 W.toggle(c4,"Sembunyikan UI skill check","Jarum, zona, dan tombol disembunyikan. Hotkey F7",K.pbool("skill.hideUI"))
 W.toggle(c4,"Snap ke tengah zona","Anti lompat frame di FPS rendah",K.pbool("skill.frameSnap"))
 W.toggle(c4,"Tekan presisi sub-frame","Tunggu pas waktunya, ga dibulatin ke frame (nolong di FPS rendah)",K.pbool("skill.precise"))
-W.toggle(c4,"EKSPERIMEN: tekan lewat tombol asli","Pakai handler tombol game (penilaian asli) dulu, handler paksa 'success' jadi cadangan. Bisa bikin gagal kalau FPS di bawah 20",K.pbool("skill.native"))
 W.toggle(c4,"Buang Check yang nyangkut","Check yang jarumnya diam terlalu lama disembunyikan",K.pbool("skill.unstick"))
 W.slider(c4,"Geser titik tekan",-40,40,1," °",K.pnum("skill.offset"))
 local cr=W.section(p,"Cincin dan kerucut",false)
