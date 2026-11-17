@@ -4370,13 +4370,17 @@ local frame=math.clamp(Net.frameDt,1/120,1/15)
 local target=c.goal.Rotation+zoneMid()
 local delta=angDiff(target,c.line.Rotation)*dir
 local span=math.abs(w)*frame
-if delta<-span or delta>span*C.snapFrames+math.abs(w)*0.03 or math.abs(delta)<0.4 then return end
+local back=0
+if Skill.hitchAt and os.clock()-Skill.hitchAt<0.25 then back=Skill.hitchBack or 0 end
+Skill.hitchAt=nil
+if delta<-(span+back) or delta>span*C.snapFrames+math.abs(w)*0.03 or math.abs(delta)<0.4 then return end
 local okS=pcall(function()c.line.Rotation=target end)
 if okS then
 Skill.snapAt,Skill.snapDelta=os.clock(),delta
 log("SKILL",string.format("frame-snap %+.1f deg ke tengah zona (fps~%.0f)",delta,1/frame))
 end
 end
+log("SKILL","fix7: tekan susulan saat hitch/lag spike aktif")
 local function slope(samples)
 local n=#samples
 if n<2 then return nil end
@@ -4404,7 +4408,7 @@ local function tr(s)
 if#trace<40 then trace[#trace+1]=string.format("%.2f %s",os.clock()-t0,s)end
 end
 local act,samples,moved=nil,{},false
-local lastRot,lastRem
+local lastRot,lastRem,lastRemAt
 local seedW=Skill.seedOmega(evtInfo)
 local pAt=t0
 while os.clock()-t0<5 and alive()and CFG.skill.enabled and Skill.gen==gen do
@@ -4436,7 +4440,7 @@ tostring(cur~=nil),p.line.Rotation,p.goal.Rotation))
 end
 if cur then
 if cur~=act then
-act,samples,lastRot,lastRem=cur,{},nil,nil
+act,samples,lastRot,lastRem,lastRemAt=cur,{},nil,nil,nil
 Skill.cur={line=cur.line,goal=cur.goal,w=0}
 local kids={}
 for _,c in ipairs(cur.goal:GetChildren())do kids[#kids+1]=c.ClassName..":"..c.Name end
@@ -4472,6 +4476,17 @@ if rem>360-math.abs(w)*frame*0.5 then rem=0 end
 -- deket (hampir pencet) terus tau-tau rem jadi gede lagi -> itu overshoot, susul tekan sekarang juga
 -- daripada nunggu putaran berikutnya (yang keburu abis duluan di mode cepat).
 local overshoot=CFG.skill.catchUp and lastRem and lastRem<math.max(math.abs(w)*frame*3,8)and rem>180
+-- v21: hitch/lag spike (gap frame panjang): jarum lewat titik tekan di tengah gap padahal lastRem masih gede,
+-- jadi cek overshoot di atas ga kena. Tandanya: rem naik (wrap) padahal harusnya turun terus.
+local hitch=false
+if CFG.skill.catchUp and CFG.skill.frameSnap and lastRem and lastRemAt and not overshoot and rem>lastRem+4 then
+local gap=now-lastRemAt
+local past=360-rem
+if gap>frame*2.5 and past<=math.abs(w)*gap+6 and past<=200 then
+hitch=true
+Skill.hitchBack,Skill.hitchAt=past+4,os.clock()
+end
+end
 local T=rem/math.abs(w)
 local tune=curTune(frame)
 if CFG.skill.precise and not overshoot and T>tune and T<=tune+frame*1.5 then
@@ -4484,14 +4499,15 @@ Skill.spunAt,Skill.spunErr=os.clock(),(os.clock()-dl)*math.abs(w)*dir
 T=tune
 end
 end
-if overshoot or T<=tune+frame*0.5 then
+if overshoot or hitch or T<=tune+frame*0.5 then
 Skill.retried=false
 log("SKILL",string.format("%s sisa=%.1f deg (%.0f ms) kecepatan=%.0f deg/s fps~%.0f sample=%d",
-overshoot and"TEKAN susulan (lompat frame)"or"TEKAN",rem,T*1000,w,1/frame,#samples))
+hitch and string.format("TEKAN susulan (hitch %.0f ms, jarum lewat %.0f deg)",(now-lastRemAt)*1000,360-rem)
+or(overshoot and"TEKAN susulan (lompat frame)"or"TEKAN"),rem,T*1000,w,1/frame,#samples))
 pressLadder()
 return true
 end
-lastRem=rem
+lastRem,lastRemAt=rem,now
 end
 elseif act then
 break
