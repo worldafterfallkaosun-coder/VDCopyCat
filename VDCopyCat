@@ -8549,7 +8549,7 @@ end
 print("[NONO v6.0] loaded | setfpscap:",HAS_SETFPSCAP,"| sethiddenproperty:",HAS_SETHIDDEN,
 "| file:",HAS_FILE)
 end
-local VERSION="21.0"
+local VERSION="21.3"
 local Players=game:GetService("Players")
 local RunService=game:GetService("RunService")
 local UIS=game:GetService("UserInputService")
@@ -8755,29 +8755,25 @@ local TOAST_KIND={ok="on",warn="amb",err="err"}
 local function toast(msg,kind)
 if not UI.toasts then return end
 local col=TH[TOAST_KIND[kind or""]or"mute"]
-local f=new("Frame",{Size=UDim2.fromOffset(0,32),AutomaticSize=AUTO_XY,BackgroundColor3=TH.toast,
-BackgroundTransparency=1,BorderSizePixel=0,LayoutOrder=nextLO()},UI.toasts)
+local f=new("Frame",{Size=UDim2.new(1,0,0,0),AutomaticSize=AUTO_Y,BackgroundColor3=WHITE,BackgroundTransparency=1,
+BorderSizePixel=0,LayoutOrder=nextLO()},UI.toasts)
 corner(f,10)
-local st=stroke(f,col,2,1)
-padd(f,6,12,8,16)
-local bar=new("Frame",{Size=UDim2.new(0,3,1,0),Position=UDim2.new(0,-10,0,0),BackgroundColor3=col,
-BackgroundTransparency=1,BorderSizePixel=0},f)
-corner(bar,2)
-local tl=label(f,tostring(msg),12,TH.bone,FB,{Size=UDim2.fromOffset(0,20),AutomaticSize=AUTO_XY,
+new("UIGradient",{Rotation=90,Color=ColorSequence.new(TH.card2,TH.card1)},f)
+local st=stroke(f,TH.rim,2,1)
+padd(f,7,10,8,10)
+local led=new("Frame",{Size=UDim2.fromOffset(7,7),Position=UDim2.fromOffset(0,4),BackgroundColor3=col,BackgroundTransparency=1,BorderSizePixel=0},f)
+corner(led,4)
+local tl=label(f,tostring(msg),10,TH.bone,FD,{Position=UDim2.fromOffset(15,0),Size=UDim2.new(1,-15,0,0),AutomaticSize=AUTO_Y,
 TextWrapped=true,TextTransparency=1})
-new("UISizeConstraint",{MaxSize=Vector2.new(300,120)},tl)
-local prog=new("Frame",{Size=UDim2.new(1,0,0,2),AnchorPoint=Vector2.new(0,1),Position=UDim2.new(0,0,1,6),
-BackgroundColor3=col,BackgroundTransparency=0.2,BorderSizePixel=0},f)
-TweenService:Create(prog,TweenInfo.new(2.8,Enum.EasingStyle.Linear),{Size=UDim2.new(0,0,0,2)}):Play()
-tw(f,0.18,{BackgroundTransparency=0.04});tw(st,0.18,{Transparency=0.45})
-tw(bar,0.18,{BackgroundTransparency=0});tw(tl,0.18,{TextTransparency=0})
+tw(f,0.18,{BackgroundTransparency=0});tw(st,0.18,{Transparency=0})
+tw(led,0.18,{BackgroundTransparency=0});tw(tl,0.18,{TextTransparency=0})
 local list={}
 for _,c in ipairs(UI.toasts:GetChildren())do if c:IsA("Frame")then list[#list+1]=c end end
 if#list>3 then list[1]:Destroy()end
 task.delay(2.8,function()
 if not f.Parent then return end
 tw(f,0.2,{BackgroundTransparency=1});tw(st,0.2,{Transparency=1})
-tw(bar,0.2,{BackgroundTransparency=1});tw(tl,0.2,{TextTransparency=1});tw(prog,0.2,{BackgroundTransparency=1})
+tw(led,0.2,{BackgroundTransparency=1});tw(tl,0.2,{TextTransparency=1})
 task.delay(0.25,function()if f.Parent then f:Destroy()end end)
 end)
 end
@@ -8789,8 +8785,8 @@ par={on=false,block=false,rtt=0,parried=0,blocked=0,dodged=0,hit=0,gb=0,rate=100
 lag={statusTxt="",running=false,applied=false,before=nil,after=nil,hidden=0,prog=0},
 }
 local MOD={
-par={label="Distrik Pembantai",state="loading",t0=os.clock(),wait=40,
-note="Script Distrik Pembantai gagal dimuat (lihat Output)"},
+par={label="Violence Distric",state="loading",t0=os.clock(),wait=40,
+note="Script Violence Distric gagal dimuat (lihat Output)"},
 lag={label="Anti-lag",state="loading",t0=os.clock(),wait=6,
 note="Anti-lag gagal dimuat",ended={}},
 }
@@ -8954,14 +8950,14 @@ if type(api)=="table"and type(api.CFG)=="table"and type(api.Counters)=="table"th
 AP,CFG13=api,api.CFG
 m.state,m.err="ready",nil
 K.hookParry()
-log("Distrik Pembantai v"..tostring(api.Version).." terhubung","ok")
+log("Violence Distric v"..tostring(api.Version).." terhubung","ok")
 elseif os.clock()-m.t0>m.wait then
 m.state="missing"
 end
 return
 end
 if env.__DPAPI~=AP then
-m.state,m.err="missing","Distrik Pembantai dihentikan atau diganti instance lain"
+m.state,m.err="missing","Violence Distric dihentikan atau diganti instance lain"
 return
 end
 local c,net=AP.Counters,AP.Net or{}
@@ -9417,7 +9413,7 @@ log(d.name..(not any and" dinyalakan"or" dimatikan"),(not any)and"ok"or"info")
 end
 function K.report()
 local L={}
-L[#L+1]="DISTRIK PEMBANTAI v"..VERSION.." (hub UI + anti-lag) | laporan diagnostik"
+L[#L+1]="VIOLENCE DISTRIC v"..VERSION.." (hub UI + anti-lag) | laporan diagnostik"
 L[#L+1]="executor: "..EXEC.." | place: "..tostring(game.PlaceId)
 local c={}
 for k,v in pairs(CAP)do c[#c+1]=k.."="..tostring(v)end
@@ -10023,6 +10019,36 @@ end)
 if ok and type(res)=="string" and res~="" then return res end
 return nil
 end
+function UI.logoImage()
+if not(CAP.file and type(getcustomasset)=="function")then return nil end
+local ok,res=pcall(function()
+local name="VD_logo_v1.png"
+if not isfile(name)then
+local b64="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"
+local chars="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+local map={}
+for i=1,64 do map[chars:byte(i)]=i-1 end
+local out,n,acc,bits={},0,0,0
+for i=1,#b64 do
+local v=map[b64:byte(i)]
+if v then
+acc=acc*64+v;bits=bits+6
+if bits>=8 then
+bits=bits-8
+local p=2^bits
+local byte=math.floor(acc/p)
+acc=acc-byte*p
+n=n+1;out[n]=string.char(byte)
+end
+end
+end
+writefile(name,table.concat(out))
+end
+return getcustomasset(name)
+end)
+if ok and type(res)=="string" and res~="" then return res end
+return nil
+end
 UI.win=new("Frame",{Name="Win",Size=UDim2.fromOffset(520,580),Position=UDim2.fromOffset(40,24),
 BackgroundColor3=WHITE,BackgroundTransparency=1-S.op/100,BorderSizePixel=0,
 ClipsDescendants=true,Active=true},ROOT)
@@ -10094,23 +10120,31 @@ local sh=new("Frame",{Position=UDim2.fromOffset(4,2),Size=UDim2.new(1,-8,0,14),B
 corner(sh,7);new("UIGradient",{Rotation=90,Transparency=ns(0,0.7,1,1)},sh)
 local dot=new("Frame",{Size=UDim2.fromOffset(10,10),Position=UDim2.fromOffset(12,15),BackgroundColor3=TH.on,BorderSizePixel=0,ZIndex=6},UI.hd)
 corner(dot,5);stroke(dot,TH.rim,2,0)
-UI.title=label(UI.hd,"DISTRIK PEMBANTAI",14,WHITE,BLACK,{Position=UDim2.fromOffset(30,4),Size=UDim2.new(1,-190,0,20),
+UI.title=label(UI.hd,"VIOLENCE DISTRIC",14,WHITE,BLACK,{Position=UDim2.fromOffset(30,4),Size=UDim2.new(1,-190,0,20),
 TextTruncate=Enum.TextTruncate.AtEnd,ZIndex=6,TextStrokeTransparency=0.55,TextStrokeColor3=TH.rim})
-UI.cap=label(UI.hd,"v"..VERSION.." · By Duke",9,Color3.fromRGB(207,219,255),MONO,{Position=UDim2.fromOffset(30,23),Size=UDim2.new(1,-190,0,12),
+UI.cap=label(UI.hd,"v"..VERSION.." · By Copycat",9,Color3.fromRGB(207,219,255),MONO,{Position=UDim2.fromOffset(30,23),Size=UDim2.new(1,-190,0,12),
 TextTruncate=Enum.TextTruncate.AtEnd,ZIndex=6})
 end
-local fpsPill=new("Frame",{Size=UDim2.fromOffset(60,22),Position=UDim2.new(1,-146,0,9),BackgroundColor3=TH.dark,
+local fpsPill=new("Frame",{Size=UDim2.fromOffset(72,22),Position=UDim2.new(1,-150,0,9),BackgroundColor3=TH.dark,
 BorderSizePixel=0,ZIndex=6},UI.hd)
 corner(fpsPill,11);stroke(fpsPill,TH.rim,2,0)
-UI.hfps=label(fpsPill,"-- fps",10,TH.on,MONO,{Size=UDim2.new(1,0,1,0),TextXAlignment=Enum.TextXAlignment.Center,ZIndex=7})
+UI.hled=new("Frame",{Size=UDim2.fromOffset(6,6),Position=UDim2.fromOffset(9,8),BackgroundColor3=TH.on,BorderSizePixel=0,ZIndex=7},fpsPill)
+corner(UI.hled,3)
+UI.hfps=label(fpsPill,"-- FPS",10,TH.on,MONO,{Position=UDim2.fromOffset(19,0),Size=UDim2.new(1,-23,1,0),TextXAlignment=Enum.TextXAlignment.Center,ZIndex=7})
 function W.iconBtn(parent,kind,pos,onClick)
 local b=new("TextButton",{Size=UDim2.fromOffset(30,32),Position=pos,BackgroundTransparency=1,Text="",AutoButtonColor=false,BorderSizePixel=0,ZIndex=6},parent)
-local gold=(kind=="min")
-local face=W.plate(b,gold and TH.gold or TH.off1,gold and TH.goldD or TH.off2,gold and TH.goldX or TH.offX,8)
-local gc=gold and TH.dark or TH.bone
-if gold then
+local top,bot,ext,gc=TH.off1,TH.off2,TH.offX,TH.bone
+if kind=="compact"then top,bot,ext,gc=TH.gold,TH.goldD,TH.goldX,TH.dark
+elseif kind=="min"then top,bot,ext,gc=TH.err,TH.errD,TH.errX,WHITE end
+local face=W.plate(b,top,bot,ext,8)
+if kind=="compact"then
 local l=new("Frame",{Size=UDim2.fromOffset(12,3),AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.new(0.5,0,0.5,0),BackgroundColor3=gc,BorderSizePixel=0,ZIndex=7},face)
 corner(l,1)
+elseif kind=="min"then
+for _,r in ipairs({45,-45})do
+local l=new("Frame",{Size=UDim2.fromOffset(14,3),AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.new(0.5,0,0.5,0),Rotation=r,BackgroundColor3=gc,BorderSizePixel=0,ZIndex=7},face)
+corner(l,1)
+end
 else
 local r=new("Frame",{Size=UDim2.fromOffset(14,9),AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.new(0.5,0,0.5,0),BackgroundTransparency=1,BorderSizePixel=0,ZIndex=7},face)
 corner(r,3);stroke(r,gc,2,0)
@@ -10124,86 +10158,51 @@ onClick()
 end)
 return b
 end
--- icon tab (digambar pakai Frame, ga butuh asset): rumah, orang, tengkorak, mata, petir, slider
--- koordinat 0..1 di kotak persegi; warna diganti lewat paint(color)
-function W.glyph(parent,kind,z)
-local box=new("Frame",{Name="Glyph",Size=UDim2.fromOffset(12,12),AnchorPoint=Vector2.new(0.5,0),Position=UDim2.new(0.5,0,0,2),
-BackgroundTransparency=1,BorderSizePixel=0,ZIndex=z},parent)
-local LW=1.6
-local fills,strokes={},{}
-local function frame(x,y,w,h,par,fill)
-local f=new("Frame",{Position=UDim2.fromScale(x,y),Size=UDim2.fromScale(w,h),BackgroundTransparency=fill and 0 or 1,
-BackgroundColor3=WHITE,BorderSizePixel=0,ZIndex=z},par or box)
-if fill then fills[#fills+1]=f end
+function UI.icon(parent,kind,y)
+local box=new("Frame",{Size=UDim2.fromOffset(16,16),AnchorPoint=Vector2.new(0.5,0),Position=UDim2.new(0.5,0,0,y),BackgroundTransparency=1,
+BorderSizePixel=0,ClipsDescendants=true,ZIndex=7},parent)
+local fg,bg={},{}
+local function px(list,x,y2,w,h,r,rot,par)
+local f=new("Frame",{Position=UDim2.fromOffset(math.floor(x+0.5),math.floor(y2+0.5)),Size=UDim2.fromOffset(math.max(1,math.floor(w+0.5)),math.max(1,math.floor(h+0.5))),BackgroundColor3=WHITE,BorderSizePixel=0,ZIndex=7,Rotation=rot or 0},par or box)
+if r then corner(f,r)end
+list[#list+1]=f
 return f
-end
-local function round(f,r)new("UICorner",{CornerRadius=UDim.new(r,0)},f)end
-local function ring(x,y,w,h,r,par)
-local f=frame(x,y,w,h,par,false)
-if r then round(f,r)end
-strokes[#strokes+1]=new("UIStroke",{Thickness=LW,Color=WHITE,ApplyStrokeMode=Enum.ApplyStrokeMode.Border,LineJoinMode=Enum.LineJoinMode.Round},f)
-return f
-end
-local function disc(x,y,w,h)
-local f=frame(x,y,w,h,nil,true)
-round(f,0.5)
-return f
-end
-local function seg(x1,y1,x2,y2)
-local dx,dy=x2-x1,y2-y1
-local f=new("Frame",{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale((x1+x2)/2,(y1+y2)/2),
-Size=UDim2.new(math.sqrt(dx*dx+dy*dy),1,0,LW),Rotation=math.deg(math.atan2(dy,dx)),BackgroundColor3=WHITE,BorderSizePixel=0,ZIndex=z},box)
-round(f,0.5)
-fills[#fills+1]=f
-return f
-end
-local function clip(x,y,w,h)
-return new("Frame",{Position=UDim2.fromScale(x,y),Size=UDim2.fromScale(w,h),BackgroundTransparency=1,ClipsDescendants=true,BorderSizePixel=0,ZIndex=z},box)
-end
--- lingkaran/oval outline yang posisinya ditulis dalam koordinat kotak utama tapi dipotong oleh frame clip
-local function ringIn(c,cx,cy,cw,ch,gx,gy,gw,gh,r)
-return ring((gx-cx)/cw,(gy-cy)/ch,gw/cw,gh/ch,r,c)
 end
 if kind=="home"then
-seg(0.08,0.52,0.5,0.12)
-seg(0.5,0.12,0.92,0.52)
-seg(0.2,0.44,0.2,0.88)
-seg(0.8,0.44,0.8,0.88)
-seg(0.2,0.88,0.8,0.88)
-frame(0.43,0.6,0.14,0.28,nil,true)
-elseif kind=="srv"then
-ring(0.31,0.04,0.38,0.38,0.5)
-local c=clip(0.04,0.5,0.92,0.42)
-ringIn(c,0.04,0.5,0.92,0.42,0.12,0.58,0.76,0.68,0.5)
-elseif kind=="klr"then
-ring(0.13,0.06,0.74,0.64,0.45)
-ring(0.3,0.62,0.4,0.3,0.2)
-disc(0.26,0.32,0.18,0.18)
-disc(0.56,0.32,0.18,0.18)
-elseif kind=="esp"then
-local R=0.5179
-local c1=clip(0,0.17,1,0.37)
-ringIn(c1,0,0.17,1,0.37,0.5-R,0.22,2*R,2*R,0.5)
-local c2=clip(0,0.46,1,0.37)
-ringIn(c2,0,0.46,1,0.37,0.5-R,0.78-2*R,2*R,2*R,0.5)
-disc(0.36,0.36,0.28,0.28)
-elseif kind=="lag"then
-local P={{0.62,0.04},{0.26,0.56},{0.5,0.56},{0.4,0.96},{0.76,0.4},{0.52,0.4}}
-for i=1,#P do
-local a,b=P[i],P[i%#P+1]
-seg(a[1],a[2],b[1],b[2])
-end
+px(fg,4,1.5,8,8,1,45)
+px(fg,3.5,8,9,6.5,1.5)
+px(bg,6.5,10,3,4.5,1)
+elseif kind=="user"then
+px(fg,4.5,0.5,7,7,3.5)
+px(fg,1.5,9,13,10,6)
+elseif kind=="skull"then
+px(fg,2,0.5,12,11,6)
+px(fg,5,8.5,6,6.5,2)
+px(bg,4.5,5,2.5,3,1.25)
+px(bg,9,5,2.5,3,1.25)
+elseif kind=="eye"then
+px(fg,0,3.5,16,9,4.5)
+px(bg,5,4.5,6,7,3)
+px(fg,6.5,6,3,3,1.5)
+elseif kind=="bolt"then
+local g=new("Frame",{Size=UDim2.fromOffset(16,16),BackgroundTransparency=1,BorderSizePixel=0,Rotation=14,ZIndex=7},box)
+px(fg,7,0,6,7,1,0,g)
+px(fg,3,5.5,10,3.5,1,0,g)
+px(fg,3,8,6,8,1,0,g)
 else
-seg(0.08,0.2,0.92,0.2)
-seg(0.08,0.5,0.92,0.5)
-seg(0.08,0.8,0.92,0.8)
-disc(0.56,0.07,0.26,0.26)
-disc(0.18,0.37,0.26,0.26)
-disc(0.48,0.67,0.26,0.26)
+px(fg,1,2.5,14,2,1)
+px(fg,1,7,14,2,1)
+px(fg,1,11.5,14,2,1)
+px(fg,9,0.5,5,5,2.5)
+px(fg,2,5,5,5,2.5)
+px(fg,8,9.5,5,5,2.5)
+px(bg,10.5,2,2,2,1)
+px(bg,3.5,6.5,2,2,1)
+px(bg,9.5,11,2,2,1)
 end
-return box,function(col)
-for _,f in ipairs(fills)do f.BackgroundColor3=col end
-for _,st in ipairs(strokes)do st.Color=col end
+return function(c1,c2)
+for _,f in ipairs(fg)do f.BackgroundColor3=c1 end
+for _,f in ipairs(bg)do f.BackgroundColor3=c2 end
 end
 end
 local TABS={{"home","Beranda"},{"srv","Survivor"},{"klr","Killer"},{"esp","ESP"},{"lag","Anti-lag"},{"cfg","Setelan"}}
@@ -10230,8 +10229,7 @@ f.on=on
 f.g.Color=on and ColorSequence.new(f.c1,f.c2)or ColorSequence.new(TH.off1,TH.off2)
 f.ex.BackgroundColor3=on and f.cx or TH.offX
 f.lb.TextColor3=on and f.tx or TH.mute
-f.dot.BackgroundColor3=on and WHITE or f.c1
-if f.ico then f.ico(on and f.tx or f.c1)end
+f.ic(on and f.tx or f.c1,on and f.mid or Color3.fromRGB(42,52,106))
 f.sh.Visible=on
 tw(f.face,0.1,{Position=on and UDim2.new()or UDim2.fromOffset(0,2)})
 end
@@ -10241,14 +10239,6 @@ function UI.fitRail()
 local avail=WIN.h-(HDR+FTR+6)-5*5
 local bh=math.clamp(math.floor(avail/#TABS),36,56)
 for _,b in pairs(UI.tabBtn)do b.Size=UDim2.new(1,0,0,bh)end
-local fh=bh-7
-local isz=math.clamp(fh-19,12,22)
-for _,f in pairs(UI.tabFx)do
-if f.icoBox then
-f.icoBox.Size=UDim2.fromOffset(isz,isz)
-f.icoBox.Position=UDim2.new(0.5,0,0,math.max(1,math.floor((fh-15-isz)/2)+1))
-end
-end
 end
 function W.showTab(id)
 if id==curTab then return end
@@ -10257,25 +10247,22 @@ for k,g in pairs(UI.groups)do g.Visible=(k==id)end
 UI.paintTabs()
 for _,r in ipairs(REF)do if r.tab==id then runR(r,true)end end
 end
+UI.ICONS={home="home",srv="user",klr="skull",esp="eye",lag="bolt",cfg="sliders"}
 for i,t in ipairs(TABS)do
 local C=UI.TABCOL[t[1]]
 local b=new("TextButton",{Name="T_"..t[1],Size=UDim2.new(1,0,0,38),BackgroundTransparency=1,Text="",AutoButtonColor=false,BorderSizePixel=0,LayoutOrder=i},UI.rail)
 local face,ex,g=W.plate(b,TH.off1,TH.off2,TH.offX,9)
-local dot=new("Frame",{Size=UDim2.fromOffset(10,10),AnchorPoint=Vector2.new(0.5,0),Position=UDim2.new(0.5,0,0,3),BackgroundColor3=C[1],BorderSizePixel=0,ZIndex=7},face)
-corner(dot,5);stroke(dot,TH.rim,1.5,0)
-local dh=new("Frame",{Size=UDim2.fromOffset(3,3),Position=UDim2.fromOffset(2,2),BackgroundColor3=WHITE,BackgroundTransparency=0.3,BorderSizePixel=0,ZIndex=8},dot)
-corner(dh,2)
-dot.Visible=false
-local gbox,gpaint=W.glyph(face,t[1],7)
-local lb=label(face,t[2],9,TH.mute,FD,{Size=UDim2.new(1,0,0,12),AnchorPoint=Vector2.new(0,1),Position=UDim2.new(0,0,1,-3),
+local ic=UI.icon(face,UI.ICONS[t[1]],2)
+local lb=label(face,t[2],8.5,TH.mute,FD,{Size=UDim2.new(1,0,0,11),AnchorPoint=Vector2.new(0,1),Position=UDim2.new(0,0,1,-2),
 TextXAlignment=Enum.TextXAlignment.Center,ZIndex=7})
 b.Activated:Connect(function()W.showTab(t[1])end)
 UI.tabBtn[t[1]]=b
-UI.tabFx[t[1]]={face=face,ex=ex,g=g,sh=face:FindFirstChild("Sheen"),lb=lb,dot=dot,ico=gpaint,icoBox=gbox,c1=C[1],c2=C[2],cx=C[3],tx=C[4],on=nil}
+UI.tabFx[t[1]]={face=face,ex=ex,g=g,sh=face:FindFirstChild("Sheen"),lb=lb,ic=ic,c1=C[1],c2=C[2],cx=C[3],tx=C[4],
+mid=Color3.new((C[1].R+C[2].R)/2,(C[1].G+C[2].G)/2,(C[1].B+C[2].B)/2),on=nil}
 if t[1]=="srv"or t[1]=="klr"or t[1]=="lag"or t[1]=="esp"then
-local d=new("Frame",{Size=UDim2.fromOffset(9,9),Position=UDim2.new(1,-8,0,-2),BackgroundColor3=TH.on,BackgroundTransparency=1,BorderSizePixel=0,ZIndex=9},b)
-corner(d,5);stroke(d,TH.rim,1.5,0)
-UI.badge[t[1]]=d
+local d=new("Frame",{Size=UDim2.fromOffset(15,15),Position=UDim2.new(1,-9,0,-5),BackgroundColor3=TH.dark,BorderSizePixel=0,ZIndex=9},b)
+corner(d,8);stroke(d,TH.rim,2,0)
+UI.badge[t[1]]=label(d,"",8,TH.on,MONO,{Size=UDim2.new(1,0,1,0),TextXAlignment=Enum.TextXAlignment.Center,ZIndex=10})
 end
 local gr=new("Frame",{Name="G_"..t[1],Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,BorderSizePixel=0,Visible=(t[1]=="home"),ClipsDescendants=true},UI.content)
 local sf=new("ScrollingFrame",{Name=t[1],Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,BorderSizePixel=0,
@@ -10293,43 +10280,92 @@ UI.fitRail()
 UI.paintTabs()
 reg(function()
 UI.paintTabs()
-local function anyOn(id)return function()local n=K.sysCount(id);return n>0 end end
-local map={
-srv={"par",anyOn("srv")},
-klr={"par",anyOn("klr")},
-esp={"par",anyOn("esp")},
-lag={"lag",anyOn("lag")},
-}
-for id,m in pairs(map)do
-local d,st=UI.badge[id],MOD[m[1]].state
-if st=="loading"then d.BackgroundColor3=TH.amb;d.BackgroundTransparency=0
-elseif st~="ready"then d.BackgroundColor3=TH.err;d.BackgroundTransparency=0
-elseif m[2]()then d.BackgroundColor3=TH.on;d.BackgroundTransparency=0
-else d.BackgroundTransparency=1 end
+local map={srv="par",klr="par",esp="par",lag="lag"}
+for id,mk in pairs(map)do
+local d,st=UI.badge[id],MOD[mk].state
+if st=="loading"then d.Text="..";d.TextColor3=TH.amb
+elseif st~="ready"then d.Text="!";d.TextColor3=TH.err
+else
+local n=K.sysCount(id)
+d.Text=tostring(n or 0);d.TextColor3=((n or 0)>0)and TH.on or TH.mute
+end
 end
 end,true)
 local foot=new("Frame",{Size=UDim2.new(1,-24,0,FTR),Position=UDim2.new(0,12,1,-FTR),BackgroundTransparency=1,ZIndex=3},UI.win)
-label(foot,"BY DUKE",9,TH.mute,BLACK,{Size=UDim2.new(0.4,0,1,0)})
-UI.footR=label(foot,"v"..VERSION,9,TH.mute,MONO,{Position=UDim2.new(0.3,0,0,0),Size=UDim2.new(0.7,0,1,0),TextXAlignment=Enum.TextXAlignment.Right})
-UI.toasts=new("Frame",{Size=UDim2.new(1,-24,0,0),AutomaticSize=AUTO_Y,AnchorPoint=Vector2.new(0.5,0),
-Position=UDim2.new(0.5,0,0,HDR+6),BackgroundTransparency=1,ZIndex=30},UI.win)
-vlist(UI.toasts,6,Enum.HorizontalAlignment.Center)
-function W.card(parent)
-local f=new("Frame",{Size=UDim2.new(1,0,0,0),AutomaticSize=AUTO_Y,BackgroundColor3=WHITE,BorderSizePixel=0,LayoutOrder=nextLO()},parent)
-corner(f,10);padd(f,0,10,0,10);vlist(f,0)
+label(foot,"BY COPYCAT",9,TH.mute,BLACK,{Size=UDim2.new(0.4,0,1,0)})
+UI.footR=label(foot,"Auto-simpan aktif",9,TH.mute,MONO,{Position=UDim2.new(0.3,0,0,0),Size=UDim2.new(0.7,0,1,0),TextXAlignment=Enum.TextXAlignment.Right})
+reg(function()UI.footR.Text=S.autosave and"Auto-simpan aktif"or"Auto-simpan mati"end)
+UI.toasts=new("Frame",{Size=UDim2.fromOffset(168,0),AutomaticSize=AUTO_Y,AnchorPoint=Vector2.new(1,0),
+Position=UDim2.new(1,-14,0,14),BackgroundTransparency=1,ZIndex=30},ROOT)
+vlist(UI.toasts,6,Enum.HorizontalAlignment.Right)
+W.pend=setmetatable({},{__mode="k"})
+function W.stack(parent,gap)
+local f=new("Frame",{Size=UDim2.new(1,0,0,0),AutomaticSize=AUTO_Y,BackgroundTransparency=1,BorderSizePixel=0,LayoutOrder=nextLO()},parent)
+f:SetAttribute("stack",true)
+vlist(f,gap or 7)
+return f
+end
+function W.mkcard(parent,cls,minH,auto)
+local f=new(cls or"Frame",{Size=UDim2.new(1,0,0,minH or 0),BackgroundColor3=WHITE,BorderSizePixel=0,LayoutOrder=nextLO()},parent)
+if auto~=false then f.AutomaticSize=AUTO_Y end
+if cls=="TextButton"then f.Text="";f.AutoButtonColor=false end
+corner(f,10)
 new("UIGradient",{Rotation=90,Color=ColorSequence.new(TH.card2,TH.card1)},f)
 new("UIGradient",{Rotation=90,Color=ColorSequence.new(TH.lip,TH.rim)},stroke(f,WHITE,2,0))
 return f
+end
+function W.card(parent)
+local f=W.mkcard(parent,"Frame",0)
+padd(f,0,10,0,10);vlist(f,0)
+return f
+end
+function W.minigrid(parent)
+local f=new("Frame",{Size=UDim2.new(1,0,0,0),AutomaticSize=AUTO_Y,BackgroundTransparency=1,BorderSizePixel=0,LayoutOrder=nextLO()},parent)
+f:SetAttribute("stack",true);f:SetAttribute("mini",true)
+new("UIGridLayout",{CellSize=UDim2.new(0.5,-3,0,34),CellPadding=UDim2.fromOffset(6,6),SortOrder=Enum.SortOrder.LayoutOrder},f)
+return f
+end
+function W.pill(parent,props)
+local f=new("Frame",{Size=UDim2.fromOffset(0,22),AutomaticSize=AUTO_X,BackgroundColor3=TH.dark,BorderSizePixel=0,LayoutOrder=nextLO()},parent)
+for k,v in pairs(props or{})do f[k]=v end
+corner(f,11);stroke(f,TH.rim,2,0);padd(f,0,10,0,8);hlist(f,6,Enum.VerticalAlignment.Center)
+local led=new("Frame",{Size=UDim2.fromOffset(7,7),BackgroundColor3=TH.on,BorderSizePixel=0,LayoutOrder=1},f)
+corner(led,4)
+local a=label(f,"",9.5,TH.bone,FD,{Size=UDim2.fromOffset(0,18),AutomaticSize=AUTO_X,LayoutOrder=2})
+local b=label(f,"",9.5,TH.mute,FS,{Size=UDim2.fromOffset(0,18),AutomaticSize=AUTO_X,LayoutOrder=3})
+return function(name,val,c)
+a.Text=name
+b.Text=val or""
+b.Visible=(val~=nil and val~="")
+led.BackgroundColor3=c or TH.on
+end
+end
+function W.stat(parent,cap,withLed)
+local c=W.mkcard(parent,"Frame",54,false)
+c.Size=UDim2.new(1/3,-5,0,54)
+local led
+if withLed then
+led=new("Frame",{Size=UDim2.fromOffset(7,7),Position=UDim2.fromOffset(10,10),BackgroundColor3=TH.on,BorderSizePixel=0},c)
+corner(led,4)
+end
+label(c,cap,8.5,TH.mute,FD,{Position=UDim2.fromOffset(withLed and 22 or 10,7),Size=UDim2.new(1,-24,0,13)})
+local hl=new("Frame",{Position=UDim2.fromOffset(10,20),Size=UDim2.new(1,-20,0,28),BackgroundTransparency=1,BorderSizePixel=0},c)
+hlist(hl,3,Enum.VerticalAlignment.Bottom)
+local v=label(hl,"--",22,TH.bone,BLACK,{Size=UDim2.fromOffset(0,28),AutomaticSize=AUTO_X,LayoutOrder=1})
+local u=label(hl,"",10,TH.mute,MONO,{Size=UDim2.fromOffset(0,20),AutomaticSize=AUTO_X,LayoutOrder=2})
+return v,u,led
 end
 function W.heading(parent,text)
 local s=(tostring(text):upper():gsub("(.)","%1 "))
 return label(parent,s,10,TH.mute,MONO,{Size=UDim2.new(1,0,0,18),LayoutOrder=nextLO()})
 end
-function W.switch(row)
-local box=new("Frame",{Size=UDim2.fromOffset(44,29),AnchorPoint=Vector2.new(1,0.5),Position=UDim2.new(1,-2,0.5,3),BackgroundTransparency=1,BorderSizePixel=0},row)
-local face,ex,g=W.plate(box,TH.off1,TH.off2,TH.offX,11,true)
-local knob=new("Frame",{Size=UDim2.fromOffset(16,16),Position=UDim2.fromOffset(3,3),BackgroundColor3=WHITE,BorderSizePixel=0,ZIndex=7},face)
-corner(knob,8);stroke(knob,TH.rim,1.5,0.4)
+function W.switch(row,small)
+local bw,bh,kn,off,rad=44,29,16,25,11
+if small then bw,bh,kn,off,rad=36,28,14,19,10 end
+local box=new("Frame",{Size=UDim2.fromOffset(bw,bh),AnchorPoint=Vector2.new(1,0.5),Position=UDim2.new(1,-2,0.5,3),BackgroundTransparency=1,BorderSizePixel=0},row)
+local face,ex,g=W.plate(box,TH.off1,TH.off2,TH.offX,rad,true)
+local knob=new("Frame",{Size=UDim2.fromOffset(kn,kn),Position=UDim2.fromOffset(3,3),BackgroundColor3=WHITE,BorderSizePixel=0,ZIndex=7},face)
+corner(knob,kn/2);stroke(knob,TH.rim,1.5,0.4)
 local last="init"
 return function(state)
 if state==last then return end
@@ -10337,7 +10373,7 @@ last=state
 local on=state==true
 g.Color=on and ColorSequence.new(TH.on,TH.onD)or ColorSequence.new(TH.off1,TH.off2)
 ex.BackgroundColor3=on and TH.onX or TH.offX
-tw(knob,0.14,{Position=on and UDim2.fromOffset(25,3)or UDim2.fromOffset(3,3)})
+tw(knob,0.14,{Position=on and UDim2.fromOffset(off,3)or UDim2.fromOffset(3,3)})
 knob.BackgroundColor3=(state==nil)and TH.mute or WHITE
 end
 end
@@ -10362,35 +10398,27 @@ b.Activated:Connect(onClick)
 return b
 end
 function W.slider(parent,title,mn,mx,step,unit,get,set)
+local row
+if parent:GetAttribute("stack")then
+row=W.mkcard(parent,"Frame",52,false)
+padd(row,0,10,0,10)
+else
 W.divider(parent)
-local row=new("Frame",{Size=UDim2.new(1,0,0,56),BackgroundTransparency=1,LayoutOrder=nextLO()},parent)
-label(row,title,12,TH.bone,FD,{Position=UDim2.fromOffset(0,7),Size=UDim2.new(1,-112,0,20),TextTruncate=Enum.TextTruncate.AtEnd})
-local function stepBtn(txt,xoff)
-local b=new("TextButton",{Size=UDim2.fromOffset(22,22),AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,xoff,0,6),
-BackgroundColor3=TH.off2,Text=txt,TextSize=14,Font=FD,TextColor3=TH.bone,AutoButtonColor=false,BorderSizePixel=0},row)
-corner(b,6);stroke(b,TH.rim,2,0)
-b.MouseButton1Down:Connect(function()tw(b,0.07,{BackgroundColor3=TH.off1})end)
-b.MouseButton1Up:Connect(function()tw(b,0.12,{BackgroundColor3=TH.off2})end)
-b.MouseLeave:Connect(function()tw(b,0.12,{BackgroundColor3=TH.off2})end)
-return b
+row=new("Frame",{Size=UDim2.new(1,0,0,52),BackgroundTransparency=1,BorderSizePixel=0,LayoutOrder=nextLO()},parent)
 end
-local plus,minus=stepBtn("+",-2),stepBtn("-",-82)
-local vl=label(row,"--",11,TH.amb,MONO,{AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,-26,0,7),
-Size=UDim2.fromOffset(54,20),TextXAlignment=Enum.TextXAlignment.Center})
-local trk=new("Frame",{Position=UDim2.fromOffset(2,40),Size=UDim2.new(1,-4,0,8),BackgroundColor3=TH.inset,BorderSizePixel=0},row)
+label(row,title,11.5,TH.bone,FD,{Position=UDim2.fromOffset(0,7),Size=UDim2.new(1,-76,0,16),TextTruncate=Enum.TextTruncate.AtEnd})
+local vl=label(row,"--",10,TH.gold,MONO,{AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,0,0,8),Size=UDim2.fromOffset(72,14),
+TextXAlignment=Enum.TextXAlignment.Right})
+local trk=new("Frame",{Position=UDim2.fromOffset(8,31),Size=UDim2.new(1,-16,0,8),BackgroundColor3=TH.inset,BorderSizePixel=0},row)
 corner(trk,4);stroke(trk,TH.rim,2,0)
 local fill=new("Frame",{Size=UDim2.new(0,0,1,0),BorderSizePixel=0,BackgroundColor3=WHITE},trk)
 corner(fill,4)
-local fg=new("UIGradient",{Rotation=90},fill)
-onTheme(function()fg.Color=ColorSequence.new(TH.brand2,TH.brand)end)
-local halo=new("Frame",{Size=UDim2.fromOffset(28,28),AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.new(0,0,0.5,0),
-BackgroundColor3=TH.brand,BackgroundTransparency=0.8,BorderSizePixel=0},trk)
-corner(halo,14);onTheme(function()halo.BackgroundColor3=TH.brand end)
+new("UIGradient",{Rotation=90,Color=ColorSequence.new(TH.gold,TH.goldD)},fill)
 local thumb=new("Frame",{Size=UDim2.fromOffset(16,16),AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.new(0,0,0.5,0),
 BackgroundColor3=WHITE,BorderSizePixel=0,ZIndex=3},trk)
 corner(thumb,8);stroke(thumb,TH.rim,2,0)
 new("UIGradient",{Rotation=90,Color=ColorSequence.new(WHITE,Color3.fromRGB(201,210,245))},thumb)
-local hit=new("TextButton",{Size=UDim2.new(1,0,0,28),Position=UDim2.fromOffset(0,30),BackgroundTransparency=1,Text="",
+local hit=new("TextButton",{Size=UDim2.new(1,0,0,26),Position=UDim2.fromOffset(0,24),BackgroundTransparency=1,Text="",
 AutoButtonColor=false,ZIndex=4},row)
 local dec=step>=1 and 0 or#(tostring(step):match("%.(%d+)")or"")
 local fmt="%."..dec.."f"
@@ -10399,7 +10427,6 @@ local function paint(v)
 local pct=math.clamp((v-mn)/(mx-mn),0,1)
 fill.Size=UDim2.new(pct,0,1,0)
 thumb.Position=UDim2.new(pct,0,0.5,0)
-halo.Position=UDim2.new(pct,0,0.5,0)
 vl.Text=string.format(fmt,v)..unit
 end
 local function fromX(x)
@@ -10408,26 +10435,16 @@ local pct=math.clamp((x-trk.AbsolutePosition.X)/w,0,1)
 local v=mn+math.floor(pct*(mx-mn)/step+0.5)*step
 return tonumber(string.format(fmt,math.clamp(v,mn,mx)))
 end
-local function nudge(dir)
-local v=get()
-if not v then toast("Modul belum siap atau opsi tidak tersedia","warn");return end
-local nv=tonumber(string.format(fmt,math.clamp(v+dir*step,mn,mx)))
-paint(nv);set(nv,true)
-end
-plus.Activated:Connect(function()nudge(1)end)
-minus.Activated:Connect(function()nudge(-1)end)
 hit.InputBegan:Connect(function(i)
 if not isPtr(i)then return end
 local pane=row:FindFirstAncestorOfClass("ScrollingFrame")
 if pane then pane.ScrollingEnabled=false end
 dragging=true
-halo.BackgroundTransparency=0.6
 lastV=fromX(i.Position.X);paint(lastV);set(lastV,false)
 DRAG={
 move=function(p)lastV=fromX(p.X);paint(lastV);set(lastV,false)end,
 stop=function()
 dragging=false
-halo.BackgroundTransparency=0.8
 if pane then pane.ScrollingEnabled=true end
 set(lastV,true)
 end,
@@ -10436,11 +10453,21 @@ end)
 reg(function()
 if dragging then return end
 local v=get()
-if v then paint(v)else vl.Text="--";fill.Size=UDim2.new(0,0,1,0);thumb.Position=UDim2.new(0,0,0.5,0);halo.Position=UDim2.new(0,0,0.5,0)end
+if v then paint(v)else vl.Text="--";fill.Size=UDim2.new(0,0,1,0);thumb.Position=UDim2.new(0,0,0.5,0)end
 end)
 end
 function W.seg(parent,labels,get,onPick)
-local bar=new("Frame",{Size=UDim2.new(1,0,0,36),BackgroundColor3=TH.inset,BorderSizePixel=0,LayoutOrder=nextLO()},parent)
+local host=parent
+local pd=W.pend[parent]
+W.pend[parent]=nil
+if pd and pd.lo==LO then
+host=pd.row
+pd.tx.Size=UDim2.new(1,0,0,0)
+vlist(host,0)
+local pp=host:FindFirstChildOfClass("UIPadding")
+if pp then pp.PaddingBottom=UDim.new(0,8)end
+end
+local bar=new("Frame",{Size=UDim2.new(1,0,0,36),BackgroundColor3=TH.inset,BorderSizePixel=0,LayoutOrder=nextLO()},host)
 corner(bar,9);stroke(bar,TH.rim,2,0);padd(bar,3,3,3,3)
 local n=#labels
 local hl=new("Frame",{Size=UDim2.new(1/n,0,1,0),BackgroundColor3=WHITE,BackgroundTransparency=1,BorderSizePixel=0},bar)
@@ -10583,6 +10610,7 @@ end)
 end
 end
 function W.divider(parent)
+if parent:GetAttribute("stack")then return end
 local n=parent:GetAttribute("n")or 0
 parent:SetAttribute("n",n+1)
 if n>0 then
@@ -10590,22 +10618,57 @@ new("Frame",{Size=UDim2.new(1,0,0,2),BackgroundColor3=TH.rim,BackgroundTranspare
 end
 end
 function W.row(parent,title,sub,clickable,rightW,leftPad)
+local stk,mini=parent:GetAttribute("stack"),parent:GetAttribute("mini")
 W.divider(parent)
-local row=new(clickable and"TextButton"or"Frame",{Size=UDim2.new(1,0,0,38),AutomaticSize=AUTO_Y,
+local row
+if stk then
+row=W.mkcard(parent,clickable and"TextButton"or"Frame",mini and 32 or 38,not mini)
+padd(row,0,mini and 8 or 10,0,10)
+else
+row=new(clickable and"TextButton"or"Frame",{Size=UDim2.new(1,0,0,38),AutomaticSize=AUTO_Y,
 BackgroundTransparency=1,BorderSizePixel=0,LayoutOrder=nextLO()},parent)
 if clickable then row.Text="";row.AutoButtonColor=false end
-local tx=new("Frame",{Size=UDim2.new(1,-(rightW or 52),0,0),AutomaticSize=AUTO_Y,BackgroundTransparency=1},row)
-padd(tx,8,0,8,leftPad or 0);vlist(tx,1)
-label(tx,title,12,TH.bone,FD,{Size=UDim2.new(1,0,0,0),AutomaticSize=AUTO_Y,TextWrapped=true,LayoutOrder=1})
+end
+if mini then
+label(row,title,10.5,TH.bone,FD,{Size=UDim2.new(1,-44,1,0),TextTruncate=Enum.TextTruncate.AtEnd})
+return row
+end
+local key
+if type(sub)=="string"then
+local b,k,rest=sub:match("^(.-)[%.%s]*Hotkey%s+(%S+)(.*)$")
+if k then
+key=k
+rest=(rest:gsub("^%s*atau%s*",""))
+if rest~=""then rest=rest:sub(1,1):upper()..rest:sub(2)end
+if b~=""and rest~=""then sub=b..". "..rest
+elseif b~=""then sub=b
+elseif rest~=""then sub=rest
+else sub=nil end
+end
+end
+local tx=new("Frame",{Size=UDim2.new(1,-(rightW or 52),0,0),AutomaticSize=AUTO_Y,BackgroundTransparency=1,BorderSizePixel=0},row)
+padd(tx,stk and 7 or 8,0,stk and 7 or 8,leftPad or 0);vlist(tx,1)
+if key then
+local tr=new("Frame",{Size=UDim2.new(1,0,0,0),AutomaticSize=AUTO_Y,BackgroundTransparency=1,BorderSizePixel=0,LayoutOrder=1},tx)
+local fl=hlist(tr,5,Enum.VerticalAlignment.Center)
+fl.Wraps=true
+label(tr,title,11.5,TH.bone,FD,{Size=UDim2.fromOffset(0,16),AutomaticSize=AUTO_X,LayoutOrder=1})
+local kc=new("Frame",{Size=UDim2.fromOffset(0,14),AutomaticSize=AUTO_X,BackgroundColor3=TH.dark,BorderSizePixel=0,LayoutOrder=2},tr)
+corner(kc,4);stroke(kc,TH.lip,1,0);padd(kc,0,4,0,4)
+label(kc,key,8,TH.gold,MONO,{Size=UDim2.fromOffset(0,14),AutomaticSize=AUTO_X,TextXAlignment=CENTER})
+else
+label(tx,title,11.5,TH.bone,FD,{Size=UDim2.new(1,0,0,0),AutomaticSize=AUTO_Y,TextWrapped=true,LayoutOrder=1})
+end
 if sub then
-local sl=label(tx,"",10,TH.mute,FS,{Size=UDim2.new(1,0,0,0),AutomaticSize=AUTO_Y,TextWrapped=true,LayoutOrder=2})
+local sl=label(tx,"",9,TH.mute,FS,{Size=UDim2.new(1,0,0,0),AutomaticSize=AUTO_Y,TextWrapped=true,LayoutOrder=2})
 if type(sub)=="function"then reg(function()sl.Text=sub()end)else sl.Text=sub end
 end
+if stk and not clickable and rightW==nil then W.pend[parent]={row=row,tx=tx,lo=LO}end
 return row
 end
 function W.toggle(parent,title,sub,get,flip)
 local row=W.row(parent,title,sub,true)
-local paint=W.switch(row)
+local paint=W.switch(row,parent:GetAttribute("mini"))
 row.Activated:Connect(function()
 local ok,e=pcall(flip)
 if not ok then toast("Gagal: "..tostring(e),"err")end
@@ -10636,7 +10699,7 @@ end,props)
 return b
 end
 function W.btnRow(parent,specs)
-local f=new("Frame",{Size=UDim2.new(1,0,0,42),BackgroundTransparency=1,LayoutOrder=nextLO()},parent)
+local f=new("Frame",{Size=UDim2.new(1,0,0,39),BackgroundTransparency=1,LayoutOrder=nextLO()},parent)
 hlist(f,8)
 local n,total=#specs,0
 for _,s in ipairs(specs)do total=total+(s[4]or 1)end
@@ -10660,17 +10723,17 @@ corner(d,4)
 reg(function()d.BackgroundColor3=fn()end)
 end
 function W.section(parent,title,open)
-local c=W.card(parent)
-local pd=c:FindFirstChildOfClass("UIPadding")
-if pd then pd.PaddingLeft=UDim.new();pd.PaddingRight=UDim.new()end
-local hdr=new("TextButton",{Size=UDim2.new(1,0,0,34),BackgroundColor3=WHITE,Text="",AutoButtonColor=false,BorderSizePixel=0,LayoutOrder=1},c)
-corner(hdr,8)
-new("UIGradient",{Rotation=90,Color=ColorSequence.new(Color3.fromRGB(52,66,134),Color3.fromRGB(36,46,100))},hdr)
-label(hdr,string.upper(tostring(title)),11,TH.bone,FD,{Position=UDim2.fromOffset(12,0),Size=UDim2.new(1,-44,1,0),TextTruncate=Enum.TextTruncate.AtEnd})
-local chev=label(hdr,">",14,TH.mute,FD,{Size=UDim2.fromOffset(20,20),AnchorPoint=Vector2.new(1,0.5),
-Position=UDim2.new(1,-10,0.5,0),TextXAlignment=CENTER,Rotation=open and 90 or 0})
-local body=new("Frame",{Size=UDim2.new(1,0,0,0),AutomaticSize=AUTO_Y,BackgroundTransparency=1,LayoutOrder=2,Visible=open},c)
-vlist(body,0);padd(body,2,10,4,10)
+open=open and true or false
+local wrap=new("Frame",{Size=UDim2.new(1,0,0,0),AutomaticSize=AUTO_Y,BackgroundTransparency=1,BorderSizePixel=0,LayoutOrder=nextLO()},parent)
+vlist(wrap,7)
+local hdr=new("TextButton",{Size=UDim2.new(1,0,0,33),BackgroundTransparency=1,Text="",AutoButtonColor=false,BorderSizePixel=0,LayoutOrder=1},wrap)
+local face=W.plate(hdr,Color3.fromRGB(46,58,120),Color3.fromRGB(34,43,94),Color3.fromRGB(8,11,30),9)
+label(face,string.upper(tostring(title)),10.5,TH.bone,FD,{Position=UDim2.fromOffset(12,0),Size=UDim2.new(1,-40,1,0),
+TextTruncate=Enum.TextTruncate.AtEnd,ZIndex=8})
+local chev=label(face,">",14,TH.mute,FD,{Size=UDim2.fromOffset(20,20),AnchorPoint=Vector2.new(1,0.5),
+Position=UDim2.new(1,-8,0.5,0),TextXAlignment=CENTER,Rotation=open and 90 or 0,ZIndex=8})
+local body=W.stack(wrap,6)
+body.Visible=open
 hdr.Activated:Connect(function()
 open=not open
 body.Visible=open
@@ -10678,27 +10741,35 @@ tw(chev,0.15,{Rotation=open and 90 or 0})
 end)
 return body
 end
-function W.spark(parent,hist,maxv,colorFn,title,unit)
-local c=W.card(parent)
-local box=new("Frame",{Size=UDim2.new(1,0,0,82),BackgroundTransparency=1,LayoutOrder=nextLO()},c)
-label(box,title,11,TH.mute,FS,{Position=UDim2.fromOffset(0,9),Size=UDim2.new(0.7,0,0,14)})
-local vl=label(box,"--",12,TH.bone,FD,{AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,0,0,8),Size=UDim2.new(0.3,0,0,16),TextXAlignment=Enum.TextXAlignment.Right})
-local area=new("Frame",{Position=UDim2.fromOffset(0,30),Size=UDim2.new(1,0,0,42),BackgroundTransparency=1},box)
+function W.spark(parent,hist,maxv,colorFn,title,unit,chipFn)
+local c=W.mkcard(parent,"Frame",0)
+vlist(c,0)
+local hd=new("Frame",{Size=UDim2.new(1,0,0,32),BackgroundTransparency=1,BorderSizePixel=0,LayoutOrder=1},c)
+padd(hd,0,10,0,10)
+label(hd,title,11.5,TH.bone,FD,{Position=UDim2.fromOffset(0,8),Size=UDim2.new(0.6,0,0,16)})
+local setChip=W.pill(hd,{AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,0,0,5)})
+local box=new("Frame",{Size=UDim2.new(1,0,0,52),BackgroundTransparency=1,BorderSizePixel=0,LayoutOrder=2},c)
+padd(box,0,10,8,10)
+local area=new("Frame",{Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,BorderSizePixel=0},box)
 local N,bars=#hist,{}
 for i=1,N do
-bars[i]=new("Frame",{AnchorPoint=Vector2.new(0,1),Position=UDim2.new((i-1)/N,0,1,0),Size=UDim2.new(1/N,-1,0,2),
+bars[i]=new("Frame",{AnchorPoint=Vector2.new(0,1),Position=UDim2.new((i-1)/N,0,1,0),Size=UDim2.new(1/N,-2,0,2),
 BorderSizePixel=0,BackgroundColor3=TH.on},area)
 corner(bars[i],1)
 end
 reg(function()
-local last=0
+local last,mn=0,nil
 for i=1,N do
 local v=hist[i]or 0
-bars[i].Size=UDim2.new(1/N,-1,math.clamp(v/maxv,0.05,1),0)
+bars[i].Size=UDim2.new(1/N,-2,math.clamp(v/maxv,0.05,1),0)
 bars[i].BackgroundColor3=colorFn(v)
 last=v
+if v>0 and i>N-12 and(not mn or v<mn)then mn=v end
 end
-vl.Text=tostring(last)..unit
+if chipFn then
+local t,cc=chipFn(last,mn)
+setChip(t,nil,cc)
+end
 end)
 end
 function W.banner(parent,key)
@@ -10759,6 +10830,49 @@ end
 BT="home"
 do
 local p=UI.panes.home
+local sr=new("Frame",{Size=UDim2.new(1,0,0,54),BackgroundTransparency=1,BorderSizePixel=0,LayoutOrder=nextLO()},p)
+hlist(sr,7)
+local fV,_,fLed=W.stat(sr,"FPS",true)
+local pV,pU=W.stat(sr,"PING")
+local aV,aU=W.stat(sr,"FITUR AKTIF")
+pU.Text="ms"
+reg(function()
+local f=V.sys.fps
+fV.Text=tostring(f);fV.TextColor3=col(f);fLed.BackgroundColor3=col(f)
+local pg=math.floor(V.sys.ping)
+pV.Text=tostring(pg);pV.TextColor3=colPing(pg)
+local n,tot=0,0
+for _,id in ipairs({"srv","klr","esp","lag"})do
+local c,t=K.sysCount(id)
+n=n+(c or 0);tot=tot+(t or 0)
+end
+aV.Text=tostring(n);aU.Text="/ "..tot
+end)
+W.spark(p,HIST.fps,144,col,"Riwayat FPS","",function(_,mn)
+if not mn then return"menunggu",TH.mute end
+if mn>=50 then return"stabil",TH.on end
+if mn>=30 then return"naik turun",TH.amb end
+return"drop",TH.err
+end)
+local cr=new("Frame",{Size=UDim2.new(1,0,0,0),AutomaticSize=AUTO_Y,BackgroundTransparency=1,BorderSizePixel=0,LayoutOrder=nextLO()},p)
+local fl=hlist(cr,6,Enum.VerticalAlignment.Center)
+fl.Wraps=true
+local ch={k=W.pill(cr),p=W.pill(cr),h=W.pill(cr),e=W.pill(cr),m=W.pill(cr),s=W.pill(cr)}
+reg(function()
+local rdy=MOD.par.state=="ready"
+local kid=rdy and V.par.killer
+ch.k("Killer",rdy and(kid and tostring(kid)or"bukan killer")or"--",kid and TH.err or TH.mute)
+if not rdy then ch.p("Parry","--",TH.mute)
+elseif K.pGet("parry.enabled")==true then ch.p("Parry","aktif",TH.on)
+else ch.p("Parry","mati",TH.mute)end
+ch.h("Hotkey",tostring(S.hk.hub),TH.gold)
+local s=V.esp
+if not rdy or K.pGet("esp.enabled")~=true then ch.e("ESP","mati",TH.mute)
+else ch.e("ESP",s and string.upper(tostring(s.tier))or"aktif",UI.TABCOL.lag[1])end
+ch.m("Memori",math.floor(V.sys.mem).." MB",TH.blue)
+ch.s("Sesi",mmss(os.clock()-START),TH.mute)
+end)
+W.btnRow(p,{{"Nyalakan semua","pri",K.allOn},{"Matikan semua","norm",K.allOff}})
 W.heading(p,"Sistem")
 local sysg=new("Frame",{Size=UDim2.new(1,0,0,132),BackgroundTransparency=1,LayoutOrder=nextLO()},p)
 new("UIGridLayout",{CellSize=UDim2.new(0.5,-4,0,62),CellPadding=UDim2.fromOffset(8,8),SortOrder=Enum.SortOrder.LayoutOrder},sysg)
@@ -10766,24 +10880,6 @@ W.sysCard(sysg,"SURVIVOR","srv","Parry · Skill check · Gun")
 W.sysCard(sysg,"KILLER","klr","Lock · POV · Speed lari")
 W.sysCard(sysg,"ESP","esp","Outline dan info objek")
 W.sysCard(sysg,"ANTI-LAG","lag","Nono · cap FPS · auto boost")
-local hero=W.card(p)
-local hb=new("Frame",{Size=UDim2.new(1,0,0,124),BackgroundTransparency=1,LayoutOrder=nextLO()},hero)
-local setGauge=W.gauge(hb,104,9,UDim2.fromOffset(2,10))
-local function statLine(y,cap)
-label(hb,cap,9,TH.mute,MONO,{Position=UDim2.fromOffset(130,y),Size=UDim2.new(1,-130,0,12)})
-return label(hb,"--",16,TH.bone,BLACK,{Position=UDim2.fromOffset(130,y+12),Size=UDim2.new(1,-130,0,22)})
-end
-local sPing,sMem,sUp=statLine(12,"PING"),statLine(50,"MEMORI"),statLine(88,"SESI")
-reg(function()
-local f=V.sys.fps
-setGauge(f/120,col(f),tostring(f),"FPS")
-sPing.Text=math.floor(V.sys.ping).." ms";sPing.TextColor3=colPing(V.sys.ping)
-sMem.Text=math.floor(V.sys.mem).." MB"
-sUp.Text=mmss(os.clock()-START)
-end)
-W.spark(p,HIST.fps,144,col,"FPS · 40 DETIK TERAKHIR","")
-W.spark(p,HIST.ping,300,colPing,"PING · 40 DETIK TERAKHIR"," ms")
-W.btnRow(p,{{"Nyalakan semua","pri",K.allOn},{"Matikan semua","norm",K.allOff}})
 local c4=W.card(p)
 local lh=new("Frame",{Size=UDim2.new(1,0,0,0),AutomaticSize=AUTO_Y,BackgroundTransparency=1,LayoutOrder=nextLO()},c4)
 padd(lh,10,0,10,0);vlist(lh,6)
@@ -10801,7 +10897,7 @@ BT="srv"
 do
 local p=UI.panes.srv
 W.banner(p,"par")
-local c1=W.card(p)
+local c1=W.stack(p)
 W.toggle(c1,"Auto parry","Parry otomatis dari animasi killer (Parrying Dagger). Hotkey F1",K.pbool("parry.enabled"))
 W.toggle(c1,"Auto skill check","Tekan skill check tepat di tengah zona. Hotkey F3",K.pbool("skill.enabled"))
 W.toggle(c1,"Kunci target gun (silent)","Target killer dikunci tanpa menggerakkan kamera. Hotkey F6",K.pbool("gun.aimLock"))
@@ -10904,7 +11000,7 @@ BT="klr"
 do
 local p=UI.panes.klr
 W.banner(p,"par")
-local c1=W.card(p)
+local c1=W.stack(p)
 W.toggle(c1,"Lock killer (semua killer)","Kamera nempel ke survivor saat kamu jadi killer apa pun (Veil: kamera tidak digerakkan, silent). Veil: spear, Butcher: chain, Cure: flask, killer lain: lurus. Hotkey RightShift",K.pbool("veil.enabled"))
 W.toggle(c1,"POV killer: TPP","Ganti kamera killer dari FPP ke TPP. Hotkey RightCtrl atau tombol POV di layar",K.pbool("pov.tpp"))
 W.toggle(c1,"Speed lari","Tambahan kecepatan lari kecil dan halus, otomatis turun kalau game narik balik posisi",K.pbool("speed.enabled"))
@@ -10968,7 +11064,7 @@ do
 local p=UI.panes.esp
 K.USED["esp.minScale"]=true
 W.banner(p,"par")
-local c1=W.card(p)
+local c1=W.stack(p)
 W.toggle(c1,"ESP","Outline dan info pemain serta objek. Hotkey F8",K.pbool("esp.enabled"))
 W.row(c1,"Mode teks","full, mini, atau off. Hotkey F10")
 W.seg(c1,{"full","mini","off"},K.pstr("esp.text",{"full","mini","off"}))
@@ -10994,7 +11090,7 @@ g2.cut.Text=tostring(s.culled);g2.cut.TextColor3=s.culled>0 and TH.amb or TH.bon
 g2.cost.Text=string.format("%d/%d",math.floor(s.cost+0.5),s.costBudget)
 g2.cost.TextColor3=(s.cost<=s.costBudget)and TH.bone or TH.amb
 end)
-local cs=W.card(p)
+local cs=W.stack(p)
 do
 local setObj=W.chipRow(cs,"Di ESP sekarang",function()
 local s=V.esp
@@ -11022,7 +11118,7 @@ CFG13["esp.minScale"]=v/100
 if final then K.ptouch()end
 end)
 end
-local c2=W.section(p,"Tampilkan",true)
+local c2=W.minigrid(W.section(p,"Tampilkan",true))
 W.toggle(c2,"Killer",nil,K.pbool("esp.killer"))
 W.toggle(c2,"Survivor",nil,K.pbool("esp.survivors"))
 W.toggle(c2,"Objek","Generator, pallet, hook, exit, jebakan",K.pbool("esp.objects"))
@@ -11204,7 +11300,7 @@ BT="cfg"
 local BIND={id=nil}
 do
 local p=UI.panes.cfg
-local c1=W.card(p)
+local c1=W.stack(p)
 W.slider(c1,"Transparansi jendela",30,95,1,"%",function()return S.op end,
 function(v,final)
 S.op=v;UI.win.BackgroundTransparency=1-v/100
@@ -11272,7 +11368,7 @@ b.Text=(BIND.id==id)and"tekan tombol…"or S.hk[id]
 end
 end
 end)
-local hint=label(c2,"Ketuk tombol lalu tekan tombol baru. Escape membatalkan. Hotkey Distrik Pembantai: F1 parry · F2 snap · F3 skill · F5 auto fire · F6 aim lock · F7 sembunyi UI skill · F8 ESP · F10 teks ESP · RightShift veil · End silent aim",11,TH.mute,FS,
+local hint=label(c2,"Ketuk tombol lalu tekan tombol baru. Escape membatalkan. Hotkey Violence Distric: F1 parry · F2 snap · F3 skill · F5 auto fire · F6 aim lock · F7 sembunyi UI skill · F8 ESP · F10 teks ESP · RightShift veil · End silent aim",11,TH.mute,FS,
 {Size=UDim2.new(1,0,0,0),AutomaticSize=AUTO_Y,TextWrapped=true,LayoutOrder=nextLO()})
 padd(hint,8,0,10,0)
 end
@@ -11302,7 +11398,7 @@ diag("Executor",function()return true,EXEC:sub(1,22)end)
 for _,k in ipairs({"loadstring","firesignal","getconnections","getgc","upvalues","debuginfo","file","clipboard","setfpscap","fflag","hiddenprop"})do
 diag(k,function()return CAP[k],CAP[k]and"ada"or"tidak ada"end)
 end
-diag("Modul Distrik Pembantai",function()return MOD.par.state=="ready",MOD.par.state end)
+diag("Modul Violence Distric",function()return MOD.par.state=="ready",MOD.par.state end)
 diag("Modul Anti-lag",function()return MOD.lag.state=="ready",MOD.lag.state end)
 diag("Versi script",function()return AP~=nil,AP and tostring(AP.Version)or"--"end)
 diag("Simpan config parry",function()return CAP.file==true,CAP.file and"aktif"or"mati"end)
@@ -11315,7 +11411,7 @@ local sp=new("Frame",{Size=UDim2.new(1,0,0,10),BackgroundTransparency=1,LayoutOr
 end
 W.btnRow(p,{
 {"Simpan sekarang","norm",function()K.saveNow();say("ok",CAP.file and"Konfigurasi disimpan"or"Executor tanpa writefile")end},
-{"Reset posisi","norm",function()clampTo(UI.win,40,24);clampTo(UI.fab,12,96);clampTo(UI.mini,64,100);S.wp,S.fp,S.mp=nil,nil,nil;K.saveSoon()end},
+{"Reset posisi","norm",function()clampTo(UI.win,14,12);clampTo(UI.fab,vp().X-116,96);clampTo(UI.mini,64,100);S.wp,S.fp,S.mp=nil,nil,nil;K.saveSoon()end},
 })
 W.btnRow(p,{
 {"Reset opsi script","dng",function()
@@ -11326,7 +11422,7 @@ end,1,true},
 })
 W.btnRow(p,{{"Matikan semua dan tutup","dng",K.shutdownAll,1,true}})
 local c5=W.card(p)
-W.row(c5,"Distrik Pembantai v"..VERSION,"By Duke · Survivor, Killer, ESP, dan anti-lag Nono dikendalikan dari hub ini",false,0)
+W.row(c5,"Violence Distric v"..VERSION,"By Copycat · Survivor, Killer, ESP, dan anti-lag Nono dikendalikan dari hub ini",false,0)
 end
 BT="cfg"
 do
@@ -11342,7 +11438,7 @@ TextXAlignment=Enum.TextXAlignment.Left,ClipsDescendants=true},hold)
 corner(box,10);stroke(box,WHITE,1,0.9);padd(box,0,10,0,10)
 W.seg(p,{"Semua","Diubah","Aktif"},function()return st.mode end,function(i)st.mode=i;st.cap=30;K.optRebuild()end)
 local info=label(p,"",11,TH.mute,FS,{Size=UDim2.new(1,0,0,14),LayoutOrder=nextLO()})
-local lst=W.card(p)
+local lst=W.stack(p)
 local more=W.btn(p,"","norm",function()st.cap=st.cap+30;K.optRebuild()end,
 {Size=UDim2.new(1,0,0,34),LayoutOrder=nextLO(),TextSize=12,Visible=false})
 local built,rstart=false,nil
@@ -11400,21 +11496,33 @@ if not built and MOD.par.state=="ready"then built=true;K.optRebuild()end
 end)
 end
 BT=nil
-UI.fab=new("Frame",{Name="Fab",Size=UDim2.fromOffset(44,44),Position=UDim2.fromOffset(12,96),BackgroundTransparency=1,
+UI.fab=new("Frame",{Name="Fab",Size=UDim2.fromOffset(60,82),Position=UDim2.fromOffset(12,96),BackgroundTransparency=1,
 BorderSizePixel=0,ZIndex=5,Active=true},ROOT)
 do
-local gnd=new("Frame",{Size=UDim2.fromOffset(42,42),Position=UDim2.fromOffset(1,3),BackgroundColor3=TH.rim,BorderSizePixel=0},UI.fab)
-corner(gnd,21)
-local ex=new("Frame",{Size=UDim2.fromOffset(38,38),Position=UDim2.fromOffset(3,3),BackgroundColor3=TH.blueX,BorderSizePixel=0},UI.fab)
-corner(ex,19)
-local base=new("Frame",{Size=UDim2.fromOffset(38,38),Position=UDim2.fromOffset(3,0),BackgroundColor3=WHITE,BorderSizePixel=0},UI.fab)
-corner(base,19)
-UI.fabStroke=stroke(base,TH.rim,2,0)
+local gnd=new("Frame",{Size=UDim2.fromOffset(60,60),Position=UDim2.fromOffset(0,7),BackgroundColor3=TH.rim,BorderSizePixel=0},UI.fab)
+corner(gnd,30)
+local ex=new("Frame",{Size=UDim2.fromOffset(60,60),Position=UDim2.fromOffset(0,4),BackgroundColor3=TH.blueX,BorderSizePixel=0},UI.fab)
+corner(ex,30)
+local base=new("Frame",{Size=UDim2.fromOffset(54,54),Position=UDim2.fromOffset(3,3),BackgroundColor3=WHITE,BorderSizePixel=0},UI.fab)
+corner(base,27)
+UI.fabStroke=stroke(base,TH.rim,3,0)
 new("UIGradient",{Rotation=90,Color=ColorSequence.new(TH.blue,TH.blueD)},base)
-local sh=new("Frame",{Size=UDim2.fromOffset(24,13),Position=UDim2.fromOffset(7,3),BackgroundColor3=WHITE,BorderSizePixel=0,ZIndex=2},base)
-corner(sh,7);new("UIGradient",{Rotation=90,Transparency=ns(0,0.62,1,1)},sh)
-UI.fabTxt=label(base,"DP",13,WHITE,BLACK,{Size=UDim2.new(1,0,1,0),TextXAlignment=Enum.TextXAlignment.Center,ZIndex=3,
+local sh=new("Frame",{Size=UDim2.fromOffset(30,15),Position=UDim2.fromOffset(12,4),BackgroundColor3=WHITE,BorderSizePixel=0,ZIndex=2},base)
+corner(sh,8);new("UIGradient",{Rotation=90,Transparency=ns(0,0.55,1,1)},sh)
+UI.fabTxt=label(base,"DP",20,WHITE,BLACK,{Size=UDim2.new(1,0,1,0),TextXAlignment=Enum.TextXAlignment.Center,ZIndex=3,
 TextStrokeTransparency=0.6,TextStrokeColor3=TH.rim})
+do
+local lg=UI.logoImage()
+if lg then
+UI.fabTxt.Visible=false
+sh.Visible=false
+UI.fabImg=new("ImageLabel",{Size=UDim2.fromOffset(46,46),Position=UDim2.fromOffset(4,4),BackgroundColor3=Color3.new(0,0,0),
+BorderSizePixel=0,Image=lg,ZIndex=3},base)
+corner(UI.fabImg,23);stroke(UI.fabImg,TH.rim,2,0)
+end
+end
+UI.fabCap=label(UI.fab,"buka hub",9,Color3.fromRGB(185,196,240),MONO,{AnchorPoint=Vector2.new(0.5,0),Position=UDim2.new(0.5,0,0,70),
+Size=UDim2.fromOffset(90,12),TextXAlignment=Enum.TextXAlignment.Center,TextStrokeTransparency=0.4,TextStrokeColor3=Color3.new(0,0,0)})
 end
 function K.setOpen(o)
 OPEN=o
@@ -11516,15 +11624,14 @@ end
 end))
 reg(function()
 local f=V.sys.fps
-UI.hfps.Text=f.." fps";UI.hfps.TextColor3=col(f)
-local n=0
-for _,id in ipairs({"srv","klr","esp","lag"})do local c,_,rdy=K.sysCount(id);if rdy and c>0 then n=n+1 end end
-UI.cap.Text="v"..VERSION.." · By Duke · "..n.."/4 aktif"
+UI.hfps.Text=f.." FPS";UI.hfps.TextColor3=col(f);UI.hled.BackgroundColor3=col(f)
 UI.fabTxt.TextColor3=(OPEN or MINI)and TH.gold or WHITE
+if UI.fabImg then UI.fabStroke.Color=(OPEN or MINI)and TH.gold or TH.rim end
+UI.fabCap.Text=(OPEN or MINI)and"tutup hub"or"buka hub"
 end,true)
 applyLayout()
-if S.wp then clampTo(UI.win,S.wp.x,S.wp.y)else clampTo(UI.win,(vp().X-WIN.w)/2,24)end
-if S.fp then clampTo(UI.fab,S.fp.x,S.fp.y)else clampTo(UI.fab,12,96)end
+if S.wp then clampTo(UI.win,S.wp.x,S.wp.y)else clampTo(UI.win,14,12)end
+if S.fp then clampTo(UI.fab,S.fp.x,S.fp.y)else clampTo(UI.fab,vp().X-116,96)end
 if S.mp then clampTo(UI.mini,S.mp.x,S.mp.y)else clampTo(UI.mini,64,100)end
 if workspace.CurrentCamera then
 track(workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
@@ -11538,7 +11645,7 @@ if S.mini then K.setMini(true)end
 function K.toggleHub()
 if MINI then K.setMini(false);K.setOpen(true)else K.setOpen(not OPEN)end
 end
-log("Memuat anti-lag dan Distrik Pembantai…")
+log("Memuat anti-lag dan Violence Distric…")
 K.loadMod("lag")
 K.loadMod("par")
 task.spawn(function()
