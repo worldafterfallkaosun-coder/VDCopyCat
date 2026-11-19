@@ -742,7 +742,7 @@ local spd=tr and Vector3.new(tr.vel.X,0,tr.vel.Z).Magnitude or 0
 if spd>(G.headMaxSpeed or 14)or(part.Position-origin).Magnitude>(G.headMaxDist or 120)then want=false end
 if want then
 local tt=(part.Position-origin).Magnitude/math.max(G.bulletSpeed or 800,1)+Net.aimLag()*(G.leadPing or 1)+(G.leadBase or 0)
-if spd*(Net.jitter*2+0.05)+spd*0.1*math.min(tt,0.7)>(G.headMaxErr or 1.0)then want=false end
+if 0.35+spd*(Net.jitter*2+0.05)+spd*0.1*math.min(tt,0.7)>(G.headMaxErr or 0.6)then want=false end
 end
 end
 local now=os.clock()
@@ -2228,7 +2228,7 @@ if spd>=5 and Net.rtt<(Net.leadRtt or Net.rtt)*1.4+0.04 then
 local resid=Vector3.new(actual.X-s.pred.X,0,actual.Z-s.pred.Z)
 local along=resid:Dot(s.vel.Unit)
 if math.abs(along)<=8 then
-Gun.leadAdj=math.clamp(Gun.leadAdj+((Gun.shots<8)and 0.45 or 0.3)*(along/spd),-0.25,0.2)
+Gun.leadAdj=math.clamp(Gun.leadAdj+((Gun.shots<3)and 0.8 or((Gun.shots<8)and 0.5 or 0.3))*(along/spd),-0.45,0.2)
 note=string.format(" | lead %+.0f ms",Gun.leadAdj*1000)
 end
 elseif spd<1.5 and not hit and mySpd<3 and dist>=8
@@ -2758,7 +2758,7 @@ if part=="head"then return headOff,"HEAD"end
 local tr=VT[k.char]
 local spd=tr and Vector3.new(tr.vel.X,0,tr.vel.Z).Magnitude or 0
 if(root.Position-origin).Magnitude>90 and spd>12 then return bodyOff,"BODY"end
-if aimErr(k,(root.Position-origin).Magnitude)>(C.headMaxErr or 1.0)then return bodyOff,"BODY"end
+if aimErr(k,(root.Position-origin).Magnitude)+0.3>(C.headMaxErr or 0.7)then return bodyOff,"BODY"end
 if los(origin,head.Position,k.char,"HEAD")then return headOff,"HEAD"end
 return bodyOff,"BODY"
 end
@@ -2895,6 +2895,10 @@ V.pending=V.pending or{}
 local pend=V.pending
 pend[#pend+1]=sh
 while#pend>4 do table.remove(pend,1)end
+V.recN=(V.recN or 0)+1
+if V.recN<=5 then
+log("EVAL",string.format("rekam lemparan #%d -> %s (lead %.0f ms, %s)",V.recN,tostring(k.player and k.player.DisplayName or"?"),L*1000,sh.mode=="f"and"FPP"or"TPP"))
+end
 task.spawn(function()
 local untilT=sh.t+6
 while alive()and not sh.done and os.clock()<untilT do
@@ -2904,11 +2908,15 @@ RunService.Heartbeat:Wait()
 end
 end)
 end
+function V.evBail(m)
+V.evB=(V.evB or 0)+1
+if V.evB<=6 then log("EVAL","evaluasi dibatalkan: "..m)end
+end
 function V.finishShot(sh)
 local ln,stp=sh.launch,sh.stop
-if not(ln and stp)then return end
+if not(ln and stp)then V.evBail("tanpa data launch/stop")return end
 local O,D=ln.o,ln.d
-if typeof(O)~="Vector3"or typeof(D)~="Vector3"or D.Magnitude<0.1 then return end
+if typeof(O)~="Vector3"or typeof(D)~="Vector3"or D.Magnitude<0.1 then V.evBail("origin/arah launch rusak")return end
 D=D.Unit
 local S=(type(ln.S)=="number"and ln.S>20)and ln.S or V.speed()
 local g=V.grav()
@@ -2919,7 +2927,7 @@ local hd=Vector3.new(stp.pos.X-O.X,0,stp.pos.Z-O.Z).Magnitude
 if dxz>0.05 then T=hd/(S*dxz)end
 end
 T=T or(stp.t-ln.t)
-if not T or T<=0.02 or T>6 then return end
+if not T or T<=0.02 or T>6 then V.evBail("waktu terbang ga masuk akal: "..tostring(T))return end
 local hit=false
 if stp.reason=="hit"and typeof(stp.part)=="Instance"then
 local m=stp.part:FindFirstAncestorOfClass("Model")
@@ -2986,13 +2994,21 @@ hit and"KENA"or"MELESET",tostring(stp.reason),dmin<1e8 and string.format("%.1f s
 sh.mode=="f"and"FPP"or"TPP",sh.vd*1000,note,V.hits,V.shots))
 end
 function V.onSpearState(st,tb)
-if type(tb)~="table"or tb.Source~=LP then return end
+if type(tb)~="table"then return end
+local src=tb.Source
+local mine=(src==LP)or(typeof(src)=="Instance"and src.Name==LP.Name)
+V.evN=V.evN or 0
+if V.evN<8 and(st=="launch"or st=="stop")then
+V.evN=V.evN+1
+log("EVAL",string.format("state %s | punyaku=%s | pending=%d",tostring(st),tostring(mine),#(V.pending or{})))
+end
+if not mine then return end
 local now=os.clock()
 V.pending=V.pending or{}
 if st=="launch"then
 for i=#V.pending,1,-1 do
 local sh=V.pending[i]
-if not sh.launch and now-sh.t<2.5 then
+if not sh.launch and now-sh.t<4 then
 sh.launch={t=now,o=tb.Origin,d=tb.Direction,S=tb.Speed,id=tb.Id}
 if type(tb.ViewDelay)=="number"then sh.vd=tb.ViewDelay end
 break
@@ -3075,7 +3091,8 @@ local changed=ctx.n
 if changed>0 then
 log("VEIL",string.format("silent aim %s -> %s (%.0f stud, %d arg diganti, %.1f deg dari crosshair | lead %.0f ms | terbang %.2fs | %s vd %.0f ms)",
 rn,best.k.player.DisplayName,best.dist,changed,best.ang,Lused*1000,best.flight or 0,(vd and vd>0.02)and"FPP"or"TPP",(vd or 0)*1000))
-pcall(V.recordShot,best,vd,Lused,now)
+local okr,er=pcall(V.recordShot,best,vd,Lused,now)
+if not okr then log("EVAL","rekam lemparan error: "..tostring(er))end
 end
 end
 Gun.veilFire=V.onFire
@@ -5069,7 +5086,7 @@ if type(k)=="string"and x then Parry.shift[k]=x end
 end
 end
 local g=type(d.gun)=="table"and d.gun or{}
-Gun.leadAdj=num(g.leadAdj,-0.25,0.2)or Gun.leadAdj
+Gun.leadAdj=num(g.leadAdj,-0.45,0.2)or Gun.leadAdj
 Gun.biasR=num(g.biasR,-0.06,0.06)or Gun.biasR
 Gun.biasU=num(g.biasU,-0.06,0.06)or Gun.biasU
 CFG.gun.originLag=num(g.originLag,0,0.15)or CFG.gun.originLag
@@ -8711,7 +8728,7 @@ end
 print("[NONO v6.0] loaded | setfpscap:",HAS_SETFPSCAP,"| sethiddenproperty:",HAS_SETHIDDEN,
 "| file:",HAS_FILE)
 end
-local VERSION="21.7"
+local VERSION="21.8"
 local Players=game:GetService("Players")
 local RunService=game:GetService("RunService")
 local UIS=game:GetService("UserInputService")
