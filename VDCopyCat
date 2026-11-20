@@ -1907,7 +1907,7 @@ notify(msg)
 end
 end
 log("GUN","fix6: jam-guard tanpa mode paksa + margin charge adaptif aktif")
-log("INFO","v21.9: learner tombak Veil digabung jadi satu + dihitung dari hasil server, kecepatan tombak per-lemparan, learner gun pakai median + regresi jarak, kalibrasi lama (<v12) di-reset")
+log("INFO","v21.10: kecepatan tombak = hold*165 (penuh di 1 dtk), auto lempar nahan 1.12 dtk, spawn tombak +3 stud, learner Veil satu jalur dari hasil server, learner gun median + regresi jarak")
 local function gameAimDir()
 local cam=workspace.CurrentCamera
 if EffectsMod==nil then
@@ -2684,6 +2684,9 @@ local L=leadTime()
 local t=(point-origin).Magnitude/S
 local fut,ux,uy,uz,reach=point,0,1,0,true
 local wsG=Workspace.Gravity
+local offS=V.curOff or 0
+local dirP=point-origin
+dirP=(dirP.Magnitude>1e-3)and dirP.Unit or Vector3.new(0,0,-1)
 for _=1,4 do
 local ahead=L+t
 if ahead>0.35 then ahead=0.35+(ahead-0.35)*(V.farK or 1)end
@@ -2693,9 +2696,11 @@ local av=math.min(ahead,0.45)
 fut=Vector3.new(fut.X,point.Y+v.Y*av-0.5*wsG*av*av,fut.Z)
 end
 fut=fut+Vector3.new(0,V.vBias,0)
-local d=fut-origin
+local o2=(offS>0)and(origin+dirP*offS)or origin
+local d=fut-o2
 local t2
 ux,uy,uz,t2,reach=aimFn(d.X,d.Y,d.Z,S,g)
+dirP=Vector3.new(ux,uy,uz)
 t=t2
 end
 local pf=V.prof
@@ -3031,10 +3036,27 @@ end
 function V.featNow(args,n,now)
 local f={}
 local cm=V.chargeMsg
-if cm and now-cm.t<3 then
+if cm and now-cm.t<12 then
 if cm.cv then f.cv=cm.cv end
 if V.chargeStart then f.fc=now-V.chargeStart end
+local rel
+for i=1,n do
+local a=args[i]
+if type(a)=="table"and type(a.ReleasedAt)=="number"then
+rel=a.ReleasedAt
+break
 end
+end
+local h
+if rel and type(cm.cv)=="number"then
+h=rel-cm.cv
+if h<=0 or h>12 then h=nil end
+end
+if not h and f.fc then h=f.fc-0.024 end
+if h then f.hold=math.max(h,0)end
+end
+local ah=V.autoHold
+if not f.hold and ah and math.abs(now-ah.t)<1.5 then f.hold=ah.hold end
 for i=1,n do
 local a=args[i]
 if type(a)=="table"then
@@ -3048,93 +3070,27 @@ end
 end
 return f
 end
-function V.sTransform(tf,x)
-local mn,mx=V.math.minCharge or 0.4,V.math.maxCharge or 7
-local seed=V.seedSpeed or C.speed
-local p
-if tf==1 then p=x
-elseif tf==2 then p=x/mx
-elseif tf==3 then p=(x-mn)/math.max(mx-mn,1e-3)
-else p=math.clamp(x,mn,mx)/mx end
-return math.clamp(p*seed,1,seed)
-end
 function V.predictS(feat)
 local seed=V.seedSpeed or C.speed
 if not seed then return nil end
-local mdl=V.sModel
-if mdl and feat and feat[mdl.key]then
-local S=V.sTransform(mdl.tf,feat[mdl.key])
-return math.clamp(S,seed*0.1,seed*1.05)
-end
-return V.sFallback
-end
-function V.fitSpeed()
-local sm=V.sSamples
-local seed=V.seedSpeed or C.speed
-if not sm or#sm<2 or not seed then return end
-local varies=false
-for _,s in ipairs(sm)do
-if math.abs(s.S-seed)>seed*0.04 then varies=true break end
-end
-if not varies then
-V.sModel,V.sFallback=nil,nil
-return
-end
-local keys={}
-for _,s in ipairs(sm)do
-for k in pairs(s.feat)do keys[k]=true end
-end
-local bestErr,bestKey,bestTf=1e9,nil,nil
-for key in pairs(keys)do
-for tf=1,4 do
-local err,cnt=0,0
-for _,s in ipairs(sm)do
-local x=s.feat[key]
-if x then
-local P=V.sTransform(tf,x)
-err=err+math.abs(P-s.S)/s.S
-cnt=cnt+1
-end
-end
-if cnt>=2 and cnt==#sm then
-err=err/cnt
-if err<bestErr then bestErr,bestKey,bestTf=err,key,tf end
-end
-end
-end
-if bestKey and bestErr<0.06 then
-local changed=(not V.sModel)or V.sModel.key~=bestKey or V.sModel.tf~=bestTf
-V.sModel={key=bestKey,tf=bestTf,err=bestErr}
-V.sFallback=nil
-if changed then
-log("SPEED",string.format("kecepatan tombak ternyata tergantung charge -> model: fitur %s transform %d (galat %.1f%%)",bestKey,bestTf,bestErr*100))
-end
-else
-V.sModel=nil
-local arr={}
-for i=math.max(1,#sm-5),#sm do arr[#arr+1]=sm[i].S end
-table.sort(arr)
-V.sFallback=arr[(#arr+1)//2]
-if not V.sWarned then
-V.sWarned=true
-log("SPEED",string.format("kecepatan tombak beda dari konstanta (%.0f) tapi belum ada fitur yang cocok -> pakai median lemparan terakhir (%.0f). Copy Log buat dianalisa",seed,V.sFallback))
-end
-end
+local h=feat and feat.hold
+if h then return math.clamp(h*seed,1,seed)end
+return nil
 end
 function V.noteSpeed(sp,S)
 if type(S)~="number"or S<5 then return end
-local seed=V.seedSpeed or C.speed
-V.sSamples=V.sSamples or{}
-V.sSamples[#V.sSamples+1]={S=S,feat=sp.feat or{}}
-while#V.sSamples>10 do table.remove(V.sSamples,1)end
+local seed=V.seedSpeed or C.speed or 165
 V.sN=(V.sN or 0)+1
-if V.sN<=8 then
-local parts={}
-for k,v in pairs(sp.feat or{})do parts[#parts+1]=string.format("%s=%.3f",k,v)end
-table.sort(parts)
-log("SPEED",string.format("launch S %.0f (seed %.0f, dipakai %.0f) | %s",S,seed or 0,sp.S0 or seed or 0,table.concat(parts,", ")))
+local h=sp.feat and sp.feat.hold
+if V.sN<=14 then
+local pr=sp.S0
+local err=(pr and S>0)and math.abs(pr-S)/S*100 or nil
+log("SPEED",string.format("launch S %.0f | hold %s | prediksi %s | galat %s",S,h and string.format("%.2fs",h)or"-",pr and string.format("%.0f",pr)or"-",err and string.format("%.1f%%",err)or"-"))
 end
-pcall(V.fitSpeed)
+if S<seed*0.97 and not h and not V.sWarned then
+V.sWarned=true
+log("SPEED","tombak lambat tapi hold ga kebaca (pesan charge belum masuk) -> aim pakai kecepatan penuh, bisa meleset")
+end
 end
 function V.finishShot(sh)
 local ln,stp=sh.launch,sh.stop
@@ -3197,8 +3153,8 @@ elseif not okL and not V.learnErrLogged then
 V.learnErrLogged=true
 log("EVAL","learnLead error: "..tostring(nt))
 end
-elseif mv and spd<2 and dmin<=9 and not hit then
-V.vBias=math.clamp(V.vBias+0.35*mv.Y,-2.5,2.5)
+elseif mv and spd<2 and dmin<=9 and not hit and math.abs(S-(sh.S0 or V.seedSpeed or S))<=S*0.03 and T>=(sh.flight or 0)*0.85 then
+V.vBias=math.clamp(V.vBias+0.2*mv.Y,-1.5,1.5)
 note=string.format(" | tinggi %+.2f",V.vBias)
 end
 end
@@ -3305,11 +3261,14 @@ local feat=V.featNow(args,n,now)
 local Sp=V.predictS(feat)
 V.sPend={t=now,feat=feat,S0=Sp}
 V.curS=Sp
+local offN=(po and(po-me.Position).Magnitude<=12)and V.math.spawnOffset or nil
+V.curOff=(type(offN)=="number")and offN or nil
 local okS,best=pcall(V.silentPick,origin,cam)
 local Lused=okS and V.leadTime()or 0
 local L0=Lused-(V.lastAdj or 0)
 V.curVD=nil
 V.curS=nil
+V.curOff=nil
 if not okS then
 log("VEIL","silentPick error: "..tostring(best))
 return
@@ -3803,7 +3762,8 @@ V.steadyAt=V.steadyAt or now
 if now-V.steadyAt<CFG.gun.steadyWait then return end
 end
 V.steadyAt=nil
-local hold=(C.throwHold>0 and C.throwHold)or(V.math.minCharge and(V.math.minCharge+0.03))or 0.15
+local hold=(C.throwHold>0 and C.throwHold)or 1.12
+V.autoHold={t=now+hold,hold=hold}
 V.nextThrow=now+hold+C.throwGap
 local ok,why=press(C.throwBind,hold,"vim")
 log("VEIL",string.format("auto lempar -> %s (%.0f stud, meleset %.1f stud) %s %s",best.k.player.DisplayName,
