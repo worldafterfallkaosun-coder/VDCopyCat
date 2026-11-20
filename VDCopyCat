@@ -83,7 +83,7 @@ fireTol=2.5,
 leadPing=1.0,
 leadBase=0.1,
 leadMax=0.7,
-autoTravel=true,
+autoTravel=false,
 fireStep=0,
 hitRadius=2.8,
 snapFov=8,
@@ -776,6 +776,7 @@ local tr=Track[part.Parent]
 if not tr then return pos end
 local G=CFG.gun
 local base=(G.leadPing>0)and(Net.aimLag()*G.leadPing+G.leadBase+Gun.leadAdj)or 0
+if(Gun.travelK or 0)>0 and base>0 then base=base+Gun.travelK*((pos-origin).Magnitude/100)end
 if base<=0 and G.lead<=0 then return pos end
 local v=tr.vs or tr.vel
 if tr.grounded then v=Vector3.new(v.X,0,v.Z)end
@@ -1906,6 +1907,7 @@ notify(msg)
 end
 end
 log("GUN","fix6: jam-guard tanpa mode paksa + margin charge adaptif aktif")
+log("INFO","v21.9: learner tombak Veil digabung jadi satu + dihitung dari hasil server, kecepatan tombak per-lemparan, learner gun pakai median + regresi jarak, kalibrasi lama (<v12) di-reset")
 local function gameAimDir()
 local cam=workspace.CurrentCamera
 if EffectsMod==nil then
@@ -2197,7 +2199,7 @@ if r then pcall(function()my=r.AssemblyLinearVelocity end)end
 Gun.last={
 t=os.clock(),part=part,origin=origin,dir=nd,pred=predictPos(part,origin),
 kind=(select(2,Gun.aimOf(part,origin))),
-vel=tr and flat(tr.vel)or Vector3.new(0,0,0),my=flat(my),done=false,
+vel=tr and flat(tr.vel)or Vector3.new(0,0,0),my=flat(my),done=false,adj0=Gun.leadAdj,tk0=Gun.travelK or 0,
 }
 end
 local function evalShot(s,o,e)
@@ -2228,8 +2230,33 @@ if spd>=5 and Net.rtt<(Net.leadRtt or Net.rtt)*1.4+0.04 then
 local resid=Vector3.new(actual.X-s.pred.X,0,actual.Z-s.pred.Z)
 local along=resid:Dot(s.vel.Unit)
 if math.abs(along)<=8 then
-Gun.leadAdj=math.clamp(Gun.leadAdj+((Gun.shots<3)and 0.8 or((Gun.shots<8)and 0.5 or 0.3))*(along/spd),-0.45,0.2)
-note=string.format(" | lead %+.0f ms",Gun.leadAdj*1000)
+local perfect=(s.adj0 or Gun.leadAdj)+(s.tk0 or 0)*(dist/100)+along/spd
+local RR=Gun.res
+if not RR then RR={}Gun.res=RR end
+RR[#RR+1]={x=perfect,d=dist}
+while#RR>10 do table.remove(RR,1)end
+if#RR>=6 then
+local nn,sd,sx,sdd,sdx=#RR,0,0,0,0
+for i=1,nn do
+local di=RR[i].d/100
+sd=sd+di
+sx=sx+RR[i].x
+sdd=sdd+di*di
+sdx=sdx+di*RR[i].x
+end
+local varD=sdd/nn-(sd/nn)^2
+if varD>0.06 then
+local slope=math.clamp((sdx/nn-(sd/nn)*(sx/nn))/varD,0,0.3)
+Gun.travelK=(Gun.travelK or 0)*0.7+slope*0.3
+end
+end
+local tk=Gun.travelK or 0
+local adjs={}
+for i=1,#RR do adjs[i]=RR[i].x-tk*RR[i].d/100 end
+table.sort(adjs)
+local tgt=adjs[(#adjs+1)//2]
+Gun.leadAdj=math.clamp(Gun.leadAdj+((#RR<3)and 0.6 or 0.4)*(tgt-Gun.leadAdj),-0.45,0.2)
+note=string.format(" | lead %+.0f ms travel %.0f ms/100st",Gun.leadAdj*1000,tk*1000)
 end
 elseif spd<1.5 and not hit and mySpd<3 and dist>=8
 and len>=t-0.5 and m.Magnitude>=0.7 and m.Magnitude<=4 and r.Magnitude>0.5 then
@@ -2571,6 +2598,7 @@ end
 function V.speed()
 local pf=V.prof
 if pf and pf.kind~="spear"then return pf.speed or 100000 end
+if V.curS then return V.curS end
 if V.trustMath and V.seedSpeed then return V.seedSpeed end
 return V.calibSpeed or V.seedSpeed or C.speed
 end
@@ -2598,7 +2626,15 @@ if not C.assist then return 0 end
 local t=0
 local pk=V.prof and V.prof.kind or"spear"
 local adj=0
-if pk=="spear"then adj=(V.vdMode()=="f")and V.leadAdjF or V.leadAdj end
+if pk=="spear"then
+local H=V.hyp and V.hyp[V.vdMode()]
+if H and H.n>=2 and H.delta then
+adj=H.delta*math.min(1,H.n/6)
+else
+adj=(V.vdMode()=="f")and V.leadAdjF or V.leadAdj
+end
+V.lastAdj=adj
+end
 if C.leadPing>0 then t=Net.aimLag()*C.leadPing+C.leadBase+adj end
 if pk=="spear"and C.useThrowDelay and V.math.throwDelay then t=t+V.math.throwDelay end
 if pk=="spear"then t=t-(C.vdComp or 1)*V.vdNow()end
@@ -2883,14 +2919,14 @@ return c
 end
 return a
 end
-function V.recordShot(best,vd,L,now)
+function V.recordShot(best,vd,L,now,extra)
 local k=best.k
 local rt=k and k.root
 if not(rt and rt.Parent)then return end
 local tr=VT[k.char]
 local v=tr and tr.vel or ZERO
 local sh={t=now,k=k,off=best.off or ZERO,dist=best.dist or 0,L=L,flight=best.flight or 0,vd=vd or 0,mode=((vd or 0)>0.02)and"f"or"t",
-v=Vector3.new(v.X,0,v.Z),samples={},done=false}
+v=Vector3.new(v.X,0,v.Z),samples={},done=false,L0=(extra and extra.L0)or L,feat=extra and extra.feat,S0=extra and extra.S0}
 V.pending=V.pending or{}
 local pend=V.pending
 pend[#pend+1]=sh
@@ -2912,6 +2948,194 @@ function V.evBail(m)
 V.evB=(V.evB or 0)+1
 if V.evB<=6 then log("EVAL","evaluasi dibatalkan: "..m)end
 end
+V.HYP_L={}
+for i=0,32 do V.HYP_L[#V.HYP_L+1]=i*0.025 end
+local function interpPos(smp,n,ts)
+if ts<=smp[1][1]then return smp[1][2]end
+if ts>=smp[n][1]then return smp[n][2]end
+local lo,hi=1,n
+while hi-lo>1 do
+local mid=(lo+hi)//2
+if smp[mid][1]<=ts then lo=mid else hi=mid end
+end
+local a,b=smp[lo],smp[hi]
+return a[2]:Lerp(b[2],(ts-a[1])/math.max(b[1]-a[1],1e-4))
+end
+function V.learnLead(sh,O,D,S,g,T,hit,hitChar)
+local smp=sh.samples
+local n=#smp
+if n<4 then return nil end
+if hit and hitChar~=sh.k.char then return nil end
+if(not hit)and T<(sh.flight or 0)*0.85 then return nil end
+local mode=sh.mode
+V.hyp=V.hyp or{}
+local H=V.hyp[mode]
+if not H then
+H={ll={},n=0,delta=0}
+V.hyp[mode]=H
+end
+local Ls=V.HYP_L
+local nL=#Ls
+local r0,w=2.6,0.7
+local ps={}
+local pmax=0
+for k=1,nL do
+local Lk=Ls[k]
+local dm=math.huge
+local t=0
+while t<=T+1e-6 do
+local sp3=O+D*S*t+Vector3.new(0,-0.5*g*t*t,0)
+local tp=interpPos(smp,n,sh.t+Lk+t)+sh.off
+local d=(tp-sp3).Magnitude
+if d<dm then dm=d end
+t=t+0.03
+end
+local p=1/(1+math.exp((dm-r0)/w))
+p=math.clamp(p,0.01,0.99)
+ps[k]=p
+if p>pmax then pmax=p end
+end
+if(not hit)and pmax<0.25 then return nil end
+for k=1,nL do
+local inc=hit and math.log(ps[k])or math.log(1-ps[k])
+H.ll[k]=(H.ll[k]or 0)*0.92+inc
+end
+H.n=H.n+1
+local L0=sh.L0 or sh.L
+local bestScore,bk=-1e18,1
+for k=1,nL do
+local sc=H.ll[k]-0.5*((Ls[k]-L0)/0.25)^2
+if sc>bestScore then bestScore,bk=sc,k end
+end
+H.delta=math.clamp(Ls[bk]-L0,-0.5,0.6)
+return string.format(" | lead belajar %s %+.0f ms (n=%d)",mode=="f"and"FPP"or"TPP",H.delta*1000,H.n)
+end
+function V.onCharge(args,n)
+if args[1]~="charge"then return end
+local now=os.clock()
+local cv
+for i=n,2,-1 do
+if type(args[i])=="number"then
+cv=args[i]
+break
+end
+end
+local prev=V.chargeMsg
+if(not prev)or now-prev.t>1.0 or(V.lastSendAt or 0)>prev.t then V.chargeStart=now end
+V.chargeMsg={t=now,cv=cv}
+V.chargeN=(V.chargeN or 0)+1
+if V.chargeN<=6 then
+log("VEIL",string.format("pesan charge #%d: nilai=%s | sejak mulai %.2fs",V.chargeN,tostring(cv),now-(V.chargeStart or now)))
+end
+end
+function V.featNow(args,n,now)
+local f={}
+local cm=V.chargeMsg
+if cm and now-cm.t<3 then
+if cm.cv then f.cv=cm.cv end
+if V.chargeStart then f.fc=now-V.chargeStart end
+end
+for i=1,n do
+local a=args[i]
+if type(a)=="table"then
+for k,v in pairs(a)do
+if type(k)=="string"and type(v)=="number"and v==v and math.abs(v)<1e6 then
+local lk=k:lower()
+if lk:find("charge",1,true)or lk:find("power",1,true)or lk:find("hold",1,true)or lk:find("strength",1,true)then f["p_"..lk]=v end
+end
+end
+end
+end
+return f
+end
+function V.sTransform(tf,x)
+local mn,mx=V.math.minCharge or 0.4,V.math.maxCharge or 7
+local seed=V.seedSpeed or C.speed
+local p
+if tf==1 then p=x
+elseif tf==2 then p=x/mx
+elseif tf==3 then p=(x-mn)/math.max(mx-mn,1e-3)
+else p=math.clamp(x,mn,mx)/mx end
+return math.clamp(p*seed,1,seed)
+end
+function V.predictS(feat)
+local seed=V.seedSpeed or C.speed
+if not seed then return nil end
+local mdl=V.sModel
+if mdl and feat and feat[mdl.key]then
+local S=V.sTransform(mdl.tf,feat[mdl.key])
+return math.clamp(S,seed*0.1,seed*1.05)
+end
+return V.sFallback
+end
+function V.fitSpeed()
+local sm=V.sSamples
+local seed=V.seedSpeed or C.speed
+if not sm or#sm<2 or not seed then return end
+local varies=false
+for _,s in ipairs(sm)do
+if math.abs(s.S-seed)>seed*0.04 then varies=true break end
+end
+if not varies then
+V.sModel,V.sFallback=nil,nil
+return
+end
+local keys={}
+for _,s in ipairs(sm)do
+for k in pairs(s.feat)do keys[k]=true end
+end
+local bestErr,bestKey,bestTf=1e9,nil,nil
+for key in pairs(keys)do
+for tf=1,4 do
+local err,cnt=0,0
+for _,s in ipairs(sm)do
+local x=s.feat[key]
+if x then
+local P=V.sTransform(tf,x)
+err=err+math.abs(P-s.S)/s.S
+cnt=cnt+1
+end
+end
+if cnt>=2 and cnt==#sm then
+err=err/cnt
+if err<bestErr then bestErr,bestKey,bestTf=err,key,tf end
+end
+end
+end
+if bestKey and bestErr<0.06 then
+local changed=(not V.sModel)or V.sModel.key~=bestKey or V.sModel.tf~=bestTf
+V.sModel={key=bestKey,tf=bestTf,err=bestErr}
+V.sFallback=nil
+if changed then
+log("SPEED",string.format("kecepatan tombak ternyata tergantung charge -> model: fitur %s transform %d (galat %.1f%%)",bestKey,bestTf,bestErr*100))
+end
+else
+V.sModel=nil
+local arr={}
+for i=math.max(1,#sm-5),#sm do arr[#arr+1]=sm[i].S end
+table.sort(arr)
+V.sFallback=arr[(#arr+1)//2]
+if not V.sWarned then
+V.sWarned=true
+log("SPEED",string.format("kecepatan tombak beda dari konstanta (%.0f) tapi belum ada fitur yang cocok -> pakai median lemparan terakhir (%.0f). Copy Log buat dianalisa",seed,V.sFallback))
+end
+end
+end
+function V.noteSpeed(sp,S)
+if type(S)~="number"or S<5 then return end
+local seed=V.seedSpeed or C.speed
+V.sSamples=V.sSamples or{}
+V.sSamples[#V.sSamples+1]={S=S,feat=sp.feat or{}}
+while#V.sSamples>10 do table.remove(V.sSamples,1)end
+V.sN=(V.sN or 0)+1
+if V.sN<=8 then
+local parts={}
+for k,v in pairs(sp.feat or{})do parts[#parts+1]=string.format("%s=%.3f",k,v)end
+table.sort(parts)
+log("SPEED",string.format("launch S %.0f (seed %.0f, dipakai %.0f) | %s",S,seed or 0,sp.S0 or seed or 0,table.concat(parts,", ")))
+end
+pcall(V.fitSpeed)
+end
 function V.finishShot(sh)
 local ln,stp=sh.launch,sh.stop
 if not(ln and stp)then V.evBail("tanpa data launch/stop")return end
@@ -2928,10 +3152,11 @@ if dxz>0.05 then T=hd/(S*dxz)end
 end
 T=T or(stp.t-ln.t)
 if not T or T<=0.02 or T>6 then V.evBail("waktu terbang ga masuk akal: "..tostring(T))return end
-local hit=false
+local hit,hitChar=false,nil
 if stp.reason=="hit"and typeof(stp.part)=="Instance"then
 local m=stp.part:FindFirstAncestorOfClass("Model")
 hit=m~=nil and m~=myChar()and m:FindFirstChildOfClass("Humanoid")~=nil
+if hit then hitChar=m end
 end
 local smp=sh.samples
 local n=#smp
@@ -2964,27 +3189,15 @@ V.shots=V.shots+1
 if hit then V.hits=V.hits+1 end
 local spd=sh.v.Magnitude
 local note=""
-if C.learn and mv and dmin<=14 then
+if C.learn then
 if spd>=6 then
-local along=mv:Dot(sh.v.Unit)
-if math.abs(along)<=12 then
-local aheadFull=sh.L+sh.flight
-if aheadFull>0.5 then
-local far=aheadFull-0.35
-V.farK=math.clamp(V.farK+math.clamp((hit and 0.12 or 0.25)*along/(spd*far),-0.06,0.06),0.4,1.15)
-note=string.format(" | jauh x%.2f",V.farK)
-else
-local d=math.clamp((hit and 0.15 or 0.3)*along/spd,-0.08,0.08)
-if sh.mode=="f"then
-V.leadAdjF=math.clamp(V.leadAdjF+d,-0.4,0.45)
-note=string.format(" | lead FPP %+.0f ms",V.leadAdjF*1000)
-else
-V.leadAdj=math.clamp(V.leadAdj+d,-0.2,0.45)
-note=string.format(" | lead TPP %+.0f ms",V.leadAdj*1000)
+local okL,nt=pcall(V.learnLead,sh,O,D,S,g,T,hit,hitChar)
+if okL and nt then note=nt
+elseif not okL and not V.learnErrLogged then
+V.learnErrLogged=true
+log("EVAL","learnLead error: "..tostring(nt))
 end
-end
-end
-elseif spd<2 and dmin<=9 and not hit then
+elseif mv and spd<2 and dmin<=9 and not hit then
 V.vBias=math.clamp(V.vBias+0.35*mv.Y,-2.5,2.5)
 note=string.format(" | tinggi %+.2f",V.vBias)
 end
@@ -3014,6 +3227,11 @@ if type(tb.ViewDelay)=="number"then sh.vd=tb.ViewDelay end
 break
 end
 end
+local spn=V.sPend
+if spn and not spn.used and now-spn.t<4 then
+spn.used=true
+pcall(V.noteSpeed,spn,tb.Speed)
+end
 elseif st=="stop"and tb.Id~=nil then
 for i=#V.pending,1,-1 do
 local sh=V.pending[i]
@@ -3034,6 +3252,10 @@ function V.onFire(name,args,n)
 if not alive()then return end
 local rn=string.sub(name,6)
 local now=os.clock()
+if rn=="SpearState"then
+pcall(V.onCharge,args,n)
+return
+end
 local hasVec=false
 for i=1,n do
 if V.hasAim(args[i],0)then hasVec=true end
@@ -3079,19 +3301,29 @@ if typeof(a)=="table"and type(a.ViewDelay)=="number"then vd=a.ViewDelay break en
 end
 V.curVD=vd
 if vd then V.lastVD=vd end
-local best=V.silentPick(origin,cam)
-local Lused=V.leadTime()
+local feat=V.featNow(args,n,now)
+local Sp=V.predictS(feat)
+V.sPend={t=now,feat=feat,S0=Sp}
+V.curS=Sp
+local okS,best=pcall(V.silentPick,origin,cam)
+local Lused=okS and V.leadTime()or 0
+local L0=Lused-(V.lastAdj or 0)
 V.curVD=nil
+V.curS=nil
+if not okS then
+log("VEIL","silentPick error: "..tostring(best))
+return
+end
 if not best then return end
 local dir,P=best.dir,best.P
 local camPos=cam.CFrame.Position
-local ctx={dir=dir,P=P,S=V.speed(),origin=origin,camPos=camPos,mePos=me.Position,n=0}
+local ctx={dir=dir,P=P,S=Sp or V.speed(),origin=origin,camPos=camPos,mePos=me.Position,n=0}
 for i=1,n do args[i]=V.retarget(args[i],0,ctx)end
 local changed=ctx.n
 if changed>0 then
 log("VEIL",string.format("silent aim %s -> %s (%.0f stud, %d arg diganti, %.1f deg dari crosshair | lead %.0f ms | terbang %.2fs | %s vd %.0f ms)",
 rn,best.k.player.DisplayName,best.dist,changed,best.ang,Lused*1000,best.flight or 0,(vd and vd>0.02)and"FPP"or"TPP",(vd or 0)*1000))
-local okr,er=pcall(V.recordShot,best,vd,Lused,now)
+local okr,er=pcall(V.recordShot,best,vd,Lused,now,{L0=L0,feat=feat,S0=Sp})
 if not okr then log("EVAL","rekam lemparan error: "..tostring(er))end
 end
 end
@@ -3358,14 +3590,12 @@ local function evaluate(rec)
 if not(rec.snap and rec.qAt and rec.pAt)then return end
 local dmin=rec.dmin
 local hit=dmin<=C.hitRadius
-V.shots=V.shots+1
-if hit then V.hits=V.hits+1 end
 local vel=rec.vAt or ZERO
 local flatv=Vector3.new(vel.X,0,vel.Z)
 local spd=flatv.Magnitude
 local miss=rec.qAt-rec.pAt
 local note=""
-if C.learn and dmin<=14 then
+if false and C.learn and dmin<=14 then
 if spd>=6 then
 local along=miss:Dot(flatv.Unit)
 if math.abs(along)<=12 then
@@ -3377,7 +3607,7 @@ V.vBias=math.clamp(V.vBias+0.35*miss.Y,-2.5,2.5)
 note=string.format(" | tinggi %+.2f",V.vBias)
 end
 end
-log("LEMPAR",string.format("%s | terdekat %.1f stud | target %.0f st/s (atas %+.1f) | jarak %.0f%s | kena %d/%d",
+log("LEMPAR-V",string.format("%s | terdekat %.1f stud | target %.0f st/s (atas %+.1f) | jarak %.0f%s | kena %d/%d",
 hit and"KENA"or"MELESET",dmin,spd,miss.Y,rec.snap.dist or 0,note,V.hits,V.shots))
 end
 local function finish(rec,why)
@@ -3909,7 +4139,7 @@ local ok=pcall(function()
 local f=RS:WaitForChild("Remotes",30):WaitForChild("Killers",30):WaitForChild("Veil",30)
 local function reg(r)
 local cn=r.ClassName
-if(cn=="RemoteEvent"or cn=="UnreliableRemoteEvent"or cn=="RemoteFunction")and r.Name~="SpearState"and not Spy[r]then
+if(cn=="RemoteEvent"or cn=="UnreliableRemoteEvent"or cn=="RemoteFunction")and not Spy[r]then
 Spy[r]="veil."..r.Name
 log("VEIL","pantau remote "..r.Name.." ("..cn..")")
 end
@@ -3920,9 +4150,13 @@ end)
 if not ok then log("VEIL","folder remote Veil ga ketemu, silent aim tombak ga aktif")end
 end)
 function V.save()
-return{speed=V.calibSpeed,g=V.calibG,cd=V.cdLearn,lead=V.leadAdj,leadF=V.leadAdjF,farK=V.farK,vb=V.vBias}
+local function hs(h)
+if not h then return nil end
+return{d=h.delta,n=h.n,ll=h.ll}
 end
-function V.load(d)
+return{speed=V.calibSpeed,g=V.calibG,cd=V.cdLearn,lead=V.leadAdj,leadF=V.leadAdjF,farK=V.farK,vb=V.vBias,hf=hs(V.hyp and V.hyp.f),ht=hs(V.hyp and V.hyp.t)}
+end
+function V.load(d,stale)
 local function num(v,lo,hi)
 if type(v)~="number"or v~=v then return nil end
 return math.clamp(v,lo,hi)
@@ -3935,10 +4169,21 @@ V.calibSpeed=sp or V.calibSpeed
 V.calibG=gv or V.calibG
 V.cdLearn=num(d.cd,1,60)or V.cdLearn
 if V.cdLearn then V.cdMin,V.cdSamples=V.cdLearn,2 end
+if not stale then
 V.leadAdj=num(d.lead,-0.2,0.45)or V.leadAdj
 V.leadAdjF=num(d.leadF,-0.4,0.45)or V.leadAdjF
 V.farK=num(d.farK,0.4,1.15)or V.farK
 V.vBias=num(d.vb,-2.5,2.5)or V.vBias
+local function loadH(h)
+if type(h)~="table"or type(h.ll)~="table"then return nil end
+local ll={}
+for k=1,#V.HYP_L do ll[k]=num(h.ll[k],-60,60)or 0 end
+return{ll=ll,n=math.floor(num(h.n,0,60)or 0),delta=num(h.d,-0.5,0.6)or 0}
+end
+V.hyp=V.hyp or{}
+V.hyp.f=loadH(d.hf)or V.hyp.f
+V.hyp.t=loadH(d.ht)or V.hyp.t
+end
 log("BELAJAR",string.format("Veil dimuat: speed %s | g %s | cd %s | lead %+.0f ms | tinggi %+.2f",
 V.calibSpeed and string.format("%.0f",V.calibSpeed)or"-",V.calibG and string.format("%.1f",V.calibG)or"-",
 V.cdLearn and string.format("%.1f",V.cdLearn)or"-",V.leadAdj*1000,V.vBias))
@@ -3947,6 +4192,7 @@ function V.wipe()
 V.calibSpeed,V.calibG,V.cdLearn,V.cdMin,V.cdSamples=nil,nil,nil,nil,0
 V.leadAdj,V.vBias,V.shots,V.hits=0,0,0,0
 V.leadAdjF,V.farK=0,1
+V.hyp=nil
 end
 function V.resetCalib()
 V.wipe()
@@ -5086,12 +5332,18 @@ if type(k)=="string"and x then Parry.shift[k]=x end
 end
 end
 local g=type(d.gun)=="table"and d.gun or{}
+local staleLearn=(tonumber(d.v)or 0)<12
+if staleLearn then
+log("BELAJAR","kalibrasi gun/tombak versi lama dibuang (learner lama bias) -> belajar ulang dari nol")
+else
 Gun.leadAdj=num(g.leadAdj,-0.45,0.2)or Gun.leadAdj
 Gun.biasR=num(g.biasR,-0.06,0.06)or Gun.biasR
 Gun.biasU=num(g.biasU,-0.06,0.06)or Gun.biasU
+Gun.travelK=num(g.travelK,0,0.3)or Gun.travelK
 CFG.gun.originLag=num(g.originLag,0,0.15)or CFG.gun.originLag
+end
 CFG.parry.range=num(d.range,8,22)or CFG.parry.range
-if type(d.veil)=="table"then pcall(Veil.load,d.veil)end
+if type(d.veil)=="table"then pcall(Veil.load,d.veil,staleLearn)end
 if type(d.tune)=="table"then
 for k,v in pairs(d.tune)do
 local x=num(v,-0.08,0.25)
@@ -5111,9 +5363,9 @@ for k,v in pairs(Parry.shift)do
 if type(k)=="string"then shift[k]=v end
 end
 local data={
-v=11,hits=hits,shift=shift,range=CFG.parry.range,tune=Skill.tuneDelta,
+v=12,hits=hits,shift=shift,range=CFG.parry.range,tune=Skill.tuneDelta,
 veil=Veil.save(),
-gun={leadAdj=Gun.leadAdj,biasR=Gun.biasR,biasU=Gun.biasU,originLag=CFG.gun.originLag},
+gun={leadAdj=Gun.leadAdj,biasR=Gun.biasR,biasU=Gun.biasU,originLag=CFG.gun.originLag,travelK=Gun.travelK},
 }
 local ok,js=pcall(function()return HttpService:JSONEncode(data)end)
 if not ok then return false end
@@ -5126,6 +5378,7 @@ end
 function Skill.wipeLearn()
 Parry.hits,Parry.shift={},{}
 Gun.leadAdj,Gun.biasR,Gun.biasU=0,0,0
+Gun.travelK,Gun.res=0,nil
 Skill.tuneDelta={}
 pcall(Veil.wipe)
 lastJson=""
