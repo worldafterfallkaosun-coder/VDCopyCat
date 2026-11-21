@@ -16,7 +16,6 @@ dodge=Enum.KeyCode.F9,
 veil=Enum.KeyCode.RightShift,
 vault=Enum.KeyCode.Insert,
 melee=Enum.KeyCode.Delete,
-speed=Enum.KeyCode.End,
 pov=Enum.KeyCode.RightControl,
 silent=Enum.KeyCode.End,
 },
@@ -177,7 +176,7 @@ objMax=40,
 updateHz=12,
 cullView=true,
 card=true,
-cardAlpha=0.3,
+cardAlpha=0.15,
 hpColor=true,
 pulseLock=true,
 outlineFade=true,
@@ -189,11 +188,11 @@ coneDeg=40,
 learnRange=true,
 thickness=0.45,
 onTop=false,
-ready=Color3.fromRGB(70,235,235),
-cooldown=Color3.fromRGB(120,135,145),
-inRange=Color3.fromRGB(235,255,255),
-danger=Color3.fromRGB(255,80,60),
-coneCol=Color3.fromRGB(255,255,255),
+ready=Color3.fromRGB(54,209,224),
+cooldown=Color3.fromRGB(143,154,198),
+inRange=Color3.fromRGB(245,247,255),
+danger=Color3.fromRGB(255,77,94),
+coneCol=Color3.fromRGB(245,247,255),
 arc=true,
 fill=true,
 ripple=true,
@@ -275,14 +274,6 @@ face=true,
 cam=true,
 needLOS=true,
 skipDown=true,
-},
-speed={
-enabled=false,
-pct=15,
-ramp=0.6,
-wallCheck=true,
-adapt=true,
-cap=8,
 },
 light={
 enabled=false,
@@ -3233,6 +3224,9 @@ h[#h+1]=now
 while#h>0 and now-h[1]>2 do table.remove(h,1)end
 if#h>4 then return end
 V.lastSend,V.lastSendAt=rn,now
+-- v21.11: bar cooldown dulu cuma mulai kalau tombak lo kedeteksi tracker (lempar 0/0 = ga pernah mulai).
+-- sekarang mulai langsung dari remote lempar, selama bar belum lagi cooldown.
+if killerId()=="veil"and V.throwName(rn)and V.cdLeft(now)<=0.05 then V.cdUntil=now+V.cdTotal()end
 if not(C.silent and killerId()=="veil"and V.throwName(rn))then return end
 local cam=Workspace.CurrentCamera
 local origin=spawnOrigin()
@@ -3330,7 +3324,7 @@ local function addSeg(a,b,col)
 local len=(b-a).Magnitude
 if len<0.05 then return end
 if not adFolder()then return end
-if#AD.trail>=180 then
+if#AD.trail>=70 then
 local o=table.remove(AD.trail,1)
 releaseBox(o.bx)
 end
@@ -3344,22 +3338,23 @@ bx.Visible=true
 AD.trail[#AD.trail+1]={bx=bx,born=os.clock(),tr=0.2}
 end
 local function drawTrails(now)
+local life=math.min(tonumber(C.trail)or 2,2)
 for i=#AD.trail,1,-1 do
 local e=AD.trail[i]
 local age=now-e.born
-if age>C.trail then
+if age>life then
 releaseBox(e.bx)
 table.remove(AD.trail,i)
 else
-local tr=0.2+0.8*(age/C.trail)
-if tr-e.tr>0.04 then
+local tr=0.2+0.8*(age/life)
+if tr-e.tr>0.06 then
 e.tr=tr
 e.bx.Transparency=tr
 end
 end
 end
 end
-local ARC_N=14
+local ARC_N=10
 local function hideArc()
 if AD.arcShown==false then return end
 for _,bx in ipairs(AD.arc)do bx.Visible=false end
@@ -3407,6 +3402,16 @@ end
 AD.arcShown=true
 end
 local hud={}
+local HC={
+ready=Color3.fromRGB(88,240,176),
+cool=Color3.fromRGB(255,201,71),
+bad=Color3.fromRGB(255,107,122),
+block=Color3.fromRGB(143,154,198),
+card=Color3.fromRGB(32,41,88),
+mute=Color3.fromRGB(143,154,198),
+white=Color3.fromRGB(245,247,255),
+track=Color3.fromRGB(9,13,40),
+}
 local function buildHud()
 local parent=guiParent()
 if not parent then return end
@@ -3416,71 +3421,96 @@ local gui=Instance.new("ScreenGui")
 gui.Name,gui.ResetOnSpawn,gui.DisplayOrder,gui.IgnoreGuiInset="DP3_VeilHUD",false,9990,true
 gui.Parent=parent
 hud.gui=gui
-local function round(o)
-local c=Instance.new("UICorner")
-c.CornerRadius=UDim.new(1,0)
-c.Parent=o
+local function mk(class,props,par)
+local o=Instance.new(class)
+for k,v in pairs(props)do o[k]=v end
+o.Parent=par
+return o
 end
-local function soft(o,r)
-local c=Instance.new("UICorner")
-c.CornerRadius=UDim.new(0,r)
-c.Parent=o
+local function corner(o,r)return mk("UICorner",{CornerRadius=r},o)end
+local function stroke(o,col,th,tr)return mk("UIStroke",{Color=col,Thickness=th,Transparency=tr or 0},o)end
+local V2,U=Vector2.new,UDim2
+local RIM=Color3.fromRGB(4,6,14)
+local function studify(f,rad,noStroke)
+local g=Instance.new("UIGradient")
+g.Rotation=90
+g.Color=ColorSequence.new(Color3.new(1,1,1),Color3.new(0.75,0.75,0.78))
+g.Parent=f
+if not noStroke then
+local s=Instance.new("UIStroke")
+s.Color=RIM
+s.Thickness=2
+s.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+s.Parent=f
 end
-local ring=Instance.new("Frame")
-ring.AnchorPoint,ring.Position=Vector2.new(0.5,0.5),UDim2.fromScale(0.5,0.5)
-ring.Size,ring.BackgroundTransparency,ring.Visible=UDim2.fromOffset(300,300),1,false
-ring.Parent=gui
-round(ring)
-local st=Instance.new("UIStroke")
-st.Color,st.Thickness,st.Transparency=Color3.fromRGB(255,80,80),1.5,0.55
-st.Parent=ring
+local sh=Instance.new("Frame")
+sh.Name="sheen"
+sh.Position=UDim2.fromOffset(3,2)
+sh.Size=UDim2.new(1,-6,0.4,0)
+sh.BackgroundColor3=Color3.new(1,1,1)
+sh.BorderSizePixel=0
+sh.Parent=f
+local c=Instance.new("UICorner")
+c.CornerRadius=UDim.new(0,math.max(rad-3,3))
+c.Parent=sh
+local sg=Instance.new("UIGradient")
+sg.Rotation=90
+sg.Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,0.64),NumberSequenceKeypoint.new(1,0.97)})
+sg.Parent=sh
+return sh
+end
+-- cincin FOV lock
+local ring=mk("Frame",{AnchorPoint=V2(0.5,0.5),Position=U.fromScale(0.5,0.5),Size=U.fromOffset(300,300),BackgroundTransparency=1,Visible=false},gui)
+corner(ring,UDim.new(1,0))
+stroke(ring,Color3.fromRGB(255,107,122),1.5,0.6)
 hud.ring=ring
-local marker=Instance.new("Frame")
-marker.AnchorPoint,marker.Size=Vector2.new(0.5,0.5),UDim2.fromOffset(14,14)
-marker.BackgroundColor3,marker.Visible=Color3.fromRGB(80,255,140),false
-marker.Parent=gui
-round(marker)
-local mst=Instance.new("UIStroke")
-mst.Color,mst.Thickness=Color3.new(0,0,0),1.5
-mst.Parent=marker
-local mlabel=Instance.new("TextLabel")
-mlabel.BackgroundTransparency=1
-mlabel.Position,mlabel.Size=UDim2.fromOffset(18,-6),UDim2.fromOffset(190,28)
-mlabel.TextXAlignment,mlabel.TextYAlignment=Enum.TextXAlignment.Left,Enum.TextYAlignment.Top
-mlabel.TextSize,mlabel.Font,mlabel.TextColor3=12,Enum.Font.GothamBold,Color3.new(1,1,1)
-mlabel.TextStrokeTransparency,mlabel.Text=0.4,""
-mlabel.Parent=marker
-hud.marker,hud.mlabel=marker,mlabel
-local cdBack=Instance.new("Frame")
-cdBack.AnchorPoint,cdBack.Position=Vector2.new(0.5,0),UDim2.new(0.5,0,0.87,0)
-cdBack.Size,cdBack.BackgroundColor3,cdBack.BackgroundTransparency=UDim2.fromOffset(210,16),Color3.fromRGB(25,25,32),0.2
-cdBack.Visible=false
-cdBack.Parent=gui
-soft(cdBack,5)
-local cdFill=Instance.new("Frame")
-cdFill.Size,cdFill.BackgroundColor3=UDim2.fromScale(1,1),Color3.fromRGB(255,170,60)
-cdFill.Parent=cdBack
-soft(cdFill,5)
-local cdText=Instance.new("TextLabel")
-cdText.BackgroundTransparency,cdText.Size=1,UDim2.fromScale(1,1)
-cdText.Font,cdText.TextSize,cdText.TextColor3=Enum.Font.GothamBold,11,Color3.new(1,1,1)
-cdText.TextStrokeTransparency,cdText.Text=0.5,"Spear: siap"
-cdText.Parent=cdBack
-hud.cdBack,hud.cdFill,hud.cdText=cdBack,cdFill,cdText
-local warn=Instance.new("TextLabel")
-warn.AnchorPoint,warn.Position=Vector2.new(0.5,0.5),UDim2.new(0.5,0,0.2,0)
-warn.Size,warn.BackgroundTransparency=UDim2.fromOffset(280,30),1
-warn.Font,warn.TextSize,warn.TextColor3=Enum.Font.GothamBold,20,Color3.fromRGB(255,70,70)
-warn.TextStrokeTransparency,warn.Text,warn.Visible=0.2,"",false
-warn.Parent=gui
+-- reticle target + kartu info
+local marker=mk("Frame",{AnchorPoint=V2(0.5,0.5),Size=U.fromOffset(26,26),BackgroundTransparency=1,Visible=false},gui)
+corner(marker,UDim.new(1,0))
+hud.mst=stroke(marker,HC.ready,2,0.05)
+local halo=mk("Frame",{AnchorPoint=V2(0.5,0.5),Position=U.fromScale(0.5,0.5),Size=U.new(1,7,1,7),BackgroundTransparency=1,BorderSizePixel=0},marker)
+corner(halo,UDim.new(1,0))
+stroke(halo,RIM,2,0.35)
+hud.dot=mk("Frame",{AnchorPoint=V2(0.5,0.5),Position=U.fromScale(0.5,0.5),Size=U.fromOffset(6,6),BackgroundColor3=HC.ready,BorderSizePixel=0},marker)
+corner(hud.dot,UDim.new(1,0))
+local tag=mk("Frame",{Position=U.fromOffset(32,-8),Size=U.fromOffset(158,36),BackgroundColor3=HC.card,BackgroundTransparency=0.2,BorderSizePixel=0},marker)
+corner(tag,UDim.new(0,8))
+studify(tag,8)
+hud.tagBar=mk("Frame",{Position=U.fromOffset(6,6),Size=U.new(0,3,1,-12),BackgroundColor3=HC.ready,BorderSizePixel=0},tag)
+corner(hud.tagBar,UDim.new(1,0))
+hud.mname=mk("TextLabel",{BackgroundTransparency=1,Position=U.fromOffset(16,3),Size=U.new(1,-20,0,16),Font=Enum.Font.GothamBold,TextSize=12,TextColor3=HC.white,TextXAlignment=Enum.TextXAlignment.Left,Text=""},tag)
+hud.minfo=mk("TextLabel",{BackgroundTransparency=1,Position=U.fromOffset(16,19),Size=U.new(1,-20,0,14),Font=Enum.Font.GothamMedium,TextSize=11,TextColor3=HC.mute,TextXAlignment=Enum.TextXAlignment.Left,Text=""},tag)
+hud.marker=marker
+-- kartu cooldown spear (bawah tengah)
+local card=mk("Frame",{AnchorPoint=V2(0.5,0),Position=U.new(0.5,0,0.86,0),Size=U.fromOffset(220,46),BackgroundColor3=HC.card,BackgroundTransparency=0.15,BorderSizePixel=0,Visible=false},gui)
+corner(card,UDim.new(0,10))
+studify(card,10,true)
+hud.cdStroke=stroke(card,HC.ready,2,0.15)
+hud.cdTitle=mk("TextLabel",{BackgroundTransparency=1,Position=U.fromOffset(12,5),Size=U.fromOffset(90,14),Font=Enum.Font.GothamBold,TextSize=10,TextColor3=HC.mute,TextXAlignment=Enum.TextXAlignment.Left,Text="SPEAR"},card)
+hud.cdText=mk("TextLabel",{BackgroundTransparency=1,AnchorPoint=V2(1,0),Position=U.new(1,-12,0,2),Size=U.fromOffset(110,20),Font=Enum.Font.GothamBold,TextSize=17,TextColor3=HC.ready,TextXAlignment=Enum.TextXAlignment.Right,Text="SIAP"},card)
+hud.cdExtra=mk("TextLabel",{BackgroundTransparency=1,Position=U.fromOffset(12,19),Size=U.new(1,-24,0,10),Font=Enum.Font.Gotham,TextSize=9,TextColor3=HC.mute,TextXAlignment=Enum.TextXAlignment.Left,Text=""},card)
+local track=mk("Frame",{Position=U.new(0,12,1,-13),Size=U.new(1,-24,0,5),BackgroundColor3=HC.track,BorderSizePixel=0},card)
+corner(track,UDim.new(1,0))
+stroke(track,RIM,1.5,0)
+hud.cdFill=mk("Frame",{Size=U.fromScale(1,1),BackgroundColor3=HC.ready,BorderSizePixel=0},track)
+corner(hud.cdFill,UDim.new(1,0))
+hud.cdBack=card
+-- peringatan spear datang (buat survivor)
+local warn=mk("Frame",{AnchorPoint=V2(0.5,0.5),Position=U.new(0.5,0,0.18,0),Size=U.fromOffset(230,36),BackgroundColor3=Color3.fromRGB(255,107,122),BackgroundTransparency=0.12,BorderSizePixel=0,Visible=false},gui)
+corner(warn,UDim.new(1,0))
+studify(warn,18)
+hud.warnText=mk("TextLabel",{BackgroundTransparency=1,Size=U.fromScale(1,1),Font=Enum.Font.GothamBold,TextSize=16,TextColor3=Color3.new(1,1,1),TextStrokeColor3=RIM,TextStrokeTransparency=0.5,Text=""},warn)
 hud.warn=warn
-local btn=Instance.new("TextButton")
-btn.AnchorPoint,btn.Position=Vector2.new(0.5,0.5),UDim2.new(1,-80,0.45,0)
-btn.Size,btn.BackgroundColor3,btn.BackgroundTransparency=UDim2.fromOffset(58,58),Color3.fromRGB(90,40,40),0.15
-btn.Font,btn.TextSize,btn.TextColor3,btn.Text=Enum.Font.GothamBold,12,Color3.new(1,1,1),"LOCK"
-btn.AutoButtonColor,btn.Visible=false,false
-btn.Parent=gui
-round(btn)
+-- tombol LOCK
+local btn=mk("TextButton",{AnchorPoint=V2(0.5,0.5),Position=U.new(1,-80,0.45,0),Size=U.fromOffset(60,60),BackgroundColor3=Color3.fromRGB(50,62,122),BackgroundTransparency=0.05,Font=Enum.Font.GothamBold,TextSize=12,TextColor3=Color3.fromRGB(245,247,255),TextStrokeColor3=RIM,TextStrokeTransparency=0.5,Text="LOCK",AutoButtonColor=false,BorderSizePixel=0,Visible=false},gui)
+corner(btn,UDim.new(1,0))
+do
+local bg=Instance.new("UIGradient")
+bg.Rotation=90
+bg.Color=ColorSequence.new(Color3.new(1,1,1),Color3.new(0.84,0.84,0.88))
+bg.Parent=btn
+end
+hud.btnStroke=stroke(btn,Color3.fromRGB(68,87,184),2.5,0.05)
 btn.InputBegan:Connect(function(i)
 if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
 if C.mode=="toggle"then V.toggled=not V.toggled else V.heldBtn,V.btnInput=true,i end
@@ -3795,7 +3825,7 @@ local hasHud=hud.gui~=nil and hud.gui.Parent~=nil
 if not hasHud and now-(X.hudTry or 0)>3 then
 X.hudTry=now
 pcall(buildHud)
-hud.mOn,hud.cdKey,hud.btnOn,hud.R=nil,nil,nil,nil
+hud.mOn,hud.cdKey,hud.btnOn,hud.R,hud.mCol,hud.mnameT,hud.minfoKey=nil,nil,nil,nil,nil,nil,nil
 hasHud=hud.gui~=nil and hud.gui.Parent~=nil
 end
 local hudTick=hasHud and(now-X.hudAt>=1/math.max(C.hudRate or 15,4))
@@ -3806,10 +3836,10 @@ drawTrails(now)
 end
 if hudTick and hud.warn then
 if V.warnT and C.warn and alive2 then
-local txt=string.format("!! SPEAR  %.1fs !!",V.warnT)
+local txt=string.format("SPEAR DATANG  %.1fs",V.warnT)
 hud.warn.Visible=true
-if hud.warn.Text~=txt then hud.warn.Text=txt end
-hud.warn.TextTransparency=(math.floor(now*8)%2==0)and 0 or 0.35
+if hud.warnText.Text~=txt then hud.warnText.Text=txt end
+hud.warn.BackgroundTransparency=(math.floor(now*6)%2==0)and 0.1 or 0.45
 elseif hud.warn.Visible then
 hud.warn.Visible=false
 end
@@ -3896,6 +3926,7 @@ else
 V.snap,V.steadyAt,V.lastLockChar=nil,nil,nil
 end
 if not hasHud then return end
+local ready=V.cdLeft(now)<=0.05
 if best then
 local sp,on=cam:WorldToViewportPoint(best.T)
 if on~=hud.mOn then
@@ -3908,8 +3939,13 @@ hud.mOn=false
 hud.marker.Visible=false
 end
 if best and V.isVeil then
-local acol=best.blocked and Color3.fromRGB(150,155,170)or((not best.reach)and Color3.fromRGB(255,80,80)or(V.cdLeft(now)<=0.05 and Color3.fromRGB(80,255,140)or Color3.fromRGB(255,190,70)))
+local acol=best.blocked and HC.block or((not best.reach)and HC.bad or(ready and HC.ready or HC.cool))
+-- garis lintasan dibatasi frekuensinya: 10 adornment tiap frame bikin fps jatuh di HP
+local agap=(Net.frameDt>0.028)and 0.09 or 0.04
+if now-(X.arcAt or 0)>=agap then
+X.arcAt=now
 drawArc(origin,best.dir,V.speed(),V.grav(),best.flight,acol)
+end
 else
 hideArc()
 end
@@ -3917,39 +3953,57 @@ if not hudTick then return end
 local vp=cam.ViewportSize
 local R=math.tan(math.rad(math.clamp(C.fov,1,80)))/math.tan(math.rad(cam.FieldOfView/2))*(vp.Y/2)
 hud.ring.Visible=C.aim
-if hud.R~=R then
+-- FOV berubah dikit pas lari: jangan resize cincin (UICorner+UIStroke) tiap tick
+if not hud.R or math.abs(hud.R-R)>=3 then
 hud.R=R
 hud.ring.Size=UDim2.fromOffset(R*2,R*2)
 end
-local ready=V.cdLeft(now)<=0.05
 if best then
-local col=best.blocked and Color3.fromRGB(150,155,170)
-or((not best.reach)and Color3.fromRGB(255,80,80)
-or(ready and Color3.fromRGB(80,255,140)or Color3.fromRGB(255,190,70)))
-if hud.marker.BackgroundColor3~=col then hud.marker.BackgroundColor3=col end
-local txt=string.format("%s %s\n%.0fst  %.2fs%s",best.k.player.DisplayName,best.kind,best.dist,best.flight,
-best.blocked and"  KETUTUP"or(best.reach and""or"  JAUH"))
-if hud.mlabel.Text~=txt then hud.mlabel.Text=txt end
+local col=best.blocked and HC.block or((not best.reach)and HC.bad or((V.isVeil and not ready)and HC.cool or HC.ready))
+if hud.mCol~=col then
+hud.mCol=col
+hud.mst.Color=col
+hud.dot.BackgroundColor3=col
+hud.tagBar.BackgroundColor3=col
+end
+local nm=best.k.player.DisplayName
+if hud.mnameT~=nm then
+hud.mnameT=nm
+hud.mname.Text=nm
+end
+local st=best.blocked and"KETUTUP"or((not best.reach)and"JAUH"or(V.isVeil and(ready and"SIAP"or"CD")or""))
+local d=math.floor(best.dist+0.5)
+local fl=tonumber(best.flight)or 0
+local key=tostring(d).."|"..math.floor(fl*20+0.5).."|"..st.."|"..tostring(best.kind)
+if hud.minfoKey~=key then
+hud.minfoKey=key
+hud.minfo.Text=string.format("%s  %dst  %.2fs  %s",tostring(best.kind),d,fl,st)
+end
 else
 hideArc()
 end
-hud.cdBack.Visible=C.cdBar and V.isVeil
-if C.cdBar and V.isVeil then
+local showCd=(C.cdBar and V.isVeil)and true or false
+if hud.cdBack.Visible~=showCd then hud.cdBack.Visible=showCd end
+if showCd then
 local rem=V.cdLeft(now)
 local extra=cdAttrs(now)
-local key=(rem>0 and math.floor(rem*10)or-1).."|"..extra
+local key=(rem>0 and math.floor(rem*20)or-1).."|"..extra
 if hud.cdKey~=key then
 hud.cdKey=key
 if rem>0 then
-hud.cdFill.Size=UDim2.fromScale(math.clamp(1-rem/V.cdTotal(),0,1),1)
-hud.cdFill.BackgroundColor3=Color3.fromRGB(255,170,60)
-hud.cdText.Text=string.format("Spear: %.1fs",rem)
+hud.cdFill.Size=UDim2.fromScale(math.clamp(1-rem/math.max(V.cdTotal(),0.1),0,1),1)
+hud.cdFill.BackgroundColor3=HC.cool
+hud.cdStroke.Color=HC.cool
+hud.cdText.TextColor3=HC.cool
+hud.cdText.Text=string.format("%.1fs",rem)
 else
 hud.cdFill.Size=UDim2.fromScale(1,1)
-hud.cdFill.BackgroundColor3=Color3.fromRGB(70,200,110)
-hud.cdText.Text="Spear: siap"
+hud.cdFill.BackgroundColor3=HC.ready
+hud.cdStroke.Color=HC.ready
+hud.cdText.TextColor3=HC.ready
+hud.cdText.Text="SIAP"
 end
-if extra~=""then hud.cdText.Text=hud.cdText.Text.."  ["..extra.."]"end
+if hud.cdExtra.Text~=extra then hud.cdExtra.Text=extra end
 end
 end
 local showBtn=C.button and C.aim and C.mode~="auto"
@@ -3958,7 +4012,8 @@ if showBtn then
 local on=((C.mode=="toggle")and V.toggled or(V.heldBtn or V.heldKey))and true or false
 if hud.btnOn~=on then
 hud.btnOn=on
-hud.btn.BackgroundColor3=on and Color3.fromRGB(40,140,80)or Color3.fromRGB(90,40,40)
+hud.btn.BackgroundColor3=on and Color3.fromRGB(18,164,104)or Color3.fromRGB(50,62,122)
+hud.btnStroke.Color=on and HC.ready or Color3.fromRGB(68,87,184)
 hud.btn.Text=on and"LOCK\nON"or"LOCK"
 end
 end
@@ -5386,14 +5441,14 @@ do
 local E=ESP
 local WHITE=Color3.new(1,1,1)
 local COL={
-killer=Color3.fromRGB(255,60,60),survivor=Color3.fromRGB(90,200,255),
-bad=Color3.fromRGB(255,150,40),pallet=Color3.fromRGB(255,220,90),
-broken=Color3.fromRGB(150,150,150),hook=Color3.fromRGB(255,140,0),
-exit=Color3.fromRGB(140,255,140),lock=Color3.fromRGB(255,255,255),
-genLo=Color3.fromRGB(255,70,70),genHi=Color3.fromRGB(80,255,120),
-genUnk=Color3.fromRGB(255,200,60),trap=Color3.fromRGB(255,90,160),
-down=Color3.fromRGB(255,110,110),
-hpLo=Color3.fromRGB(235,70,70),hpMid=Color3.fromRGB(245,190,60),hpHi=Color3.fromRGB(90,225,120),
+killer=Color3.fromRGB(255,77,94),survivor=Color3.fromRGB(54,209,224),
+bad=Color3.fromRGB(255,181,71),pallet=Color3.fromRGB(255,217,94),
+broken=Color3.fromRGB(143,154,198),hook=Color3.fromRGB(240,164,23),
+exit=Color3.fromRGB(88,240,176),lock=Color3.fromRGB(245,247,255),
+genLo=Color3.fromRGB(255,107,122),genHi=Color3.fromRGB(88,240,176),
+genUnk=Color3.fromRGB(255,201,71),trap=Color3.fromRGB(155,123,255),
+down=Color3.fromRGB(255,107,122),
+hpLo=Color3.fromRGB(255,107,122),hpMid=Color3.fromRGB(255,201,71),hpHi=Color3.fromRGB(88,240,176),
 }
 local OBJ={gen=true,pallet=true,hook=true,exit=true,trap=true}
 local WEIGHT={gen=0.3,trap=0.6,exit=0.5,hook=0.5,pallet=1}
@@ -5467,68 +5522,113 @@ card.Name="card"
 card.AnchorPoint=Vector2.new(0.5,1)
 card.Position=UDim2.fromScale(0.5,0.5)
 card.Size=UDim2.fromOffset(80,21)
-card.BackgroundColor3=Color3.fromRGB(12,13,18)
-card.BackgroundTransparency=0.3
+card.BackgroundColor3=Color3.fromRGB(32,41,88)
+card.BackgroundTransparency=0.15
 card.BorderSizePixel=0
+card.ZIndex=1
 card.Parent=bb
 local cr=Instance.new("UICorner")
-cr.CornerRadius=UDim.new(0,6)
+cr.CornerRadius=UDim.new(0,8)
 cr.Parent=card
+local gr=Instance.new("UIGradient")
+gr.Rotation=90
+gr.Color=ColorSequence.new(WHITE,Color3.new(0.75,0.75,0.78))
+gr.Parent=card
 local sk=Instance.new("UIStroke")
-sk.Thickness=1.2
-sk.Transparency=0.15
-sk.Color=WHITE
+sk.Thickness=2
+sk.Transparency=0
+sk.Color=Color3.fromRGB(4,6,14)
+sk.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
 sk.Parent=card
+local sheen=Instance.new("Frame")
+sheen.Name="sheen"
+sheen.Position=UDim2.fromOffset(3,2)
+sheen.Size=UDim2.new(1,-6,0.4,0)
+sheen.BackgroundColor3=WHITE
+sheen.BorderSizePixel=0
+sheen.ZIndex=2
+sheen.Parent=card
+local shc=Instance.new("UICorner")
+shc.CornerRadius=UDim.new(0,5)
+shc.Parent=sheen
+local shg=Instance.new("UIGradient")
+shg.Rotation=90
+shg.Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,0.64),NumberSequenceKeypoint.new(1,0.97)})
+shg.Parent=sheen
+local acc=Instance.new("Frame")
+acc.Name="acc"
+acc.AnchorPoint=Vector2.new(0,0.5)
+acc.Position=UDim2.new(0,5,0.5,0)
+acc.Size=UDim2.new(0,3,1,-10)
+acc.BackgroundColor3=WHITE
+acc.BorderSizePixel=0
+acc.ZIndex=3
+acc.Parent=card
+local acr=Instance.new("UICorner")
+acr.CornerRadius=UDim.new(1,0)
+acr.Parent=acc
 local l=Instance.new("TextLabel")
 l.Name="t"
 l.BackgroundTransparency=1
-l.Position=UDim2.fromOffset(0,3)
-l.Size=UDim2.new(1,0,0,14)
+l.Position=UDim2.fromOffset(4,3)
+l.Size=UDim2.new(1,-4,0,14)
 l.Font=Enum.Font.GothamBold
 l.TextSize=12
-l.TextColor3=WHITE
+l.TextColor3=Color3.fromRGB(245,247,255)
+l.TextStrokeColor3=Color3.fromRGB(4,6,14)
 l.TextStrokeTransparency=1
 l.Text=""
+l.ZIndex=4
 l.Parent=card
 local s=Instance.new("TextLabel")
 s.Name="s"
 s.BackgroundTransparency=1
-s.Position=UDim2.fromOffset(0,18)
-s.Size=UDim2.new(1,0,0,12)
+s.Position=UDim2.fromOffset(4,18)
+s.Size=UDim2.new(1,-4,0,12)
 s.Font=Enum.Font.GothamMedium
 s.TextSize=11
-s.TextColor3=Color3.fromRGB(205,210,222)
+s.TextColor3=Color3.fromRGB(143,154,198)
+s.TextStrokeColor3=Color3.fromRGB(4,6,14)
 s.TextStrokeTransparency=1
 s.Text=""
 s.Visible=false
+s.ZIndex=4
 s.Parent=card
 local back=Instance.new("Frame")
 back.Name="bar"
 back.AnchorPoint=Vector2.new(0.5,1)
-back.Position=UDim2.new(0.5,0,1,-4)
-back.Size=UDim2.new(1,-14,0,4)
-back.BackgroundColor3=Color3.fromRGB(44,46,58)
+back.Position=UDim2.new(0.5,4,1,-4)
+back.Size=UDim2.new(1,-24,0,4)
+back.BackgroundColor3=Color3.fromRGB(9,13,40)
 back.BorderSizePixel=0
 back.Visible=false
+back.ZIndex=4
 back.Parent=card
 local bc=Instance.new("UICorner")
 bc.CornerRadius=UDim.new(1,0)
 bc.Parent=back
+local bst=Instance.new("UIStroke")
+bst.Thickness=1.5
+bst.Transparency=0
+bst.Color=Color3.fromRGB(4,6,14)
+bst.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+bst.Parent=back
 local fill=Instance.new("Frame")
 fill.Size=UDim2.fromScale(0,1)
 fill.BorderSizePixel=0
+fill.ZIndex=5
 fill.Parent=back
 local fc=Instance.new("UICorner")
 fc.CornerRadius=UDim.new(1,0)
 fc.Parent=fill
 bb.Parent=f
-u={bb=bb,card=card,stroke=sk,lbl=l,sub=s,bar=back,fill=fill}
+u={bb=bb,card=card,stroke=sk,lbl=l,sub=s,bar=back,fill=fill,acc=acc,sheen=sheen,barStroke=bst}
 end
 u.bb.StudsOffsetWorldSpace=Vector3.new(0,e.kind=="player"and 3.4 or 2.2,0)
 u.bb.Adornee=e.adornee
 e.ui=u
 e.cText,e.cSubTxt,e.cCol,e.cFade,e.cEn,e.cBarV,e.cFrac,e.cSize,e.cBarCol=nil,nil,nil,nil,nil,nil,nil,nil,nil
-e.cCard,e.cAlpha=nil,nil
+e.cCard,e.cAlpha,e.cTC=nil,nil,nil
 return u
 end
 function E.uiRelease(e)
@@ -6131,29 +6231,40 @@ u.lbl.TextSize=sz
 u.sub.Text=subTxt
 u.sub.Visible=subTxt~=""
 u.bar.Visible=showBar
-local cw=math.max(E.tw(text,sz,Enum.Font.GothamBold),E.tw(subTxt,11,Enum.Font.GothamMedium),showBar and 54 or 0)+18
+local cw=math.max(E.tw(text,sz,Enum.Font.GothamBold),E.tw(subTxt,11,Enum.Font.GothamMedium),showBar and 54 or 0)+26
 local y=3
-if text~=""then u.lbl.Position=UDim2.fromOffset(0,y);y=y+15 end
-if subTxt~=""then u.sub.Position=UDim2.fromOffset(0,y);y=y+12 end
+if text~=""then u.lbl.Position=UDim2.fromOffset(4,y);y=y+15 end
+if subTxt~=""then u.sub.Position=UDim2.fromOffset(4,y);y=y+12 end
 if showBar then y=y+9 end
 u.card.Size=UDim2.fromOffset(clamp(math.floor(cw+0.5),46,320),y+3)
 end
 local ca=C.cardAlpha or 0.3
-if e.cCol~=col then e.cCol=col;u.lbl.TextColor3=col;u.stroke.Color=col end
+local tcol=cardOn and COL.lock or col
+if e.cCol~=col or e.cTC~=tcol then
+e.cCol,e.cTC=col,tcol
+u.lbl.TextColor3=tcol
+u.acc.BackgroundColor3=col
+end
 if e.cFade~=fade or e.cCard~=cardOn or e.cAlpha~=ca then
 e.cFade,e.cCard,e.cAlpha=fade,cardOn,ca
 u.lbl.TextTransparency=fade
 u.sub.TextTransparency=fade
 if cardOn then
 u.card.BackgroundTransparency=math.min(1,ca+fade*0.5)
-u.stroke.Transparency=0.15+fade
+u.stroke.Transparency=math.min(1,fade)
+u.acc.BackgroundTransparency=math.min(1,fade)
+u.sheen.BackgroundTransparency=math.min(1,fade)
+u.barStroke.Transparency=math.min(1,fade)
 u.lbl.TextStrokeTransparency=1
 u.sub.TextStrokeTransparency=1
 else
 u.card.BackgroundTransparency=1
 u.stroke.Transparency=1
-u.lbl.TextStrokeTransparency=0.5+fade*0.5
-u.sub.TextStrokeTransparency=0.5+fade*0.5
+u.acc.BackgroundTransparency=1
+u.sheen.BackgroundTransparency=1
+u.barStroke.Transparency=1
+u.lbl.TextStrokeTransparency=0.2+fade*0.8
+u.sub.TextStrokeTransparency=0.3+fade*0.7
 end
 end
 if showBar then
@@ -6175,7 +6286,7 @@ if e.cHlT~=tgt then e.cHlT=tgt;h.Adornee=tgt end
 local col=e.col or WHITE
 if e.cHlCol~=col then
 e.cHlCol=col
-h.OutlineColor=col:Lerp(WHITE,0.12)
+h.OutlineColor=col:Lerp(COL.lock,0.22)
 h.FillColor=col
 end
 local ft
@@ -6471,6 +6582,7 @@ end
 local function dropAll()
 if R.folder then pcall(function()R.folder:Destroy()end)end
 R.folder,R.ring,R.fill,R.rip,R.killers=nil,nil,nil,nil,{}
+R.rim=nil
 ENV.DP3_RINGFOLDER=nil
 end
 local function ensureFolder()
@@ -6660,6 +6772,11 @@ if not okInst(rip)then
 rip=R.newCyl(f,"rip",2)
 R.rip=rip
 end
+local rim=R.rim
+if not okInst(rim)then
+rim=R.newCyl(f,"rim",4)
+R.rim=rim
+end
 local tcol
 if near then tcol=R.ready and C.inRange or C.danger
 else tcol=R.ready and C.ready or C.cooldown end
@@ -6676,6 +6793,14 @@ ring.Color3=col
 ring.AlwaysOnTop=onTop
 ring.Transparency=near and(0.06+0.12*pulse)or(0.3+0.1*pulse)
 ring.Visible=true
+rim.Adornee=me
+rim.Radius=range+math.max(0.18,th*0.45)
+rim.InnerRadius=range
+rim.CFrame=cf
+rim.Color3=Color3.fromRGB(4,6,14)
+rim.AlwaysOnTop=onTop
+rim.Transparency=0.45
+rim.Visible=true
 if C.fill~=false then
 disc.Adornee=me
 disc.Radius=math.max(0.2,range-th)
@@ -6758,164 +6883,12 @@ CFG.dodge.enabled=not CFG.dodge.enabled
 notify("Auto Dodge: "..(CFG.dodge.enabled and"ON"or"OFF"))
 end
 end))
-do
-local S=CFG.speed
-local rp=RaycastParams.new()
-rp.FilterType=Enum.RaycastFilterType.Exclude
-pcall(function()rp.RespectCanCollide=true end)
-local fchar,cur,phase=nil,0,math.random()*6.28
-local RUN,RUNNP=Enum.HumanoidStateType.Running,Enum.HumanoidStateType.RunningNoPhysics
-local BAD={}
-for _,nm in ipairs({"Seated","Dead","Climbing","Swimming","PlatformStanding","Ragdoll","FallingDown","GettingUp"})do
-local okE,stE=pcall(function()return Enum.HumanoidStateType[nm]end)
-if okE and stE then BAD[stE]=true end
-end
-local ST={ahead=0,scale=1,capNow=nil,lastPos=nil,lastDir=nil,pauseUntil=0,cleanAt=os.clock(),snaps=0,diagAt=0,why=nil,wasOn=nil,btnOn=nil,statAt=0}
-local function setSpeed(on)
-S.enabled=on and true or false
-notify("Speed lari: "..(S.enabled and"ON"or"OFF"))
-pcall(function()local a=ENV.__DPAPI;if a and a.Store then a.Store.touch()end end)
-end
-local btn
-do
+-- speed lari dihapus (ga jalan). Sisa tombol SPD dari load lama dibersihin di sini.
+pcall(function()
 local par=(gethui and gethui())or game:GetService("CoreGui")
-pcall(function()local o=par:FindFirstChild("DP3_SpeedBtn");if o then o:Destroy()end end)
-local okB,gui=pcall(function()
-local g=Instance.new("ScreenGui")
-g.Name="DP3_SpeedBtn"
-g.ResetOnSpawn=false
-g.IgnoreGuiInset=true
-g.DisplayOrder=50
-g.Parent=par
-return g
+local o=par:FindFirstChild("DP3_SpeedBtn")
+if o then o:Destroy()end
 end)
-if okB and gui then
-ENV.DP3_SPEEDGUI=gui
-btn=Instance.new("TextButton")
-btn.Size=UDim2.fromOffset(54,40)
-btn.Position=UDim2.new(0,10,0,64)
-btn.BackgroundColor3=Color3.fromRGB(90,40,40)
-btn.BackgroundTransparency=0.15
-btn.TextColor3=Color3.new(1,1,1)
-btn.Font=Enum.Font.GothamBold
-btn.TextSize=12
-btn.Text="SPD\nOFF"
-btn.Parent=gui
-local cr=Instance.new("UICorner")
-cr.CornerRadius=UDim.new(0,10)
-cr.Parent=btn
-btn.Activated:Connect(function()setSpeed(not S.enabled)end)
-end
-end
-keep(UIS.InputBegan:Connect(function(i,gp)
-if gp or not alive()then return end
-local kk=CFG.keys.speed
-if kk and i.KeyCode==kk then setSpeed(not S.enabled)end
-end))
-local function speedWhy(hum,root,now)
-if not(hum and root)then return"karakter belum siap"end
-if hum.Health<=0 then return"mati"end
-if now<ST.pauseUntil then return"jeda abis kepental"end
-if hum.Sit or hum.PlatformStand or root.Anchored then return"duduk atau terkunci"end
-local st=hum:GetState()
-if BAD[st]then return"state "..st.Name end
-if hum.MoveDirection.Magnitude<=0.1 then return"ga lagi gerak"end
-if not(st==RUN or st==RUNNP or hum.FloorMaterial~=Enum.Material.Air)then return"di udara ("..st.Name..")"end
-local v=root.AssemblyLinearVelocity
-local hs=Vector3.new(v.X,0,v.Z).Magnitude
-if hs<math.max(hum.WalkSpeed,6)*0.6 then return string.format("kecepatan lari rendah (%.1f, WalkSpeed %.1f)",hs,hum.WalkSpeed)end
-return nil
-end
-keep(RunService.Heartbeat:Connect(function(dt)
-if not alive()then return end
-local hum,root=myHum(),myRoot()
-local now=os.clock()
-local want=S.enabled==true
-if btn and btn.Parent and ST.btnOn~=want then
-ST.btnOn=want
-btn.Text=want and"SPD\nON"or"SPD\nOFF"
-btn.BackgroundColor3=want and Color3.fromRGB(40,140,80)or Color3.fromRGB(90,40,40)
-end
-if ST.wasOn~=want then
-ST.wasOn=want
-ST.why=nil
-log("SPEED",want and"nyala"or"mati")
-end
--- deteksi kepental: posisi mundur tiba-tiba setelah kita nambah jarak
-if ST.lastPos and ST.lastDir and hum and root and ST.ahead>0.5 then
-local d=root.Position-ST.lastPos
-local back=-(d.X*ST.lastDir.X+d.Z*ST.lastDir.Z)
-local lim=1.5+hum.WalkSpeed*math.min(dt,0.25)*0.5
-if back>lim then
-ST.snaps=ST.snaps+1
-local capCfg=math.max(1,tonumber(S.cap)or 8)
-if S.adapt~=false then
-ST.scale=math.max(0.2,ST.scale*0.7)
-ST.capNow=math.max(1.5,math.min(ST.capNow or capCfg,ST.ahead)*0.6)
-end
-ST.pauseUntil,ST.ahead,cur,ST.cleanAt=now+1.5,0,0,now
-ST.lastPos=nil
-log("SPEED",string.format("kepental balik %.1f stud (ke-%d) -> tambahan jadi x%.2f, batas %.1f stud",back,ST.snaps,ST.scale,ST.capNow or capCfg))
-return
-end
-end
-ST.lastPos=nil
-local goal=0
-if want then
-local why=speedWhy(hum,root,now)
-if why then
-if why~=ST.why and now-ST.diagAt>2 then
-ST.why,ST.diagAt=why,now
-log("SPEED","nunggu: "..why)
-end
-else
-ST.why=nil
-goal=1
-end
-end
-local edt=math.min(dt,0.1)
-local step=edt/math.max(0.1,tonumber(S.ramp)or 0.6)
-if goal>cur then cur=math.min(goal,cur+step)else cur=math.max(goal,cur-step*2)end
-if S.adapt~=false and now-ST.cleanAt>20 then
-ST.cleanAt=now
-ST.scale=math.min(1,ST.scale*1.12)
-if ST.capNow then ST.capNow=math.min(math.max(1,tonumber(S.cap)or 8),ST.capNow*1.15)end
-end
-if cur<=0.001 or not hum or not root then ST.ahead=math.max(0,ST.ahead-edt*2);return end
-local capCfg=math.max(1,tonumber(S.cap)or 8)
-local cap=math.min(capCfg,ST.capNow or capCfg)
-local pct=math.clamp(tonumber(S.pct)or 0,0,40)*ST.scale
-if pct<=0 then return end
-local md=hum.MoveDirection
-local v=root.AssemblyLinearVelocity
-local hv=Vector3.new(v.X,0,v.Z)
-local dir
-if hv.Magnitude>=math.max(hum.WalkSpeed*0.5,1)then
-dir=hv.Unit
-else
-dir=Vector3.new(md.X,0,md.Z)
-if dir.Magnitude<0.1 then return end
-dir=dir.Unit
-end
-phase=phase+dt*0.7
-local base=math.max(hum.WalkSpeed,hv.Magnitude)*(pct/100)
-ST.ahead=math.max(0,ST.ahead-math.max(0.3,base*0.85)*edt)
-local extra=math.min(base*(1+0.12*math.sin(phase))*cur*edt,math.max(cap-ST.ahead,0))
-if extra<0.002 then return end
-if S.wallCheck then
-local ch=hum.Parent
-if ch~=fchar then fchar=ch;rp.FilterDescendantsInstances={ch}end
-if workspace:Raycast(root.Position,dir*(extra+2.2),rp)then return end
-end
-root.CFrame=root.CFrame+dir*extra
-ST.ahead=ST.ahead+extra
-ST.lastPos,ST.lastDir=root.Position,dir
-if now-ST.statAt>4 then
-ST.statAt=now
-log("SPEED",string.format("aktif +%.1f st/dtk | pct %.0f | jarak depan %.1f/%.1f stud | WalkSpeed %.0f | lari %.0f",base,pct,ST.ahead,cap,hum.WalkSpeed,hv.Magnitude))
-end
-end))
-end
 do
 local L=CFG.light
 local Lighting=game:GetService("Lighting")
@@ -7134,13 +7107,23 @@ g.Name,g.ResetOnSpawn,g.DisplayOrder,g.IgnoreGuiInset="DP3_POVBtn",false,9990,tr
 g.Parent=parent
 local b=Instance.new("TextButton")
 b.AnchorPoint,b.Position=Vector2.new(0.5,0.5),UDim2.new(1,-80,0.45,70)
-b.Size,b.BackgroundColor3,b.BackgroundTransparency=UDim2.fromOffset(58,58),Color3.fromRGB(40,60,110),0.15
-b.Font,b.TextSize,b.TextColor3,b.Text=Enum.Font.GothamBold,12,Color3.new(1,1,1),"POV\nFPP"
+b.Size,b.BackgroundColor3,b.BackgroundTransparency=UDim2.fromOffset(58,58),Color3.fromRGB(69,108,230),0.05
+b.Font,b.TextSize,b.TextColor3,b.Text=Enum.Font.GothamBold,12,Color3.fromRGB(245,247,255),"POV\nFPP"
+b.TextStrokeColor3,b.TextStrokeTransparency=Color3.fromRGB(4,6,14),0.5
 b.AutoButtonColor,b.Visible=false,false
 b.Parent=g
 local c=Instance.new("UICorner")
 c.CornerRadius=UDim.new(1,0)
 c.Parent=b
+local pg=Instance.new("UIGradient")
+pg.Rotation=90
+pg.Color=ColorSequence.new(Color3.new(1,1,1),Color3.new(0.84,0.84,0.88))
+pg.Parent=b
+local ps=Instance.new("UIStroke")
+ps.Color=Color3.fromRGB(4,6,14)
+ps.Thickness=2.5
+ps.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+ps.Parent=b
 b.InputBegan:Connect(function(i)
 if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
 toggle()
@@ -7164,7 +7147,7 @@ local tpp=P.tpp==true
 local txt=tpp and"POV\nTPP"or"POV\nFPP"
 if btn.Text~=txt then
 btn.Text=txt
-btn.BackgroundColor3=tpp and Color3.fromRGB(40,140,80)or Color3.fromRGB(40,60,110)
+btn.BackgroundColor3=tpp and Color3.fromRGB(18,164,104)or Color3.fromRGB(69,108,230)
 end
 end
 if not(isK and ch and hum and hum.Health>0)then return end
@@ -7848,7 +7831,7 @@ local pv=ENV.DP3_POV
 if pv and pv.restore then pv.restore()end
 end)
 pcall(ESP.clear)
-for _,k in ipairs({"DP3_VEILFOLDER","DP3_ESPFOLDER","DP3_RINGFOLDER","DP3_SPEEDGUI"})do
+for _,k in ipairs({"DP3_VEILFOLDER","DP3_ESPFOLDER","DP3_RINGFOLDER"})do
 local f=ENV[k]
 if f then pcall(function()f:Destroy()end);ENV[k]=nil end
 end
@@ -9653,7 +9636,6 @@ local OPT_RANGE={
 ["gun.headMaxDist"]={20,300,5},["gun.headMaxSpeed"]={2,40,1},["gun.aimHold"]={0,1,0.05},
 ["gun.headYOffset"]={-0.6,0.6,0.05},["esp.cardAlpha"]={0,0.9,0.05},["ring.thickness"]={0.1,1.5,0.05},
 ["veil.blockedHold"]={0,15,0.5},["gun.silentFov"]={10,180,5},["veil.silentFov"]={10,180,5},["gun.unsteadyScale"]={0.3,1,0.05},
-["speed.pct"]={0,20,1},["speed.ramp"]={0.2,2,0.1},
 ["pov.zoom"]={4,20,1},["pov.height"]={0,4,0.1},["veil.meleeLead"]={0,1,0.05},
 }
 local function optAutoStep(v)
@@ -9695,7 +9677,7 @@ W.seg(parent,labels,K.pstr(k,labels))
 end
 end
 end
-local PLABEL={["light.enabled"]="Terang peta",["speed.adapt"]="Adaptif anti kepental",["parry.enabled"]="Auto parry",["skill.enabled"]="Auto skill check",["gun.aimLock"]="Aim lock gun",
+local PLABEL={["light.enabled"]="Terang peta",["parry.enabled"]="Auto parry",["skill.enabled"]="Auto skill check",["gun.aimLock"]="Aim lock gun",
 ["gun.trigger"]="Auto fire",["gun.snap"]="Gun snap",["gun.silent"]="Silent aim gun",["veil.silent"]="Silent aim spear",["esp.enabled"]="ESP",["ring.enabled"]="Cincin killer",
 ["veil.enabled"]="Lock killer",["vault.enabled"]="Auto vault",["melee.enabled"]="Auto hit",["vault.fast"]="Vault cepat",["skill.hideUI"]="Sembunyikan UI skill check",["dodge.enabled"]="Auto dodge"}
 function K.pGet(key)
@@ -9777,7 +9759,7 @@ end
 K.SYSDEF={
 srv={name="Survivor",keys={"parry.enabled","skill.enabled","gun.aimLock","gun.trigger","gun.snap","gun.silent","vault.enabled","dodge.enabled"},
 master={"parry.enabled","skill.enabled","gun.aimLock","gun.trigger"}},
-klr={name="Killer",keys={"veil.enabled","veil.silent","pov.tpp","speed.enabled","melee.enabled"},master={"veil.enabled"}},
+klr={name="Killer",keys={"veil.enabled","veil.silent","pov.tpp","melee.enabled"},master={"veil.enabled"}},
 esp={name="ESP",keys={"esp.enabled"},master={"esp.enabled"}},
 }
 function K.sysCount(id)
@@ -11327,7 +11309,7 @@ W.heading(p,"Sistem")
 local sysg=new("Frame",{Size=UDim2.new(1,0,0,132),BackgroundTransparency=1,LayoutOrder=nextLO()},p)
 new("UIGridLayout",{CellSize=UDim2.new(0.5,-4,0,62),CellPadding=UDim2.fromOffset(8,8),SortOrder=Enum.SortOrder.LayoutOrder},sysg)
 W.sysCard(sysg,"SURVIVOR","srv","Parry · Skill check · Gun")
-W.sysCard(sysg,"KILLER","klr","Lock · POV · Speed lari")
+W.sysCard(sysg,"KILLER","klr","Lock · POV · Auto hit")
 W.sysCard(sysg,"ESP","esp","Outline dan info objek")
 W.sysCard(sysg,"ANTI-LAG","lag","Nono · cap FPS · auto boost")
 local c4=W.card(p)
@@ -11392,11 +11374,6 @@ W.slider(cvt,"Jarak picu ke jendela",2,8,0.5," stud",K.pnum("vault.range"))
 W.slider(cvt,"Kecepatan lari minimal",0,16,1," st/dtk",K.pnum("vault.minSpeed"))
 W.slider(cvt,"Toleransi sudut ke jendela",20,80,5," °",K.pnum("vault.angle"))
 W.slider(cvt,"Jeda antar vault",0.2,2,0.05," dtk",K.pnum("vault.gap"))
-local csp=W.section(p,"Speed lari",false)
-W.toggle(csp,"Speed lari","Tambahan kecepatan lari kecil dan halus, otomatis turun kalau game narik balik posisi",K.pbool("speed.enabled"))
-W.slider(csp,"Tambahan kecepatan",0,40,1," %",K.pnum("speed.pct"))
-W.toggle(csp,"Adaptif anti kepental","Kalau game narik posisi balik, tambahan otomatis dikecilkan lalu naik pelan lagi",K.pbool("speed.adapt"))
-W.slider(csp,"Batas keunggulan jarak",2,12,0.5," stud",K.pnum("speed.cap"))
 local c2=W.section(p,"Parry",true)
 W.slider(c2,"Jangkauan parry",4,30,1," stud",K.pnum("parry.range"))
 W.slider(c2,"Parry nyampe sebelum kena",0,0.4,0.01," dtk",K.pnum("parry.arriveLead"))
@@ -11453,7 +11430,6 @@ W.banner(p,"par")
 local c1=W.stack(p)
 W.toggle(c1,"Lock killer (semua killer)","Kamera nempel ke survivor saat kamu jadi killer apa pun (Veil: kamera tidak digerakkan, silent). Veil: spear, Butcher: chain, Cure: flask, killer lain: lurus. Hotkey RightShift",K.pbool("veil.enabled"))
 W.toggle(c1,"POV killer: TPP","Ganti kamera killer dari FPP ke TPP. Hotkey RightCtrl atau tombol POV di layar",K.pbool("pov.tpp"))
-W.toggle(c1,"Speed lari","Tambahan kecepatan lari kecil dan halus, otomatis turun kalau game narik balik posisi",K.pbool("speed.enabled"))
 W.toggle(c1,"Auto hit","Serang otomatis saat survivor masuk jangkauan hit. Badan dan kamera langsung menghadap survivor. Hotkey Delete",K.pbool("melee.enabled"))
 local setVeil=W.chipRow(c1,"Killer terdeteksi",nil)
 reg(function()
@@ -11498,12 +11474,6 @@ local c8=W.section(p,"POV killer",false)
 W.slider(c8,"Jarak kamera TPP",4,20,1," stud",K.pnum("pov.zoom"))
 W.slider(c8,"Tinggi kamera TPP",0,4,0.1," stud",K.pnum("pov.height"))
 W.toggle(c8,"Tombol POV di layar",nil,K.pbool("pov.button"))
-local c7=W.section(p,"Speed lari",false)
-W.slider(c7,"Tambahan kecepatan",0,40,1," %",K.pnum("speed.pct"))
-W.slider(c7,"Waktu naik ke penuh",0.2,2,0.1," dtk",K.pnum("speed.ramp"))
-W.toggle(c7,"Cek tembok di depan","Berhenti nambah kalau ada tembok atau objek tepat di depan",K.pbool("speed.wallCheck"))
-W.toggle(c7,"Adaptif anti kepental","Kalau game narik posisi balik, tambahan otomatis dikecilkan lalu naik pelan lagi",K.pbool("speed.adapt"))
-W.slider(c7,"Batas keunggulan jarak",2,12,0.5," stud",K.pnum("speed.cap"))
 W.btnRow(p,{
 {"Dump SpearMath","norm",function()K.act("dumpMath")end},
 {"Reset kalibrasi Veil","norm",function()K.act("resetCalib")end},
