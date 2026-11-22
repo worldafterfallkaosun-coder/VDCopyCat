@@ -69,6 +69,18 @@ preHold=0.06,
 preGap=0.8,
 onlyCooldown=true,
 fromAction=true,
+mode360=true,
+chase=true,
+autoMove=true,
+chaseRange=22,
+radiusNear=3.5,
+radiusFar=9,
+burstRadius=3,
+burstTime=0.7,
+minTurn=0.8,
+maxTurn=6,
+spinAccel=16,
+dirHold=0.6,
 },
 gun={
 snap=true,
@@ -1648,6 +1660,235 @@ local dir=away*CFG.dodge.backWeight+latOf(k)*drive.side*CFG.dodge.strafeWeight
 if dir.Magnitude>0.001 then return dir.Unit end
 return away
 end
+-- ====== 360 TECH v22 ======
+-- Mekanisme 360 tech asli: kamera diputar horizontal terus-menerus, dan gerak karakter itu RELATIF KAMERA,
+-- jadi arah lari ikut berputar -> jalur melengkung (lingkaran) yang bikin lunge killer meleset.
+-- Alur tiap frame (semua tahap nyambung): Tracking -> Adaptive -> Sync -> Camera + Move
+--   Tracking : posisi/kecepatan killer (dari replikasi client), jarak, closing speed, arah hadap, bearing ke arah lariku
+--   Adaptive : status idle/chase/evade, radius lingkaran (makin nempel makin rapat), arah putar (menjauhi sisi killer)
+--   Sync     : kecepatan putar dihaluskan (percepatan dibatasi) biar kamera ga patah-patah / jitter
+--   Camera   : yaw kamera diputar mengelilingi kepala karakter. Move: input tetap relatif kamera
+--              (joystick asli kalau lagi dipegang, kalau ga ada dan autoMove nyala -> maju relatif kamera)
+local T={st="idle",w=0,sign=0,signAt=-10,wallAt=0,chk=0,burstUntil=0,burstSign=1,loseAt=0,
+nStart=0,nBurst=0,ctlAt=-10,fed=false,tk={},kt=setmetatable({},{__mode="k"})}
+local function rotY(v,a)
+local c,s=math.cos(a),math.sin(a)
+return Vector3.new(v.X*c+v.Z*s,0,-v.X*s+v.Z*c)
+end
+function T.off(hard)
+T.st="idle"
+T.sign=0
+T.fed=false
+if hard then T.w=0 end
+end
+-- joystick/keyboard lagi dipegang? (baca langsung dari ControlModule, bukan dari MoveDirection yang ikut kena Move kita)
+function T.joy(hum)
+if T.ctl==nil or(T.ctl==false and os.clock()-T.ctlAt>5)then
+T.ctlAt=os.clock()
+T.ctl=false
+pcall(function()
+local ps=LP:FindFirstChild("PlayerScripts")
+local pm=ps and ps:FindFirstChild("PlayerModule")
+if pm then T.ctl=require(pm):GetControls()end
+end)
+end
+if T.ctl then
+local ok,v=pcall(T.ctl.GetMoveVector,T.ctl)
+if ok and typeof(v)=="Vector3"then return v.Magnitude>0.1 end
+end
+return hum.MoveDirection.Magnitude>0.1 and not T.fed
+end
+function T.heading(hum,cam)
+local f=dflat(hum.MoveDirection)
+if f.Magnitude>0.1 then return f.Unit end
+local lv=dflat(cam.CFrame.LookVector)
+if lv.Magnitude>0.05 then return lv.Unit end
+return Vector3.new(0,0,-1)
+end
+-- KillerTracking: killer terdekat yang beneran ngancam, kecepatannya dihaluskan (EMA ~80 ms)
+function T.track(now,me,h)
+local best,bd
+for _,k in ipairs(killers())do
+local ch=k.char
+if k.root.Parent and not(ch:GetAttribute("IsCarrying")or ch:GetAttribute("IsStunned"))then
+local d=dflat(k.root.Position-me.Position).Magnitude
+if not bd or d<bd then best,bd=k,d end
+end
+end
+local tk=T.tk
+if not best then tk.k=nil return nil end
+local kp=best.root.Position
+local rec=T.kt[best.char]
+if not rec then
+rec={pos=kp,vel=Vector3.new(0,0,0),t=now}
+T.kt[best.char]=rec
+end
+local el=now-rec.t
+if el>0.5 then
+rec.pos,rec.vel,rec.t=kp,Vector3.new(0,0,0),now
+elseif el>0.004 then
+local raw=dflat(kp-rec.pos)/el
+if raw.Magnitude>80 then raw=raw.Unit*80 end
+rec.vel=rec.vel:Lerp(raw,math.min(1,el*12))
+rec.pos,rec.t=kp,now
+end
+local rel=dflat(kp-me.Position)
+local dist=rel.Magnitude
+local dir=dist>0.01 and rel/dist or h
+local mv=dflat(me.AssemblyLinearVelocity)
+local look=dflat(best.root.CFrame.LookVector)
+tk.k=best
+tk.dist=dist
+tk.closing=-((rec.vel-mv):Dot(dir))
+tk.facing=look.Magnitude>0.05 and look.Unit:Dot(-dir)or 0
+tk.bearing=math.atan2(h:Cross(rel).Y,h:Dot(rel))
+tk.spd=mv.Magnitude
+return tk
+end
+-- AdaptiveChase: status + radius + arah putar. Mengembalikan status dan kecepatan putar target (rad/dtk, selalu positif)
+function T.adapt(now,tk,joy,hum,me,h)
+local C=CFG.dodge
+local enter=C.chaseRange
+local leave=enter+6
+local bursting=now<T.burstUntil
+local want=false
+if C.chase and tk and(joy or C.autoMove)then
+local d=tk.dist
+if T.st=="idle"then
+if joy then
+want=d<=enter and(tk.facing>-0.1 or d<=8)and(tk.closing>-1 or d<=8)
+else
+want=d<=enter*0.6 and tk.facing>0.3 and tk.closing>2
+end
+else
+want=d<=leave and not(tk.closing<-6 and d>enter*0.5)
+end
+end
+if want then
+T.loseAt=now
+elseif T.st=="chase"and now-T.loseAt<0.5 then
+want=true
+end
+local st=bursting and"evade"or(want and"chase"or"idle")
+local rn,rf=C.radiusNear,C.radiusFar
+if rn>rf then rn,rf=rf,rn end
+local ws=hum.WalkSpeed
+local spd=math.clamp(tk and tk.spd or 0,ws*0.6,ws*1.3)
+if spd<4 then spd=4 end
+local urg=0
+if tk then
+local p=math.clamp((enter-tk.dist)/math.max(enter-rn*2,1),0,1)
+local cl=math.clamp(tk.closing/math.max(spd,6),0,1)
+urg=math.clamp(0.7*p+0.3*cl,0,1)
+end
+local radius=rf+(rn-rf)*urg
+if bursting then radius=math.min(radius,C.burstRadius)end
+local w=math.clamp(spd/math.max(radius,1),C.minTurn,C.maxTurn)
+if st~="idle"then
+if bursting then
+T.sign=T.burstSign
+else
+local b=tk and tk.bearing or 0
+local ab=math.abs(b)
+local ws2=0
+if ab>0.35 and ab<2.8 then ws2=(b>0)and-1 or 1 end
+if T.sign==0 then
+local pick=ws2~=0 and ws2 or 1
+if not sideClear(me,rotY(h,pick*0.5),5)and sideClear(me,rotY(h,-pick*0.5),5)then pick=-pick end
+T.sign=pick
+T.signAt=now
+elseif ws2~=0 and ws2~=T.sign and now-T.signAt>C.dirHold and sideClear(me,rotY(h,ws2*0.5),5)then
+T.sign,T.signAt=ws2,now
+end
+if now-T.wallAt>0.12 then
+T.wallAt=now
+if now-T.signAt>0.3 and not sideClear(me,rotY(h,T.sign*0.5),5)and sideClear(me,rotY(h,-T.sign*0.5),5)then
+T.sign,T.signAt=-T.sign,now
+end
+end
+end
+end
+if st~=T.st then
+if T.st=="idle"then T.nStart=T.nStart+1 end
+if now-(T.sayAt or-10)>0.4 then
+T.sayAt=now
+log("DODGE",string.format("360 %s -> %s | killer %.1f stud | radius %.1f | putar %.1f rad/dtk %s",T.st,st,tk and tk.dist or-1,radius,w,
+T.sign>0 and"kiri"or"kanan"))
+end
+T.st=st
+end
+return st,w,bursting
+end
+-- SynchronizationEngine: kecepatan putar dihaluskan (percepatan dibatasi) lalu dipakai bareng buat kamera + gerak
+function T.step(dt)
+local C=CFG.dodge
+if not(C.enabled and C.mode360 and alive()and amSurvivor())then
+if T.w~=0 or T.st~="idle"then T.off(true)end
+return
+end
+local ch,hum,me=myChar(),myHum(),myRoot()
+local cam=workspace.CurrentCamera
+if not(ch and hum and me and cam)or hum.Health<=0 or cam.CameraType==Enum.CameraType.Scriptable then
+if T.w~=0 or T.st~="idle"then T.off(true)end
+return
+end
+if T.ch~=ch then
+T.ch=ch
+T.off(true)
+end
+local now=os.clock()
+local bursting=now<T.burstUntil
+if T.st=="idle"and T.w==0 and not bursting then
+if now-T.chk<0.1 then return end
+T.chk=now
+end
+dt=math.min(dt or 0.016,0.05)
+if blockedBy(ch,hum)or ch:GetAttribute("Aiming")==true or(me:HasTag("doing action")and not(bursting and C.fromAction))then
+if T.w~=0 or T.st~="idle"then T.off(true)end
+return
+end
+local h=T.heading(hum,cam)
+local joy=T.joy(hum)
+local tk=T.track(now,me,h)
+local st,w=T.adapt(now,tk,joy,hum,me,h)
+local target=(st~="idle")and T.sign*w or 0
+local acc=(st=="evade"and C.spinAccel*2.5 or C.spinAccel)*dt
+local diff=target-T.w
+if diff>acc then diff=acc elseif diff<-acc then diff=-acc end
+T.w=T.w+diff
+if st=="idle"and math.abs(T.w)<0.02 then
+T.w=0
+T.sign=0
+end
+local dy=T.w*dt
+if dy~=0 then
+local pv=me.Position+Vector3.new(0,1.6,0)
+cam.CFrame=CFrame.new(pv)*CFrame.Angles(0,dy,0)*CFrame.new(-pv)*cam.CFrame
+end
+if st~="idle"and C.autoMove and not joy then
+pcall(function()hum:Move(Vector3.new(0,0,-1),true)end)
+T.fed=true
+else
+T.fed=false
+end
+end
+-- burst dari deteksi animasi serang / antisipasi: lingkaran rapat langsung, belok ke sisi samping killer yang bebas
+function T.burst(k,side,now)
+local me,hum,cam=myRoot(),myHum(),workspace.CurrentCamera
+local h=(me and hum and cam)and T.heading(hum,cam)or Vector3.new(0,0,-1)
+local lat=latOf(k)*side
+T.burstSign=(h:Cross(lat).Y>=0)and 1 or-1
+T.burstUntil=now+CFG.dodge.burstTime
+T.sign,T.signAt=T.burstSign,now
+T.nBurst=T.nBurst+1
+end
+function T.statusText()
+local tk=T.tk
+return string.format("%s | putar %.2f rad/dtk | mulai %d kali | burst %d | killer %s",T.st,T.w,T.nStart,T.nBurst,
+tk.k and string.format("%.1f stud, closing %.1f, bearing %.0f deg",tk.dist or 0,tk.closing or 0,math.deg(tk.bearing or 0))or"-")
+end
+Parry.t360=T
+-- ====== /360 TECH ======
 local function threat(k,lead,extra)
 local dist,facing=Parry.approach(k,lead)
 if not dist then return false,"killer ga ada"end
@@ -1698,9 +1939,15 @@ log("DODGE",string.format("hasil dodge [%s]: %s",why,lost>0.5 and string.format(
 end)
 drive.side=pickSide(k)
 drive.flipped=false
+local use360=CFG.dodge.mode360 and(CFG.dodge.autoMove or T.joy(hum))
+if use360 then
+T.burst(k,drive.side,now)
+else
 drive.active,drive.k=true,k
 drive.until_=now+CFG.dodge.holdTime
 drive.dir=dirFor(k)
+end
+why=why..(use360 and" > 360 tech"or" > geser lurus")
 local root=ch:FindFirstChild("HumanoidRootPart")
 log("DODGE",string.format("ngehindar dari %s [%s] | %.1f stud | ping %.0f ms | fps %.0f%s",
 k.player and k.player.Name or"?",why,dflat(me.Position-k.root.Position).Magnitude,Net.rtt*1000,1/Net.frameDt,
@@ -1723,10 +1970,16 @@ local alt=dirFor(k)
 if sideClear(me,alt,3)then drive.dir=alt end
 end
 end))
-RunService:BindToRenderStep("DP3_Dodge",Enum.RenderPriority.Last.Value+3,function()
-if not(drive.active and alive()and CFG.dodge.enabled)then return end
+RunService:BindToRenderStep("DP3_Dodge",Enum.RenderPriority.Last.Value+3,function(dt)
+if drive.active and alive()and CFG.dodge.enabled then
 local hum=myHum()
 if hum then pcall(function()hum:Move(drive.dir,false)end)end
+end
+local okT,eT=pcall(T.step,dt)
+if not okT then
+T.off(true)
+if os.clock()-(T.errAt or-10)>4 then T.errAt=os.clock()log("DODGE","360 error: "..tostring(eT))end
+end
 end)
 local watched=setmetatable({},{__mode="k"})
 local function watchKillerDodge(k)
@@ -1787,7 +2040,7 @@ if not(alive()and CFG.dodge.enabled and CFG.dodge.predict and amSurvivor())then 
 local now=os.clock()
 if now-(pre.gate or 0)<0.025 then return end
 pre.gate=now
-if drive.active or now-lastFire<CFG.dodge.preGap then pre.since=nil return end
+if drive.active or now<T.burstUntil or now-lastFire<CFG.dodge.preGap then pre.since=nil return end
 local me,hum=myRoot(),myHum()
 if not(me and hum and hum.Health>0)then pre.since=nil return end
 if CFG.dodge.onlyCooldown then
@@ -1814,7 +2067,7 @@ if now-pre.since<CFG.dodge.preHold then return end
 pre.since=nil
 if fire(best,"antisipasi")then DG.pre=DG.pre+1 end
 end))
-log("DODGE","modul auto dodge v18 dimuat (pantau animasi terus + antisipasi)")
+log("DODGE","modul auto dodge v22 dimuat (360 tech: tracking + adaptive + sync kamera/gerak)")
 end
 local NO_AIM_FLAGS={"isVaulting","isSliding","isDroppingPallet","isRepairing","isHealing","isUnhooking","isExiting"}
 local EQ={c=nil,t=-1,v=nil}
@@ -7907,6 +8160,7 @@ table.sort(qh)
 local L={
 string.format("DP v20 | ping %.0f ms | fps %.0f",Net.rtt*1000,1/Net.frameDt),
 string.format("parry: kirim %d | ok %d | meleset %d | antisipasi %d (ok %d, meleset %d)",Parry.nFire or 0,Parry.nOk or 0,Parry.nMiss or 0,Parry.preN or 0,Parry.preOk or 0,Parry.preMiss or 0),
+"360: "..((Parry.t360 and Parry.t360.statusText())or"-"),
 string.format("dodge: %d kali (animasi %d, antisipasi %d) | ga kena %d | kena %d | nunggu parry %d | diblok %d | animasi kebaca %d | terakhir: %s",dg.n,dg.anim,dg.pre,dg.ok or 0,dg.hit or 0,dg.wait or 0,dg.blocked,dg.seen,tostring(dg.why or"-")),
 string.format("cfg: parry.predict=%s fireUnknown=%s slack=%.2f | dodge.predict=%s onlyCooldown=%s | skill.precise=%s",tostring(CFG.parry.predict),tostring(CFG.parry.fireUnknown),CFG.parry.slack,tostring(CFG.dodge.predict),tostring(CFG.dodge.onlyCooldown),tostring(CFG.skill.precise)),
 string.format("gun: %s | hit %d/%d | auto fire %s | silent %s",tostring(Gun.status),Gun.hits,Gun.shots,CFG.gun.trigger and"ON"or"OFF",CFG.gun.silent and"ON"or"OFF"),
@@ -9710,6 +9964,7 @@ pcall(function()for _,c in ipairs(getconnections(s.hit.InputBegan))do c:Fire(fak
 for _,c in ipairs(MOD.lag.ended)do pcall(function()c:Fire(fake(Enum.UserInputState.End))end)end
 end
 local OPT_DESC={
+["dodge.chaseRange"]="killer masuk segini (stud) -> 360 mulai",["dodge.radiusNear"]="radius lingkaran saat killer nempel (stud)",["dodge.radiusFar"]="radius lingkaran saat killer masih jauh (stud)",["dodge.burstRadius"]="radius lingkaran saat serangan kebaca (stud)",["dodge.burstTime"]="lama putaran saat serangan kebaca (dtk)",["dodge.minTurn"]="kecepatan putar minimum (rad/dtk)",["dodge.maxTurn"]="kecepatan putar maksimum (rad/dtk)",["dodge.spinAccel"]="percepatan putar, kecil = lebih halus (rad/dtk2)",["dodge.dirHold"]="arah putar minimal ditahan segini sebelum boleh balik (dtk)",
 ["parry.range"]="jangkauan hit / parry (stud)",["parry.frontDot"]="killer harus di depan segini (dot)",
 ["parry.hitGuess"]="tebakan detik animasi mulai ke kena (animasi baru)",["parry.arriveLead"]="parry nyampe server segini sebelum kena (dtk)",
 ["parry.slack"]="telat segini masih dikirim (dtk)",["parry.via"]="game = ParryClient asli, input, remote",
@@ -9802,7 +10057,7 @@ end
 end
 local PLABEL={["light.enabled"]="Terang peta",["parry.enabled"]="Auto parry",["skill.enabled"]="Auto skill check",["gun.aimLock"]="Aim lock gun",
 ["gun.trigger"]="Auto fire",["gun.snap"]="Gun snap",["gun.silent"]="Silent aim gun",["veil.silent"]="Silent aim spear",["esp.enabled"]="ESP",["ring.enabled"]="Cincin killer",
-["veil.enabled"]="Lock killer",["vault.enabled"]="Auto vault",["melee.enabled"]="Auto hit",["vault.fast"]="Vault cepat",["skill.hideUI"]="Sembunyikan UI skill check",["dodge.enabled"]="Auto dodge"}
+["veil.enabled"]="Lock killer",["vault.enabled"]="Auto vault",["melee.enabled"]="Auto hit",["vault.fast"]="Vault cepat",["skill.hideUI"]="Sembunyikan UI skill check",["dodge.enabled"]="Auto dodge",["dodge.mode360"]="360 Tech dodge",["dodge.chase"]="Auto 360 saat dikejar",["dodge.autoMove"]="Auto maju saat 360"}
 function K.pGet(key)
 if MOD.par.state~="ready"or not CFG13 then return nil end
 return CFG13[key]
@@ -11464,6 +11719,9 @@ W.toggle(c1,"Auto vault jendela","Lompat jendela otomatis saat kamu lari menuju 
 W.toggle(c1,"Auto dodge","Hindar otomatis begitu animasi serang killer kebaca. Default cuma jalan pas parry lagi cooldown. Hotkey F9",K.pbool("dodge.enabled"))
 W.toggle(c1,"Dodge antisipasi","Geser sebelum animasi serang kalau killer nempel, ngadep, dan ngedeketin (ping tinggi bikin reaksi telat)",K.pbool("dodge.predict"))
 W.toggle(c1,"Dodge cuma pas parry cooldown","Nyala = dodge jalan kalau parry lagi ga bisa dipakai (cooldown, HP di bawah 50%, silence). Mati = dodge selalu duluan dan parry ngalah",K.pbool("dodge.onlyCooldown"))
+W.toggle(c1,"360 Tech dodge","Dodge pakai putaran kamera 360 (gerak ikut arah kamera, jalur melengkung) bukan geser lurus. Mati = geser lurus lama",K.pbool("dodge.mode360"))
+W.toggle(c1,"Auto 360 saat dikejar","Mulai muter otomatis begitu killer ngejar dalam jangkauan, berhenti kalau udah jauh. Butuh Auto dodge nyala",K.pbool("dodge.chase"))
+W.toggle(c1,"Auto maju saat 360","Kalau joystick dilepas pas 360 jalan, karakter tetap maju relatif kamera. Mati = cuma kamera yang muter, kamu yang gerak",K.pbool("dodge.autoMove"))
 W.toggle(c1,"Animasi vault cepat","Animasi lompat jendela dipercepat (client saja, semua vault)",K.pbool("vault.fast"))
 local setGun=W.chipRow(c1,"Gun",nil)
 reg(function()
@@ -11491,6 +11749,12 @@ UI.cs.s.Text=rdy and tostring(v.dodged)or"--"
 UI.cs.m.Text=rdy and tostring(v.hit)or"--"
 UI.cs.m.TextColor3=(rdy and v.hit>0)and TH.err or TH.bone
 end)
+local c360=W.section(p,"360 Tech dodge",false)
+W.slider(c360,"Jarak mulai 360",8,40,1," stud",K.pnum("dodge.chaseRange"))
+W.slider(c360,"Radius lingkaran (killer nempel)",2,8,0.5," stud",K.pnum("dodge.radiusNear"))
+W.slider(c360,"Radius lingkaran (killer jauh)",4,16,0.5," stud",K.pnum("dodge.radiusFar"))
+W.slider(c360,"Kecepatan putar maks",2,9,0.5," rad/dtk",K.pnum("dodge.maxTurn"))
+W.slider(c360,"Lama putaran saat serangan",0.3,1.5,0.05," dtk",K.pnum("dodge.burstTime"))
 local cvt=W.section(p,"Auto vault",false)
 W.slider(cvt,"Kecepatan animasi vault",1,3,0.1," x",K.pnum("vault.speed"))
 W.slider(cvt,"Jarak picu ke jendela",2,8,0.5," stud",K.pnum("vault.range"))
