@@ -78,9 +78,17 @@ radiusFar=9,
 burstRadius=3,
 burstTime=0.7,
 minTurn=0.8,
-maxTurn=6,
-spinAccel=16,
+maxTurn=9,
+spinAccel=36,
 dirHold=0.6,
+orbit=true,
+orbitChase=true,
+orbitRange=10,
+orbitRadius=3.2,
+orbitBehind=-0.35,
+orbitMax=1.4,
+orbitCool=0.7,
+orbitCamTurn=14,
 },
 gun={
 snap=true,
@@ -1679,6 +1687,9 @@ function T.off(hard)
 T.st="idle"
 T.sign=0
 T.fed=false
+T.orbit=false
+T.osign=0
+T.behindAt=nil
 if hard then T.w=0 end
 end
 -- joystick/keyboard lagi dipegang? (baca langsung dari ControlModule, bukan dari MoveDirection yang ikut kena Move kita)
@@ -1819,6 +1830,128 @@ T.st=st
 end
 return st,w,bursting
 end
+-- ORBIT PAKSA: analog + kamera dipaksa muter mengitari killer ke arah BELAKANGNYA, berhasil/gagal -> balik normal
+function T.orbitStart(k,now,why)
+if T.orbit then
+T.orbitK=k
+T.orbitAt=now
+return
+end
+local hum=myHum()
+T.orbit=true
+T.orbitK=k
+T.orbitAt=now
+T.orbitWhy=why
+T.osign=0
+T.osAt=0
+T.behindAt=nil
+T.hp0=hum and hum.Health or 0
+T.nOrbit=(T.nOrbit or 0)+1
+end
+function T.orbitFinish(now,why,ok,cool)
+if not T.orbit then return end
+T.orbit=false
+T.orbitK=nil
+T.osign=0
+T.behindAt=nil
+T.fed=false
+T.burstUntil=0
+T.st="idle"
+T.sign=0
+T.w=0
+T.cool=now+(cool or CFG.dodge.orbitCool)
+if ok then T.nWin=(T.nWin or 0)+1 end
+log("DODGE",string.format("360 orbit %s: %s | %.2f dtk | menang %d/%d",ok and"berhasil"or"selesai",why,now-(T.orbitAt or now),T.nWin or 0,T.nOrbit or 0))
+end
+-- true = orbit yang pegang kendali frame ini (analog + kamera), false = serahkan ke 360 biasa / kontrol normal
+function T.orbitStep(now,dt,ch,hum,me,cam,tk,h)
+local C=CFG.dodge
+if not C.orbit then
+if T.orbit then T.orbitFinish(now,"dimatikan",false,0)end
+return false
+end
+if not T.orbit then
+if C.orbitChase and now>=(T.cool or 0)and tk and tk.k and tk.dist<=C.orbitRange and tk.facing>0.2 and(tk.closing>1 or tk.dist<=5)then
+T.orbitStart(tk.k,now,"dikejar")
+else
+return false
+end
+end
+local k=T.orbitK
+if not(k and k.root and k.root.Parent)then
+T.orbitFinish(now,"killer hilang",false)
+return false
+end
+if hum.Health<(T.hp0 or 0)-0.5 then
+T.orbitFinish(now,"kena damage",false,0.4)
+return false
+end
+if now-T.orbitAt>C.orbitMax then
+T.orbitFinish(now,"waktu habis",false)
+return false
+end
+local rel=dflat(me.Position-k.root.Position)
+local R=rel.Magnitude
+if R>C.chaseRange+4 then
+T.orbitFinish(now,"killer udah jauh",true)
+return false
+end
+if R<0.05 then
+rel=Vector3.new(0,0,1)
+R=1
+end
+local rh=rel/R
+local f=dflat(k.root.CFrame.LookVector)
+f=(f.Magnitude>0.05)and f.Unit or-rh
+local dotf=f:Dot(rh)
+if dotf<=C.orbitBehind then
+T.behindAt=T.behindAt or now
+if now-T.behindAt>=0.12 then
+T.orbitFinish(now,"udah di belakang killer",true)
+return false
+end
+else
+T.behindAt=nil
+end
+local t0=Vector3.new(-rh.Z,0,rh.X)
+local s=T.osign
+if s==0 or now-(T.osAt or 0)>0.1 then
+T.osAt=now
+if math.abs(dotf)>0.97 then
+if s==0 then s=sideClear(me,t0,4)and 1 or-1 end
+else
+s=(f:Dot((rh+t0*0.12).Unit)<dotf)and 1 or-1
+end
+T.osign=s
+end
+if now-(T.owAt or 0)>0.12 then
+T.owAt=now
+if not sideClear(me,t0*s,3.5)and sideClear(me,t0*-s,3.5)then
+s=-s
+T.osign=s
+end
+end
+local rStar=(now<T.burstUntil)and C.burstRadius or C.orbitRadius
+local radial=rh*math.clamp((rStar-R)*0.7,-0.8,0.8)
+local D=t0*s+radial
+D=(D.Magnitude>0.01)and D.Unit or t0*s
+pcall(function()hum:Move(D,false)end)
+T.fed=true
+local yawT=math.atan2(-D.X,-D.Z)
+local lv=cam.CFrame.LookVector
+local yawC=math.atan2(-lv.X,-lv.Z)
+local dy=(yawT-yawC+math.pi)%(2*math.pi)-math.pi
+local dts=math.min(dt or 0.016,0.05)
+local maxStep=C.orbitCamTurn*dts
+if dy>maxStep then dy=maxStep elseif dy<-maxStep then dy=-maxStep end
+T.w=dy/math.max(dts,0.001)
+if dy~=0 then
+local pv=me.Position+Vector3.new(0,1.6,0)
+cam.CFrame=CFrame.new(pv)*CFrame.Angles(0,dy,0)*CFrame.new(-pv)*cam.CFrame
+end
+T.st="orbit"
+return true
+end
 -- SynchronizationEngine: kecepatan putar dihaluskan (percepatan dibatasi) lalu dipakai bareng buat kamera + gerak
 function T.step(dt)
 local C=CFG.dodge
@@ -1837,7 +1970,7 @@ T.ch=ch
 T.off(true)
 end
 local now=os.clock()
-local bursting=now<T.burstUntil
+local bursting=now<T.burstUntil or T.orbit==true
 if T.st=="idle"and T.w==0 and not bursting then
 if now-T.chk<0.1 then return end
 T.chk=now
@@ -1847,9 +1980,20 @@ if blockedBy(ch,hum)or ch:GetAttribute("Aiming")==true or(me:HasTag("doing actio
 if T.w~=0 or T.st~="idle"then T.off(true)end
 return
 end
+if now<(T.cool or 0)and not bursting then
+if T.w~=0 or T.st~="idle"then T.off(true)end
+return
+end
 local h=T.heading(hum,cam)
 local joy=T.joy(hum)
 local tk=T.track(now,me,h)
+local okO,orb=pcall(T.orbitStep,now,dt,ch,hum,me,cam,tk,h)
+if not okO then
+T.off(true)
+if now-(T.errAt or-10)>4 then T.errAt=now log("DODGE","orbit error: "..tostring(orb))end
+return
+end
+if orb then return end
 local st,w=T.adapt(now,tk,joy,hum,me,h)
 local target=(st~="idle")and T.sign*w or 0
 local acc=(st=="evade"and C.spinAccel*2.5 or C.spinAccel)*dt
@@ -1881,10 +2025,11 @@ T.burstSign=(h:Cross(lat).Y>=0)and 1 or-1
 T.burstUntil=now+CFG.dodge.burstTime
 T.sign,T.signAt=T.burstSign,now
 T.nBurst=T.nBurst+1
+if CFG.dodge.orbit then T.orbitStart(k,now,"serangan")end
 end
 function T.statusText()
 local tk=T.tk
-return string.format("%s | putar %.2f rad/dtk | mulai %d kali | burst %d | killer %s",T.st,T.w,T.nStart,T.nBurst,
+return string.format("%s | putar %.2f rad/dtk | mulai %d kali | burst %d | orbit %d/%d | killer %s",T.st,T.w,T.nStart,T.nBurst,T.nWin or 0,T.nOrbit or 0,
 tk.k and string.format("%.1f stud, closing %.1f, bearing %.0f deg",tk.dist or 0,tk.closing or 0,math.deg(tk.bearing or 0))or"-")
 end
 Parry.t360=T
@@ -1939,7 +2084,7 @@ log("DODGE",string.format("hasil dodge [%s]: %s",why,lost>0.5 and string.format(
 end)
 drive.side=pickSide(k)
 drive.flipped=false
-local use360=CFG.dodge.mode360 and(CFG.dodge.autoMove or T.joy(hum))
+local use360=CFG.dodge.mode360 and(CFG.dodge.autoMove or CFG.dodge.orbit or T.joy(hum))
 if use360 then
 T.burst(k,drive.side,now)
 else
@@ -2067,7 +2212,7 @@ if now-pre.since<CFG.dodge.preHold then return end
 pre.since=nil
 if fire(best,"antisipasi")then DG.pre=DG.pre+1 end
 end))
-log("DODGE","modul auto dodge v22 dimuat (360 tech: tracking + adaptive + sync kamera/gerak)")
+log("DODGE","modul auto dodge v23 dimuat (360 tech + orbit paksa ke belakang killer: kamera + analog)")
 end
 local NO_AIM_FLAGS={"isVaulting","isSliding","isDroppingPallet","isRepairing","isHealing","isUnhooking","isExiting"}
 local EQ={c=nil,t=-1,v=nil}
@@ -9964,7 +10109,7 @@ pcall(function()for _,c in ipairs(getconnections(s.hit.InputBegan))do c:Fire(fak
 for _,c in ipairs(MOD.lag.ended)do pcall(function()c:Fire(fake(Enum.UserInputState.End))end)end
 end
 local OPT_DESC={
-["dodge.chaseRange"]="killer masuk segini (stud) -> 360 mulai",["dodge.radiusNear"]="radius lingkaran saat killer nempel (stud)",["dodge.radiusFar"]="radius lingkaran saat killer masih jauh (stud)",["dodge.burstRadius"]="radius lingkaran saat serangan kebaca (stud)",["dodge.burstTime"]="lama putaran saat serangan kebaca (dtk)",["dodge.minTurn"]="kecepatan putar minimum (rad/dtk)",["dodge.maxTurn"]="kecepatan putar maksimum (rad/dtk)",["dodge.spinAccel"]="percepatan putar, kecil = lebih halus (rad/dtk2)",["dodge.dirHold"]="arah putar minimal ditahan segini sebelum boleh balik (dtk)",
+["dodge.chaseRange"]="killer masuk segini (stud) -> 360 mulai",["dodge.radiusNear"]="radius lingkaran saat killer nempel (stud)",["dodge.radiusFar"]="radius lingkaran saat killer masih jauh (stud)",["dodge.burstRadius"]="radius lingkaran saat serangan kebaca (stud)",["dodge.burstTime"]="lama putaran saat serangan kebaca (dtk)",["dodge.minTurn"]="kecepatan putar minimum (rad/dtk)",["dodge.maxTurn"]="kecepatan putar maksimum (rad/dtk)",["dodge.spinAccel"]="percepatan putar, kecil = lebih halus (rad/dtk2)",["dodge.dirHold"]="arah putar minimal ditahan segini sebelum boleh balik (dtk)",["dodge.orbit"]="analog + kamera dipaksa muter mengitari killer ke belakangnya, berhasil -> kontrol balik normal",["dodge.orbitChase"]="orbit mulai otomatis saat killer ngadep dan ngedeketin",["dodge.orbitRange"]="jarak killer (stud) buat orbit otomatis",["dodge.orbitRadius"]="radius orbit mengitari killer (stud)",["dodge.orbitBehind"]="orbit dianggap berhasil kalau dot(hadap killer, posisiku) <= nilai ini (-1 = tepat di belakang)",["dodge.orbitMax"]="batas waktu satu orbit (dtk)",["dodge.orbitCool"]="jeda kontrol normal setelah orbit selesai (dtk)",["dodge.orbitCamTurn"]="kecepatan maks kamera ngikutin arah orbit (rad/dtk)",
 ["parry.range"]="jangkauan hit / parry (stud)",["parry.frontDot"]="killer harus di depan segini (dot)",
 ["parry.hitGuess"]="tebakan detik animasi mulai ke kena (animasi baru)",["parry.arriveLead"]="parry nyampe server segini sebelum kena (dtk)",
 ["parry.slack"]="telat segini masih dikirim (dtk)",["parry.via"]="game = ParryClient asli, input, remote",
@@ -11722,6 +11867,8 @@ W.toggle(c1,"Dodge cuma pas parry cooldown","Nyala = dodge jalan kalau parry lag
 W.toggle(c1,"360 Tech dodge","Dodge pakai putaran kamera 360 (gerak ikut arah kamera, jalur melengkung) bukan geser lurus. Mati = geser lurus lama",K.pbool("dodge.mode360"))
 W.toggle(c1,"Auto 360 saat dikejar","Mulai muter otomatis begitu killer ngejar dalam jangkauan, berhenti kalau udah jauh. Butuh Auto dodge nyala",K.pbool("dodge.chase"))
 W.toggle(c1,"Auto maju saat 360","Kalau joystick dilepas pas 360 jalan, karakter tetap maju relatif kamera. Mati = cuma kamera yang muter, kamu yang gerak",K.pbool("dodge.autoMove"))
+W.toggle(c1,"Orbit paksa ke belakang killer","Pas serangan kebaca atau killer nempel, analog dan kamera DIPAKSA muter mengitari killer sampai di belakangnya, lalu kontrol balik normal. Mati = 360 biasa",K.pbool("dodge.orbit"))
+W.toggle(c1,"Orbit otomatis saat dikejar","Orbit mulai sendiri begitu killer ngadep dan ngedeketin dalam jarak orbit, tanpa nunggu animasi serang",K.pbool("dodge.orbitChase"))
 W.toggle(c1,"Animasi vault cepat","Animasi lompat jendela dipercepat (client saja, semua vault)",K.pbool("vault.fast"))
 local setGun=W.chipRow(c1,"Gun",nil)
 reg(function()
@@ -11753,8 +11900,12 @@ local c360=W.section(p,"360 Tech dodge",false)
 W.slider(c360,"Jarak mulai 360",8,40,1," stud",K.pnum("dodge.chaseRange"))
 W.slider(c360,"Radius lingkaran (killer nempel)",2,8,0.5," stud",K.pnum("dodge.radiusNear"))
 W.slider(c360,"Radius lingkaran (killer jauh)",4,16,0.5," stud",K.pnum("dodge.radiusFar"))
-W.slider(c360,"Kecepatan putar maks",2,9,0.5," rad/dtk",K.pnum("dodge.maxTurn"))
+W.slider(c360,"Kecepatan putar maks",2,14,0.5," rad/dtk",K.pnum("dodge.maxTurn"))
 W.slider(c360,"Lama putaran saat serangan",0.3,1.5,0.05," dtk",K.pnum("dodge.burstTime"))
+W.slider(c360,"Jarak orbit otomatis",4,16,0.5," stud",K.pnum("dodge.orbitRange"))
+W.slider(c360,"Radius orbit",2,6,0.2," stud",K.pnum("dodge.orbitRadius"))
+W.slider(c360,"Kecepatan kamera orbit",6,24,1," rad/dtk",K.pnum("dodge.orbitCamTurn"))
+W.slider(c360,"Batas waktu orbit",0.6,3,0.1," dtk",K.pnum("dodge.orbitMax"))
 local cvt=W.section(p,"Auto vault",false)
 W.slider(cvt,"Kecepatan animasi vault",1,3,0.1," x",K.pnum("vault.speed"))
 W.slider(cvt,"Jarak picu ke jendela",2,8,0.5," stud",K.pnum("vault.range"))
