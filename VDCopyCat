@@ -62,11 +62,11 @@ gap=0.3,
 pollWindow=0.6,
 lunge=4,
 predict=true,
-preRange=8,
-preDot=0.55,
-preClose=4,
+preRange=16,
+preDot=0.5,
+preClose=3,
 preHold=0.06,
-preGap=1.1,
+preGap=0.8,
 onlyCooldown=true,
 fromAction=true,
 },
@@ -357,7 +357,45 @@ task.wait(0.25)
 end
 end)
 local LOG,logLabel,logDirty,inHook={},nil,false,false
+do
+local ctx=ENV.DP_LOGCTX
+if type(ctx)~="table"then
+ctx={}
+ENV.DP_LOGCTX=ctx
+end
+local veilTags={VEIL=1,SPEARMATH=1,SPEED=1,EVAL=1,LEMPAR=1,["LEMPAR-V"]=1,SPEAR=1}
+local gunTags={GUN=1,TUNE=1,SEND=1,SERVER=1,TEMBAK=1,LOCK=1}
+local espAt=-1e9
+ENV.DP_LOGREL=function(tag,msg)
+if ENV.DP_VERBOSE then return true end
+local role=ctx.role
+msg=tostring(msg)
+if veilTags[tag]then return role=="killer"end
+if tag=="PARRY"then return ctx.dagger==true end
+if tag=="DODGE"then
+if role==nil or role=="killer"then return false end
+return not msg:find("ga ngancam",1,true)
+end
+if gunTags[tag]then return ctx.gun==true or(tag=="LOCK"and role=="killer")end
+if tag=="HIT"then return role=="killer"or ctx.gun==true end
+if tag=="BELAJAR"then
+if msg:find("Veil",1,true)then return role=="killer"end
+if msg:find("parry",1,true)then return ctx.dagger==true end
+return true
+end
+if tag=="SKILL"then return role~="killer"end
+if tag=="ESP"and msg:sub(1,6)=="objek:"then
+local nowE=os.clock()
+if nowE-espAt<120 then return false end
+espAt=nowE
+return true
+end
+return true
+end
+end
 local function log(tag,msg)
+local rel=ENV.DP_LOGREL
+if rel and not rel(tag,msg)then return end
 local line=string.format("[%.1f] %s %s",os.clock()%1000,tag,tostring(msg))
 LOG[#LOG+1]=line
 if#LOG>260 then table.remove(LOG,1)end
@@ -406,6 +444,25 @@ local function amSurvivor()
 local t=LP.Team
 if not t then return true end
 return teamKind(t)=="survivor"
+end
+do
+local ctx=ENV.DP_LOGCTX
+if type(ctx)~="table"then
+ctx={}
+ENV.DP_LOGCTX=ctx
+end
+task.spawn(function()
+while alive()do
+pcall(function()
+ctx.role=teamKind(LP.Team)
+local ch=LP.Character
+local bp=LP:FindFirstChildOfClass("Backpack")
+ctx.dagger=(ch~=nil and ch:FindFirstChild("Parrying Dagger")~=nil)or(bp~=nil and bp:FindFirstChild("Parrying Dagger")~=nil)
+ctx.gun=(ch~=nil and ch:FindFirstChild("Twist of Fate")~=nil)or(bp~=nil and bp:FindFirstChild("Twist of Fate")~=nil)
+end)
+task.wait(0.5)
+end
+end)
 end
 local function killers()
 local now=os.clock()
