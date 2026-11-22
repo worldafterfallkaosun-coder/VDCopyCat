@@ -1640,6 +1640,7 @@ if lost>0.5 then DG.hit=DG.hit+1 else DG.ok=DG.ok+1 end
 log("DODGE",string.format("hasil dodge [%s]: %s",why,lost>0.5 and string.format("KENA -%.0f HP",lost)or"ga kena damage"))
 end)
 drive.side=pickSide(k)
+drive.flipped=false
 drive.active,drive.k=true,k
 drive.until_=now+CFG.dodge.holdTime
 drive.dir=dirFor(k)
@@ -1658,7 +1659,12 @@ if now>=drive.until_ or not(hum and me and stillClose)then
 drive.active=false
 return
 end
-drive.dir=dirFor(k)
+if not drive.flipped and not sideClear(me,drive.dir,3)then
+drive.flipped=true
+drive.side=-drive.side
+local alt=dirFor(k)
+if sideClear(me,alt,3)then drive.dir=alt end
+end
 end))
 RunService:BindToRenderStep("DP3_Dodge",Enum.RenderPriority.Last.Value+3,function()
 if not(drive.active and alive()and CFG.dodge.enabled)then return end
@@ -7473,23 +7479,48 @@ end
 local function buildTiers()
 local t={}
 local mob=LP:GetAttribute("platform")=="Mobile"or isMobile()
-if mob and(firesignal or getconnections)and attackButton()then t[#t+1]="btn"end
+if mob then
+if(firesignal or getconnections)and attackButton()then t[#t+1]="btn"end
 if getconnections then t[#t+1]="owner"end
 if VIM then t[#t+1]="vim"end
+else
+if type(mouse1press)=="function"and type(mouse1release)=="function"then t[#t+1]="m1"end
+if VIM then t[#t+1]="vim"end
+if getconnections then t[#t+1]="owner"end
+end
 if getconnections then t[#t+1]="all"end
 return t
 end
 
 local function watchAnim(hum)
-if KS.animHum==hum then return end
+if KS.animHum==hum and KS.animConn then return end
+local now=os.clock()
+if now<(KS.animRetry or 0)then return end
+KS.animRetry=now+0.5
 if KS.animConn then pcall(function()KS.animConn:Disconnect()end);KS.animConn=nil end
-KS.animHum=hum
+KS.animHum=nil
 local an=hum:FindFirstChildOfClass("Animator")
 if an then
+KS.animHum=hum
 KS.animConn=keep(an.AnimationPlayed:Connect(function(tr)
 local okl,looped=pcall(function()return tr.Looped end)
 if okl and not looped then KS.lastAnim=os.clock()end
 end))
+end
+end
+do
+local okT,sig=pcall(function()return CS:GetInstanceAddedSignal("doing action")end)
+if okT and sig then
+KS.tagConn=keep(sig:Connect(function(inst)
+local chh=LP.Character
+if chh and inst==chh:FindFirstChild("HumanoidRootPart")then KS.lastAnim=os.clock()end
+end))
+end
+end
+function KS.why(now,txt)
+if KS.whyTxt~=txt or now-(KS.whyAt or 0)>3 then
+KS.whyTxt,KS.whyAt=txt,now
+log("HIT","nahan: "..txt)
 end
 end
 
@@ -7502,8 +7533,9 @@ list=buildTiers()
 KS.tiers,KS.tierI=list,1
 end
 if#list==0 then
-KS.pause=now+30
-log("HIT","ga ada cara kirim klik (VIM/getconnections ga ada) -> auto hit jeda 30 detik")
+KS.pause=now+10
+KS.tiers=nil
+log("HIT","ga ada cara kirim klik (mouse1press/VIM/getconnections ga ada) -> auto hit jeda 10 detik lalu dicoba lagi")
 return
 end
 local tier=list[KS.tierI]or list[1]
@@ -7513,6 +7545,19 @@ local ok,how
 if tier=="btn"then
 local b=attackButton()
 if b then ok,how=tapBtn(b,hold)else ok,how=false,"tombol attack ga ketemu"end
+elseif tier=="m1"then
+local kd,vv=parseBind(raw)
+if kd=="mouse"and vv==0 and type(mouse1press)=="function"and type(mouse1release)=="function"then
+local okp=pcall(mouse1press)
+if okp then
+task.delay(hold,function()pcall(mouse1release)end)
+ok,how=true,"m1"
+else
+ok,how=false,"mouse1press error"
+end
+else
+ok,how=false,"m1: bind serang bukan MouseButton1"
+end
 elseif tier=="owner"then
 ok,how=press(raw,hold,"owner",ownerFilter)
 else
@@ -7529,7 +7574,7 @@ if not alive()then return end
 if KS.lastAnim>=now then
 KS.fails=0
 KS.cycles=0
-else
+elseif KS.animConn or KS.tagConn then
 KS.fails=KS.fails+1
 end
 end)
@@ -7541,8 +7586,9 @@ if KS.tierI==1 then KS.cycles=KS.cycles+1 end
 log("HIT","tier "..tier.." ga ngaruh -> pindah ke "..(list[KS.tierI]or"?"))
 if KS.cycles>=2 then
 KS.cycles=0
-KS.pause=os.clock()+8
-log("HIT","semua tier gagal 2 putaran -> auto hit jeda 8 detik (Salin log)")
+KS.pause=os.clock()+3
+KS.tiers=nil
+log("HIT","semua tier gagal 2 putaran -> jeda 3 detik lalu coba lagi dari awal (Salin log)")
 end
 end
 end
@@ -7623,15 +7669,35 @@ end
 end
 local tgt=KS.tgt
 if not tgt or not tgt.Parent then return end
-if now<KS.nextAt or now<KS.pause then return end
-if ch:GetAttribute("IsStunned")or ch:GetAttribute("Immobile")or root:HasTag("doing action")then return end
-if ms and(ms:GetAttribute("isVaulting")==true or ms:GetAttribute("action")==true)then return end
+if now<KS.nextAt then return end
+if now<KS.pause then KS.why(now,string.format("jeda %.0f dtk lagi",KS.pause-now))return end
+local blocked
+if ch:GetAttribute("IsStunned")or ch:GetAttribute("Immobile")then
+blocked="stun/immobile"
+elseif root:HasTag("doing action")then
+blocked="doing action"
+elseif ms and(ms:GetAttribute("isVaulting")==true or ms:GetAttribute("action")==true)then
+blocked="action/vault"
+end
+if blocked then
+KS.blockSince=KS.blockSince or now
+if blocked=="stun/immobile"or now-KS.blockSince<1.2 then
+KS.why(now,blocked)
+return
+end
+KS.why(now,blocked.." nyangkut lebih dari 1.2 dtk -> tetap swing")
+else
+KS.blockSince=nil
+end
 local r=tgt:FindFirstChild("HumanoidRootPart")
 if not r then return end
 local to=flatv(r.Position-root.Position)
 if to.Magnitude<0.05 then return end
 local fwd=flatv(root.CFrame.LookVector)
-if fwd.Magnitude>0.01 and math.deg(math.acos(math.clamp(fwd.Unit:Dot(to.Unit),-1,1)))>30 then return end
+if fwd.Magnitude>0.01 and math.deg(math.acos(math.clamp(fwd.Unit:Dot(to.Unit),-1,1)))>30 then
+KS.why(now,"badan belum menghadap target")
+return
+end
 KS.nextAt=now+math.max(ML.gap,0.2)
 swing()
 end
