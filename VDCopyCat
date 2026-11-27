@@ -776,6 +776,13 @@ tr.hist=h
 end
 h[#h+1]={t=now,v=tr.vel}
 while#h>0 and now-h[1].t>0.4 do table.remove(h,1)end
+local ph=tr.ph
+if not ph then
+ph={}
+tr.ph=ph
+end
+ph[#ph+1]={t=now,p=pos}
+while#ph>0 and now-ph[1].t>2.0 do table.remove(ph,1)end
 end
 end
 end
@@ -2384,6 +2391,7 @@ notify(msg)
 end
 end
 log("GUN","fix6: jam-guard tanpa mode paksa + margin charge adaptif aktif")
+log("GUN","v23: lead gun diuji lawan hasil server (titik akhir peluru + jalur killer asli), kalibrasi gun lama di-reset")
 log("INFO","v21.10: kecepatan tombak = hold*165 (penuh di 1 dtk), auto lempar nahan 1.12 dtk, spawn tombak +3 stud, learner Veil satu jalur dari hasil server, learner gun median + regresi jarak")
 local function gameAimDir()
 local cam=workspace.CurrentCamera
@@ -2791,6 +2799,84 @@ kind=(select(2,Gun.aimOf(part,origin))),
 vel=tr and flat(tr.vel)or Vector3.new(0,0,0),my=flat(my),done=false,adj0=Gun.leadAdj,tk0=Gun.travelK or 0,
 empty=Gun.ammoEmpty(),
 }
+local Gc=CFG.gun
+local L0=(Gc.leadPing>0)and(Net.aimLag()*Gc.leadPing+Gc.leadBase)or 0
+if(Gun.travelK or 0)>0 then L0=L0+Gun.travelK*((part.Position-origin).Magnitude/100)end
+Gun.last.L0=L0
+end
+-- LEARNER SERVER: lead diuji lawan hasil tembakan asli (titik akhir peluru dari server) pakai jalur killer yang sebenarnya
+function Gun.phAt(ph,ts)
+local n=#ph
+if ts<=ph[1].t then return ph[1].p end
+if ts>=ph[n].t then return ph[n].p end
+local lo,hi=1,n
+while hi-lo>1 do
+local mid=(lo+hi)//2
+if ph[mid].t<=ts then lo=mid else hi=mid end
+end
+local a,b=ph[lo],ph[hi]
+return a.p:Lerp(b.p,(ts-a.t)/math.max(b.t-a.t,1e-4))
+end
+Gun.HYP_L={}
+for i=0,32 do Gun.HYP_L[#Gun.HYP_L+1]=i*0.025 end
+function Gun.learnLead(s,o,e)
+if not CFG.gun.learn then return end
+local part=s.part
+if not(part and part.Parent)then return end
+local tr=Track[part.Parent]
+local ph=tr and tr.ph
+if not ph or#ph<6 then return end
+local d=e-o
+local len=d.Magnitude
+if len<1 then return end
+local u=d.Unit
+local root=part.Parent:FindFirstChild("HumanoidRootPart")
+local aimNow=Gun.aimOf(part,o,s.kind)
+local off=aimNow-((root and root.Position)or part.Position)
+local Ls=Gun.HYP_L
+local nL=#Ls
+local r0,w=2.2,0.6
+local ps,okk={},{}
+local pmax,hitAny=0,false
+for k=1,nL do
+local P=Gun.phAt(ph,s.t+Ls[k])+off
+local tp=(P-o):Dot(u)
+if tp>len+2 then
+okk[k]=false
+ps[k]=0
+else
+okk[k]=true
+local dd=(P-(o+u*math.clamp(tp,0,len))).Magnitude
+local p=math.clamp(1/(1+math.exp((dd-r0)/w)),0.01,0.99)
+ps[k]=p
+if p>pmax then pmax=p end
+if(e-P).Magnitude<=r0+0.6 then hitAny=true end
+end
+end
+if not hitAny and pmax<0.25 then return end
+local H=Gun.hyp
+if not H then
+H={ll={},n=0,delta=0}
+Gun.hyp=H
+end
+for k=1,nL do
+if okk[k]then
+local inc=hitAny and math.log(ps[k])or math.log(1-ps[k])
+H.ll[k]=(H.ll[k]or 0)*0.93+inc
+else
+H.ll[k]=(H.ll[k]or 0)*0.93
+end
+end
+H.n=H.n+1
+local L0=s.L0 or 0
+local bs,bk=-1e18,1
+for k=1,nL do
+local sc=(H.ll[k]or 0)-0.5*((Ls[k]-L0)/0.3)^2
+if sc>bs then bs,bk=sc,k end
+end
+H.delta=math.clamp(Ls[bk]-L0,-0.5,0.35)
+Gun.leadAdj=math.clamp(H.delta*math.min(1,H.n/4),-0.5,0.35)
+log("TEMBAK",string.format("lead belajar (server): ideal %.0f ms | dipakai %.0f ms | adj %+.0f ms (n=%d) %s",Ls[bk]*1000,(L0+(s.adj0 or 0))*1000,Gun.leadAdj*1000,H.n,hitAny and"[kena]"or"[meleset]"))
 end
 local function evalShot(s,o,e)
 local part=s.part
@@ -2828,7 +2914,7 @@ end
 local spd,mySpd=s.vel.Magnitude,s.my.Magnitude
 local note=""
 if CFG.gun.learn then
-if spd>=5 and Net.rtt<(Net.leadRtt or Net.rtt)*1.4+0.04 then
+if spd>=5 and not(Gun.hyp and Gun.hyp.n>=3)and Net.rtt<(Net.leadRtt or Net.rtt)*1.4+0.04 then
 local resid=Vector3.new(actual.X-s.pred.X,0,actual.Z-s.pred.Z)
 local along=resid:Dot(s.vel.Unit)
 if math.abs(along)<=8 then
@@ -2893,6 +2979,12 @@ if typeof(o)~="Vector3"or typeof(e)~="Vector3"then return end
 local s=Gun.last
 if not s or s.done or os.clock()-s.t>2.5 then return end
 s.done=true
+task.delay(math.max(0.05,0.95-(os.clock()-s.t)),function()
+if alive()then
+local okL,eL=pcall(Gun.learnLead,s,o,e)
+if not okL then log("TEMBAK","learnLead error: "..tostring(eL))end
+end
+end)
 task.delay(CFG.gun.evalDelay or 0.1,function()
 if not alive()then return end
 local ok,err=pcall(evalShot,s,o,e)
@@ -5959,14 +6051,21 @@ end
 end
 local g=type(d.gun)=="table"and d.gun or{}
 local staleLearn=(tonumber(d.v)or 0)<12
-if staleLearn then
-log("BELAJAR","kalibrasi gun/tombak versi lama dibuang (learner lama bias) -> belajar ulang dari nol")
+local gunStale=(tonumber(d.v)or 0)<13
+if staleLearn or gunStale then
+log("BELAJAR","kalibrasi gun lama dibuang -> belajar ulang pakai learner server")
 else
-Gun.leadAdj=num(g.leadAdj,-0.45,0.2)or Gun.leadAdj
+Gun.leadAdj=num(g.leadAdj,-0.5,0.35)or Gun.leadAdj
 Gun.biasR=num(g.biasR,-0.06,0.06)or Gun.biasR
 Gun.biasU=num(g.biasU,-0.06,0.06)or Gun.biasU
 Gun.travelK=num(g.travelK,0,0.3)or Gun.travelK
 CFG.gun.originLag=num(g.originLag,0,0.15)or CFG.gun.originLag
+local hy=g.hy
+if type(hy)=="table"and type(hy.ll)=="table"then
+local ll={}
+for k=1,#Gun.HYP_L do ll[k]=num(hy.ll[k],-60,60)or 0 end
+Gun.hyp={ll=ll,n=math.floor(num(hy.n,0,80)or 0),delta=num(hy.d,-0.5,0.35)or 0}
+end
 end
 CFG.parry.range=num(d.range,8,22)or CFG.parry.range
 if type(d.veil)=="table"then pcall(Veil.load,d.veil,staleLearn)end
@@ -5989,9 +6088,9 @@ for k,v in pairs(Parry.shift)do
 if type(k)=="string"then shift[k]=v end
 end
 local data={
-v=12,hits=hits,shift=shift,range=CFG.parry.range,tune=Skill.tuneDelta,
+v=13,hits=hits,shift=shift,range=CFG.parry.range,tune=Skill.tuneDelta,
 veil=Veil.save(),
-gun={leadAdj=Gun.leadAdj,biasR=Gun.biasR,biasU=Gun.biasU,originLag=CFG.gun.originLag,travelK=Gun.travelK},
+gun={leadAdj=Gun.leadAdj,biasR=Gun.biasR,biasU=Gun.biasU,originLag=CFG.gun.originLag,travelK=Gun.travelK,hy=Gun.hyp and{n=Gun.hyp.n,d=Gun.hyp.delta,ll=Gun.hyp.ll}or nil},
 }
 local ok,js=pcall(function()return HttpService:JSONEncode(data)end)
 if not ok then return false end
@@ -6004,7 +6103,7 @@ end
 function Skill.wipeLearn()
 Parry.hits,Parry.shift={},{}
 Gun.leadAdj,Gun.biasR,Gun.biasU=0,0,0
-Gun.travelK,Gun.res=0,nil
+Gun.travelK,Gun.res,Gun.hyp=0,nil,nil
 Skill.tuneDelta={}
 pcall(Veil.wipe)
 lastJson=""
