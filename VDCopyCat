@@ -120,6 +120,12 @@ aimHold=0.3,
 lead=0,
 bulletSpeed=800,
 needLOS=true,
+instant=true,
+multiLOS=true,
+fireLOS=true,
+noAim=false,
+insWait=1,
+losForce=0.8,
 chargeMargin=0.04,
 shotGap=0.6,
 confirmWait=0.7,
@@ -809,7 +815,7 @@ if G.leadPing>0 then t=t+Net.aimLag()*G.leadPing+G.leadBase+Gun.leadAdj end
 if G.lead>0 and G.bulletSpeed>0 then t=t+(dist/G.bulletSpeed)*G.lead end
 return math.clamp(t,0,G.leadMax)
 end
-function Gun.aimOf(part,origin,force)
+function Gun.aimBase(part,origin,force)
 local G=CFG.gun
 if not force and G.emptyBody and Gun.emptyNow then force="BODY"end
 local body=part.Position
@@ -847,9 +853,17 @@ end
 if ak.kind=="HEAD"then return headPos,"HEAD",head end
 return body,"BODY",part
 end
-function Gun.aimVis(origin,part)
-local _,_,vp=Gun.aimOf(part,origin)
-return visibleFrom(origin,vp)
+Gun.solid=setmetatable({},{__mode="k"})
+Gun.avc=setmetatable({},{__mode="k"})
+Gun.shiftK=setmetatable({},{__mode="k"})
+-- titik bidik: aimBase = titik dasar (kepala/badan), aimOf = titik dasar + geseran yang lagi dipakai biar peluru ga nabrak tembok
+function Gun.aimOf(part,origin,force)
+local p,kind,hp=Gun.aimBase(part,origin,force)
+if kind=="BODY"then
+local rec=Gun.shiftK[part.Parent]
+if rec and rec.t>0 and os.clock()-rec.t<0.35 then p=p+rec.v end
+end
+return p,kind,hp
 end
 function Gun.steadyC(char,tr)
 local now=os.clock()
@@ -878,6 +892,21 @@ t=base+((p-origin).Magnitude/G.bulletSpeed)*G.lead
 end
 end
 return pos+v*math.clamp(t,0,G.leadMax)
+end
+function Gun.aimVis(origin,part)
+local now=os.clock()
+local c=Gun.avc[part]
+if c and now-c.t<0.04 then return c.v end
+local ch=part.Parent
+local wide=now<(Gun.wideUntil or 0)
+local cur=Gun.aimOf(part,origin)
+local v=Gun.pathClear(origin,cur,ch,wide)
+if v then
+local pr=predictPos(part,origin)
+if(pr-cur).Magnitude>0.6 then v=Gun.pathClear(origin,pr,ch,wide)end
+end
+Gun.avc[part]={t=now,v=v}
+return v
 end
 local function leadInfo(part,origin)
 local tr=Track[part.Parent]
@@ -1077,6 +1106,7 @@ keep(jm.OnClientEvent:Connect(function(tool)
 local c=myChar()
 if c and typeof(tool)=="Instance"and tool:IsDescendantOf(c)then
 Gun.lockUntil=os.clock()+1.2
+Gun.jamSeen=os.clock()
 log("SERVER Jammed","gun kita macet")
 end
 end))
@@ -2338,6 +2368,10 @@ Gun.jamAt,Gun.jamRoll=0,nil
 function Gun.jamHold(args)
 local tool,step=args[1],args[3]
 if typeof(tool)~="Instance"or not amSurvivor()then return false end
+if Gun.insOn(tool)and os.clock()-Gun.ins.lastAt<0.5 then
+log("INSTAN","tembakan manual dibuang: baru aja ditembak otomatis (anti dobel)")
+return true
+end
 local roll=tool:GetAttribute("tofRoll")
 if type(roll)~="number"then return false end
 local shots=tool:GetAttribute("shots")
@@ -2346,6 +2380,17 @@ local n=math.clamp(math.floor(tonumber(step)or 1),1,3)
 local _,jam,empty=stepInfo(n)
 local limit=hasShots and jam or empty
 if type(limit)~="number"or roll>=limit then Gun.jamAt=0 return false end
+if Gun.insOn(tool)then
+local bs,okS=Gun.bestStep(tool,n)
+if okS and bs~=n then
+args[3]=bs
+Gun.jamAt=0
+Gun.ins.lastAt=os.clock()
+log("INSTAN",string.format("tembakan manual step %d (roll %.2f bakal macet) -> diganti step %d, ga perlu nahan",n,roll,bs))
+Gun.insWatch(tool,bs,false,"manual",false)
+return false
+end
+end
 local safe,safeAt
 for m=n+1,3 do
 local at2,j2,e2=stepInfo(m)
@@ -2391,6 +2436,156 @@ notify(msg)
 end
 end
 log("GUN","fix6: jam-guard tanpa mode paksa + margin charge adaptif aktif")
+-- ====== v24 INSTAN (bagian A): step ditentuin roll, garis tembak pintar, blocker kepelajar ======
+-- Alasan: step 1/2/3 cuma beda "peluang macet" (roll vs batas jam/empty). Roll udah kebaca dari awal aim,
+-- jadi step terkecil yang aman bisa langsung dikirim tanpa nunggu charge 0.75/1.8/3.0 dtk.
+Gun.ins={ok=0,bad=0,streak=0,err=0,off=false,lastAt=0,n=0}
+Gun.visAt,Gun.jamSeen,Gun.losAt,Gun.losPart,Gun.wideUntil=0,0,0,nil,0
+Gun.SHIFT_C={{0,0},{1.0,0},{-0.8,0},{0,0.85},{0,-0.85}}
+-- step terkecil (>= from) yang aman buat roll sekarang. return: step, aman?, roll, adaPeluru
+function Gun.bestStep(tool,from)
+local roll=tool:GetAttribute("tofRoll")
+local sh=tool:GetAttribute("shots")
+local hs=(sh==nil and 1 or sh)>0
+from=math.clamp(math.floor(tonumber(from)or 1),1,3)
+if type(roll)~="number"then return 3,hs,roll,hs end
+for n=from,3 do
+local _,j,e=stepInfo(n)
+local l=hs and j or e
+if type(l)=="number"and roll>=l then return n,true,roll,hs end
+end
+return 3,false,roll,hs
+end
+-- mode instan boleh jalan? (peluru habis baru boleh setelah instan terbukti diterima server)
+function Gun.insOn(tool)
+local I=Gun.ins
+if not CFG.gun.instant or I.off or not Gun.fire then return false end
+if tool and Gun.ammoEmpty(tool)and I.ok==0 then return false end
+return true
+end
+-- garis tembak dari muzzle ke satu titik (Blockcast, tembus bagian transparan/aksesori kecuali benda yang udah terbukti nahan peluru)
+function Gun.pathClear(origin,point,ch,wide)
+local ign={myChar(),ch}
+for _,p in ipairs(Players:GetPlayers())do
+if p~=LP and p.Character and not(p.Team and p.Team.Name:lower():find("killer"))then
+ign[#ign+1]=p.Character
+end
+end
+local o,dir=origin,point-origin
+local left=dir.Magnitude
+if left<0.5 then return true end
+local sz=wide and 0.9 or 0.5
+for _=1,8 do
+rayP.FilterDescendantsInstances=ign
+local okc,res=pcall(function()
+return workspace:Blockcast(CFrame.new(o,o+dir),Vector3.new(sz,sz,sz),dir,rayP)
+end)
+if not okc then res=workspace:Raycast(o,dir,rayP)end
+if not res then return true end
+local inst=res.Instance
+if Gun.solid[inst]then return false end
+local pierce=(inst.Transparency>0.01 and inst.Name~="HumanoidRootPart")
+or inst:FindFirstAncestorWhichIsA("Accessory")~=nil
+if not pierce then return false end
+ign[#ign+1]=inst
+local adv=(res.Distance or 0)+0.05
+left=left-adv
+if left<=0.3 then return true end
+local u=dir.Unit
+o=o+u*adv
+dir=u*left
+end
+return false
+end
+-- tiap ~0.1 dtk per killer: kalau titik bidik sekarang ketutup, cari titik lain di badan yang kelihatan (atas/bawah/samping)
+function Gun.updateShifts()
+local G=CFG.gun
+if not G.multiLOS then return end
+local origin=muzzleOrigin()
+if not origin then return end
+local now=os.clock()
+local wide=now<Gun.wideUntil
+for _,k in ipairs(killers())do
+local ch=k.char
+local part=pickPart(ch)
+local rec=Gun.shiftK[ch]
+if part and(not rec or now-rec.chk>=0.1)then
+if not rec then
+rec={v=Vector3.new(0,0,0),t=0,chk=0,blind=false}
+Gun.shiftK[ch]=rec
+end
+rec.chk=now
+local base,kind=Gun.aimBase(part,origin)
+if kind=="HEAD"then
+rec.v,rec.t,rec.blind=Vector3.new(0,0,0),now,false
+else
+local to=base-origin
+if to.Magnitude>1 and to.Magnitude<=G.maxDist then
+local disp=predictPos(part,origin)-Gun.aimOf(part,origin)
+local lat=to.Unit:Cross(Vector3.yAxis)
+if lat.Magnitude>1e-3 then lat=lat.Unit else lat=Vector3.new(1,0,0)end
+local function clear(off)
+return Gun.pathClear(origin,base+off+disp,ch,wide)
+end
+if clear(rec.v)then
+rec.t,rec.blind=now,false
+else
+local found
+for _,c in ipairs(Gun.SHIFT_C)do
+local off=Vector3.new(0,c[1],0)+lat*c[2]
+if clear(off)then found=off break end
+end
+if found then
+rec.v,rec.t,rec.blind=found,now,false
+if found.Magnitude>0.01 and now-(rec.sayAt or 0)>2 then
+rec.sayAt=now
+log("GUN",string.format("titik bidik ketutup -> digeser %+.1f atas %+.1f samping",found.Y,found:Dot(lat)))
+end
+else
+rec.v,rec.blind=Vector3.new(0,0,0),true
+end
+end
+end
+end
+end
+end
+end
+-- peluru berhenti jauh sebelum killer = ketahan sesuatu (bukan lead yang salah)
+function Gun.shotBlocked(s,o,e)
+local part=s.part
+if not(part and part.Parent)then return false end
+local len=(e-o).Magnitude
+local tgt=Gun.aimBase(part,o,s.kind)+(s.sh or Vector3.new(0,0,0))
+local dist=(tgt-o).Magnitude
+if dist<8 or len>=dist-4 then return false end
+if(e-tgt).Magnitude<4 then return false end
+return true
+end
+-- cari benda yang nahan peluru, catat sebagai solid (LOS berikutnya ga nembus lagi) dan perketat Blockcast sebentar
+function Gun.learnBlocker(s,o,e)
+local d=e-o
+if d.Magnitude<1 then return end
+local rp=RaycastParams.new()
+rp.FilterType=Enum.RaycastFilterType.Exclude
+local ign={myChar()}
+for _,p in ipairs(Players:GetPlayers())do
+if p.Character then ign[#ign+1]=p.Character end
+end
+rp.FilterDescendantsInstances=ign
+Gun.wideUntil=os.clock()+2.5
+local ok,res=pcall(function()return workspace:Raycast(o,d.Unit*(d.Magnitude+1.5),rp)end)
+local inst=ok and res and res.Instance
+local dd=s.part and s.part.Parent and(s.part.Position-o).Magnitude or 0
+if inst then
+Gun.solid[inst]=os.clock()
+if s.part then Gun.avc[s.part]=nil end
+log("GUN",string.format("peluru kehalang %s (%s) di %.0f dari %.0f stud -> dicatat solid, garis tembak diperketat",tostring(inst.Name),tostring(inst.ClassName),d.Magnitude,dd))
+else
+log("GUN",string.format("peluru berhenti di %.0f dari %.0f stud tapi bendanya ga ketemu -> garis tembak diperketat",d.Magnitude,dd))
+end
+end
+log("GUN","v24: tembak instan (step dari roll) + garis tembak pintar (titik bidik bergeser) + blocker kepelajar aktif")
+
 log("GUN","v23: lead gun diuji lawan hasil server (titik akhir peluru + jalur killer asli), kalibrasi gun lama di-reset")
 log("INFO","v21.10: kecepatan tombak = hold*165 (penuh di 1 dtk), auto lempar nahan 1.12 dtk, spawn tombak +3 stud, learner Veil satu jalur dari hasil server, learner gun median + regresi jarak")
 local function gameAimDir()
@@ -2513,6 +2708,88 @@ Gun.selfFire=false
 if not ok then return false,tostring(err)end
 return true,"remote langsung"
 end
+-- ====== v24 INSTAN (bagian B): kirim langsung lewat remote + pantau hasil dari server ======
+-- hasil: VisualizeBullet = ok, Jammed = jam, dua-duanya ga datang = diabaikan server.
+-- Tembakan "tanpa charge" yang gagal = bukti server ngecek lama hold -> instan mati sendiri, balik ke charge biasa.
+function Gun.insWatch(tool,step,earned,tag,noAim)
+local I=Gun.ins
+local t0=os.clock()
+local hadShots=not Gun.ammoEmpty(tool)
+local roll0=tool:GetAttribute("tofRoll")
+task.spawn(function()
+local res
+local limitT=CFG.gun.insWait or 1
+while alive()and os.clock()-t0<limitT do
+if Gun.visAt>=t0 then res="ok" break end
+if Gun.jamSeen>=t0 then res="jam" break end
+RunService.Heartbeat:Wait()
+end
+res=res or"ign"
+Gun.firing=false
+if not alive()then return end
+local dt=os.clock()-t0
+local how=earned and"charge cukup"or"tanpa charge"
+if res=="ok"then
+I.ok=I.ok+1
+I.streak=0
+Gun.holdoff=os.clock()+((hadShots and CFG.gun.shotGapAmmo)or CFG.gun.shotGap)
+log("INSTAN",string.format("%s step %d -> OK (%.2f dtk) | %s | ok %d gagal %d",tag,step,dt,how,I.ok,I.bad))
+return
+end
+I.streak=I.streak+1
+if not earned then I.bad=I.bad+1 end
+Gun.holdoff=os.clock()+0.7
+log("INSTAN",string.format("%s step %d -> %s | %s | roll %s | ok %d gagal %d",tag,step,res=="jam"and"JAM"or"DIABAIKAN SERVER",how,tostring(roll0),I.ok,I.bad))
+if noAim and CFG.gun.noAim then
+CFG.gun.noAim=false
+log("INSTAN","tembak tanpa aim ditolak server -> opsi itu dimatiin")
+notify("Tembak tanpa aim dimatiin (server nolak)")
+end
+if earned then return end
+local why
+if res=="jam"and I.ok==0 then
+why="macet di tembakan instan pertama, server kayaknya ngecek lama hold"
+elseif res=="ign"and I.ok==0 and I.streak>=2 then
+why="2x tembakan instan ga dianggap server"
+elseif I.streak>=3 then
+why="3x gagal berturut-turut"
+end
+if why then
+I.off=true
+log("INSTAN","DIMATIKAN otomatis: "..why.." -> balik ke charge biasa (nyalain lagi lewat toggle Tembak instan)")
+notify("Tembak instan dimatiin otomatis: "..why)
+end
+end)
+end
+function Gun.insFire(tool,part,step,earned)
+local I=Gun.ins
+if not Gun.template then
+Gun.template={tool,Vector3.new(0,0,1),1}
+Gun.templateN=3
+log("INSTAN","format remote bawaan dipakai (tool, arah, step), ga perlu tembak manual dulu")
+end
+local noAim=not aimingNow()
+Gun.firing=true
+Gun.pending,Gun.pendingAt=part,os.clock()
+local ok,how=fireRemote(tool,part,step)
+if not ok then
+Gun.pending=nil
+Gun.firing=false
+Gun.holdoff=os.clock()+0.3
+I.err=I.err+1
+log("INSTAN","kirim gagal: "..tostring(how))
+if I.err>=3 then
+I.off=true
+log("INSTAN","kirim remote gagal 3x -> mode instan dimatiin")
+end
+return false
+end
+I.err=0
+I.n=I.n+1
+I.lastAt=os.clock()
+Gun.insWatch(tool,step,earned,"auto",noAim)
+return true
+end
 local function fireTrigger(tool,part,step)
 local list=gunTiers()
 if#list==0 then
@@ -2627,6 +2904,7 @@ local function gunStep()
 local tool=equippedGun()
 Gun.emptyNow=tool~=nil and Gun.ammoEmpty(tool)
 local aiming=tool~=nil and aimingNow()
+if tool and CFG.gun.multiLOS and(aiming or CFG.gun.noAim)then pcall(Gun.updateShifts)end
 if aiming and not Gun.wasAiming then
 Gun.chargeStart=os.clock()
 if tool then
@@ -2647,8 +2925,9 @@ end
 end
 Gun.wasAiming=aiming
 if not tool then Gun.status="gun ga dipegang";return end
-if not aiming then Gun.status="tahan aim, target dikunci silent (kamera ga gerak)";return end
-if not CFG.gun.trigger then Gun.status="auto fire OFF (lock/snap aja)";return end
+local noAimOK=CFG.gun.instant and CFG.gun.noAim and Gun.insOn(tool)
+if not aiming and not noAimOK then Gun.status="tahan aim, target dikunci silent (kamera ga gerak)";return end
+if not CFG.gun.trigger then Gun.status=(CFG.gun.instant and"auto fire OFF - nyalain (F5) biar nembak instan"or"auto fire OFF (lock/snap aja)");return end
 if not amSurvivor()then Gun.status="bukan survivor";return end
 local now=os.clock()
 if now<Gun.holdoff then return end
@@ -2669,7 +2948,10 @@ end
 return m
 end
 local r
-if CFG.gun.fireStep==0 then
+local insMode=Gun.insOn(tool)
+if insMode then
+r=Gun.bestStep(tool,CFG.gun.fireStep)
+elseif CFG.gun.fireStep==0 then
 for n=1,3 do
 if charged>=(stepInfo(n))+marginFor(n)then r=n end
 end
@@ -2730,6 +3012,20 @@ end
 Gun.steadyAt=0
 local SG=CFG.gun
 Gun.lastConf=nil
+if SG.fireLOS then
+local orgL=muzzleOrigin()
+if orgL and not Gun.aimVis(orgL,part)then
+if Gun.losPart~=part or Gun.losAt==0 then Gun.losPart,Gun.losAt=part,now end
+local held=now-Gun.losAt
+local nearP=rootMe~=nil and(part.Position-rootMe.Position).Magnitude<=(SG.panicDist or 0)
+if not(hasShotsNow and nearP and held>=(SG.losForce or 0.8))then
+Gun.status=string.format("garis tembak ketutup %.1f dtk - nunggu kebuka",held)
+return
+end
+else
+Gun.losAt=0
+end
+end
 if SG.smart then
 local org=muzzleOrigin()
 if org then
@@ -2769,7 +3065,11 @@ end
 end
 Gun.status=string.format("step %d | target kena -> tembak%s",r,Gun.lastConf and string.format(" (peluang %.0f%%)",Gun.lastConf*100)or"")
 Gun.cf.lastElig=0
+if insMode then
+Gun.insFire(tool,part,r,charged>=(stepInfo(r))+marginFor(r))
+else
 fireTrigger(tool,part,r)
+end
 end
 task.spawn(function()
 local acc,lastErr=0,0
@@ -2803,6 +3103,9 @@ local Gc=CFG.gun
 local L0=(Gc.leadPing>0)and(Net.aimLag()*Gc.leadPing+Gc.leadBase)or 0
 if(Gun.travelK or 0)>0 then L0=L0+Gun.travelK*((part.Position-origin).Magnitude/100)end
 Gun.last.L0=L0
+local rs=Gun.shiftK[part.Parent]
+local isBody=(select(2,Gun.aimOf(part,origin)))=="BODY"
+Gun.last.sh=(rs and isBody and rs.t>0 and os.clock()-rs.t<0.35)and rs.v or Vector3.new(0,0,0)
 end
 -- LEARNER SERVER: lead diuji lawan hasil tembakan asli (titik akhir peluru dari server) pakai jalur killer yang sebenarnya
 function Gun.phAt(ph,ts)
@@ -2826,12 +3129,14 @@ if not(part and part.Parent)then return end
 local tr=Track[part.Parent]
 local ph=tr and tr.ph
 if not ph or#ph<6 then return end
+if s.blk==nil then s.blk=Gun.shotBlocked(s,o,e)end
+if s.blk then return end
 local d=e-o
 local len=d.Magnitude
 if len<1 then return end
 local u=d.Unit
 local root=part.Parent:FindFirstChild("HumanoidRootPart")
-local aimNow=Gun.aimOf(part,o,s.kind)
+local aimNow=Gun.aimBase(part,o,s.kind)+(s.sh or Vector3.new(0,0,0))
 local off=aimNow-((root and root.Position)or part.Position)
 local Ls=Gun.HYP_L
 local nL=#Ls
@@ -2881,7 +3186,7 @@ end
 local function evalShot(s,o,e)
 local part=s.part
 if not(part and part.Parent)then return end
-local actual=Gun.aimOf(part,o,s.kind)
+local actual=Gun.aimBase(part,o,s.kind)+(s.sh or Vector3.new(0,0,0))
 local d=e-o
 local len=d.Magnitude
 if len<1 then return end
@@ -2893,7 +3198,13 @@ local dist=(actual-o).Magnitude
 local hit=(e-actual).Magnitude<=3.0
 Gun.shots=Gun.shots+1
 if hit then Gun.hits=Gun.hits+1 end
-Gun.hitEMA=(Gun.hitEMA or 0.7)*0.8+(hit and 1 or 0)*0.2
+if s.blk==nil then s.blk=(not hit)and Gun.shotBlocked(s,o,e)end
+local blocked=s.blk
+if blocked then
+pcall(Gun.learnBlocker,s,o,e)
+Gun.blk=(Gun.blk or 0)+1
+end
+if not blocked then Gun.hitEMA=(Gun.hitEMA or 0.7)*0.8+(hit and 1 or 0)*0.2 end
 local ms=s.empty and"E"or"A"
 local stt=Gun.stat
 if not stt then stt={A={n=0,h=0},E={n=0,h=0}}Gun.stat=stt end
@@ -2913,7 +3224,7 @@ mr,mu=m:Dot(r),m:Dot(r:Cross(u))
 end
 local spd,mySpd=s.vel.Magnitude,s.my.Magnitude
 local note=""
-if CFG.gun.learn then
+if CFG.gun.learn and not blocked then
 if spd>=5 and not(Gun.hyp and Gun.hyp.n>=3)and Net.rtt<(Net.leadRtt or Net.rtt)*1.4+0.04 then
 local resid=Vector3.new(actual.X-s.pred.X,0,actual.Z-s.pred.Z)
 local along=resid:Dot(s.vel.Unit)
@@ -2962,7 +3273,7 @@ end
 end
 end
 log("TEMBAK",string.format("%s | %.0f stud | killer %.0f st/s | meleset %.1f (kanan %+.1f atas %+.1f)%s | hit %d/%d",
-(hit and"KENA"or"MELESET").." "..tostring(s.kind or"BODY"),dist,spd,m.Magnitude,mr,mu,note,Gun.hits,Gun.shots))
+(hit and"KENA"or(blocked and"KEHALANG"or"MELESET")).." "..tostring(s.kind or"BODY"),dist,spd,m.Magnitude,mr,mu,note,Gun.hits,Gun.shots))
 end
 task.spawn(function()
 local ev
@@ -2976,6 +3287,7 @@ if not alive()then return end
 local c=myChar()
 if not(c and typeof(tool)=="Instance"and(tool:IsDescendantOf(c)or tool:IsDescendantOf(LP)))then return end
 if typeof(o)~="Vector3"or typeof(e)~="Vector3"then return end
+Gun.visAt=os.clock()
 local s=Gun.last
 if not s or s.done or os.clock()-s.t>2.5 then return end
 s.done=true
@@ -8481,6 +8793,7 @@ if path=="gun.aimLock"and not v then Gun.lockTarget=nil
 elseif path=="esp.enabled"and not v then pcall(ESP.clear)
 elseif path=="esp.tier"or path=="esp.adaptive"then pcall(ESP.resetGov)
 elseif path=="gun.learn"and not v then Gun.leadAdj,Gun.biasR,Gun.biasU=0,0,0
+elseif path=="gun.instant"and v then Gun.ins.off,Gun.ins.streak,Gun.ins.err=false,0,0
 elseif path=="parry.via"and v=="game"then PG.scanAt,PG.gap=0,1.5
 elseif path=="veil.mode"then Veil.heldKey,Veil.heldBtn,Veil.toggled=false,false,false
 end
@@ -8557,7 +8870,7 @@ string.format("parry: kirim %d | ok %d | meleset %d | antisipasi %d (ok %d, mele
 "360: "..((Parry.t360 and Parry.t360.statusText())or"-"),
 string.format("dodge: %d kali (animasi %d, antisipasi %d) | ga kena %d | kena %d | nunggu parry %d | diblok %d | animasi kebaca %d | terakhir: %s",dg.n,dg.anim,dg.pre,dg.ok or 0,dg.hit or 0,dg.wait or 0,dg.blocked,dg.seen,tostring(dg.why or"-")),
 string.format("cfg: parry.predict=%s fireUnknown=%s slack=%.2f | dodge.predict=%s onlyCooldown=%s | skill.precise=%s",tostring(CFG.parry.predict),tostring(CFG.parry.fireUnknown),CFG.parry.slack,tostring(CFG.dodge.predict),tostring(CFG.dodge.onlyCooldown),tostring(CFG.skill.precise)),
-string.format("gun: %s | hit %d/%d | auto fire %s | silent %s",tostring(Gun.status),Gun.hits,Gun.shots,CFG.gun.trigger and"ON"or"OFF",CFG.gun.silent and"ON"or"OFF"),
+string.format("gun: %s | hit %d/%d | auto fire %s | silent %s | instan %s (ok %d, gagal %d) | kehalang %d",tostring(Gun.status),Gun.hits,Gun.shots,CFG.gun.trigger and"ON"or"OFF",CFG.gun.silent and"ON"or"OFF",(CFG.gun.instant and(Gun.ins.off and"MATI-OTOMATIS"or"ON")or"OFF"),Gun.ins.ok,Gun.ins.bad,Gun.blk or 0),
 string.format("skill: rung %s | hasil %d | args %s",tostring(Skill.tierName or"-"),Skill.resultN or 0,#qh>0 and table.concat(qh," ")or"-"),
 "skill handler: "..tostring(Skill.intro or"(belum ketemu)"),
 "skill riwayat:\n"..((Skill.hist and#Skill.hist>0)and table.concat(Skill.hist,"\n")or"(kosong)"),
@@ -10358,6 +10671,7 @@ pcall(function()for _,c in ipairs(getconnections(s.hit.InputBegan))do c:Fire(fak
 for _,c in ipairs(MOD.lag.ended)do pcall(function()c:Fire(fake(Enum.UserInputState.End))end)end
 end
 local OPT_DESC={
+["gun.instant"]="auto fire nembak langsung tanpa nunggu charge, step dipilih dari roll",["gun.multiLOS"]="titik bidik digeser ke bagian badan yang kelihatan kalau ketutup",["gun.fireLOS"]="auto fire nahan tembakan kalau garis ke killer ketutup",["gun.noAim"]="instan nembak walau aim ga ditahan (eksperimen)",["gun.insWait"]="lama nunggu balasan server buat tembakan instan (dtk)",["gun.losForce"]="dekat killer: nekat nembak setelah garis ketutup segini lama (dtk)",
 ["dodge.chaseRange"]="killer masuk segini (stud) -> 360 mulai",["dodge.radiusNear"]="radius lingkaran saat killer nempel (stud)",["dodge.radiusFar"]="radius lingkaran saat killer masih jauh (stud)",["dodge.burstRadius"]="radius lingkaran saat serangan kebaca (stud)",["dodge.burstTime"]="lama putaran saat serangan kebaca (dtk)",["dodge.minTurn"]="kecepatan putar minimum (rad/dtk)",["dodge.maxTurn"]="kecepatan putar maksimum (rad/dtk)",["dodge.spinAccel"]="percepatan putar, kecil = lebih halus (rad/dtk2)",["dodge.dirHold"]="arah putar minimal ditahan segini sebelum boleh balik (dtk)",["dodge.orbit"]="analog + kamera dipaksa muter mengitari killer ke belakangnya, berhasil -> kontrol balik normal",["dodge.orbitChase"]="orbit mulai otomatis saat killer ngadep dan ngedeketin",["dodge.orbitRange"]="jarak killer (stud) buat orbit otomatis",["dodge.orbitRadius"]="radius orbit mengitari killer (stud)",["dodge.orbitBehind"]="orbit dianggap berhasil kalau dot(hadap killer, posisiku) <= nilai ini (-1 = tepat di belakang)",["dodge.orbitMax"]="batas waktu satu orbit (dtk)",["dodge.orbitCool"]="jeda kontrol normal setelah orbit selesai (dtk)",["dodge.orbitCamTurn"]="kecepatan maks kamera ngikutin arah orbit (rad/dtk)",
 ["parry.range"]="jangkauan hit / parry (stud)",["parry.frontDot"]="killer harus di depan segini (dot)",
 ["parry.hitGuess"]="tebakan detik animasi mulai ke kena (animasi baru)",["parry.arriveLead"]="parry nyampe server segini sebelum kena (dtk)",
@@ -10451,7 +10765,7 @@ end
 end
 local PLABEL={["light.enabled"]="Terang peta",["parry.enabled"]="Auto parry",["skill.enabled"]="Auto skill check",["gun.aimLock"]="Aim lock gun",
 ["gun.trigger"]="Auto fire",["gun.smart"]="Gun pintar (nunggu momen kena)",["gun.snap"]="Gun snap",["gun.silent"]="Silent aim gun",["veil.silent"]="Silent aim spear",["esp.enabled"]="ESP",["ring.enabled"]="Cincin killer",
-["veil.enabled"]="Lock killer",["vault.enabled"]="Auto vault",["melee.enabled"]="Auto hit",["vault.fast"]="Vault cepat",["skill.hideUI"]="Sembunyikan UI skill check",["dodge.enabled"]="Auto dodge",["dodge.mode360"]="360 Tech dodge",["dodge.chase"]="Auto 360 saat dikejar",["dodge.autoMove"]="Auto maju saat 360"}
+["veil.enabled"]="Lock killer",["vault.enabled"]="Auto vault",["melee.enabled"]="Auto hit",["vault.fast"]="Vault cepat",["skill.hideUI"]="Sembunyikan UI skill check",["dodge.enabled"]="Auto dodge",["gun.instant"]="Tembak instan",["gun.multiLOS"]="Garis tembak pintar",["gun.fireLOS"]="Auto fire tunggu garis bersih",["gun.noAim"]="Tembak tanpa aim",["dodge.mode360"]="360 Tech dodge",["dodge.chase"]="Auto 360 saat dikejar",["dodge.autoMove"]="Auto maju saat 360"}
 function K.pGet(key)
 if MOD.par.state~="ready"or not CFG13 then return nil end
 return CFG13[key]
@@ -12106,6 +12420,7 @@ W.toggle(c1,"Auto parry","Parry otomatis dari animasi killer (Parrying Dagger). 
 W.toggle(c1,"Auto skill check","Tekan skill check tepat di tengah zona. Hotkey F3",K.pbool("skill.enabled"))
 W.toggle(c1,"Kunci target gun (silent)","Target killer dikunci tanpa menggerakkan kamera. Hotkey F6",K.pbool("gun.aimLock"))
 W.toggle(c1,"Auto fire","Tembak otomatis saat bidikan pas. Hotkey F5",K.pbool("gun.trigger"))
+W.toggle(c1,"Tembak instan","Auto fire langsung nembak begitu aim mulai, ga nunggu hold/charge: step dipilih dari roll. Kalau server nolak, mati sendiri. Butuh Auto fire nyala",K.pbool("gun.instant"))
 W.toggle(c1,"Gun pintar","Peluru ada: tembak cepat begitu roll aman. Peluru habis: cuma nembak pas peluang kena tinggi (miss = cooldown 20 dtk, kena = 70 dtk)",K.pbool("gun.smart"))
 W.toggle(c1,"Gun snap","Tembakan manual dibelokkan pas ke badan killer. Hotkey F2",K.pbool("gun.snap"))
 W.toggle(c1,"Silent aim gun","Peluru dibelokkan ke killer walau crosshair jauh dari badan. Hotkey End",K.pbool("gun.silent"))
@@ -12187,6 +12502,9 @@ W.slider(c3,"Auto: kepala kalau killer lebih pelan",2,40,1," st/dtk",K.pnum("gun
 W.toggle(c3,"Tunggu killer lurus","Auto fire nunggu arah dan kecepatan killer stabil",K.pbool("gun.steady"))
 W.toggle(c3,"Belajar dari tembakan","Koreksi lead dan bias dari balasan server",K.pbool("gun.learn"))
 W.toggle(c3,"Cek tembok","Tembak cuma kalau killer tidak ketutup tembok",K.pbool("gun.needLOS"))
+W.toggle(c3,"Garis tembak pintar","Kalau titik bidik ketutup, digeser ke bagian badan yang kelihatan (atas, bawah, bahu)",K.pbool("gun.multiLOS"))
+W.toggle(c3,"Auto fire tunggu garis bersih","Auto fire nahan tembakan kalau garis ke killer ketutup. Dekat killer dan ada peluru: nekat setelah jeda",K.pbool("gun.fireLOS"))
+W.toggle(c3,"Tembak tanpa aim (eksperimen)","Instan nembak walau tombol aim ga ditahan. Mati sendiri kalau server nolak",K.pbool("gun.noAim"))
 local c4=W.section(p,"Skill check",false)
 W.toggle(c4,"Sembunyikan UI skill check","Jarum, zona, dan tombol disembunyikan. Hotkey F7",K.pbool("skill.hideUI"))
 W.toggle(c4,"Snap ke tengah zona","Anti lompat frame di FPS rendah",K.pbool("skill.frameSnap"))
