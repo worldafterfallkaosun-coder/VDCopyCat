@@ -729,9 +729,7 @@ end)
 if not okc then res=workspace:Raycast(o,dir,rayP)end
 if not res then return true end
 local inst=res.Instance
-local pierce=(inst.Transparency>0.01 and inst.Name~="HumanoidRootPart")
-or inst:FindFirstAncestorWhichIsA("Accessory")~=nil
-if not pierce then return false end
+if not Gun.canPierce(inst)then return false end
 ign[#ign+1]=inst
 local adv=(res.Distance or 0)+0.05
 left=left-adv
@@ -753,7 +751,8 @@ end
 local Track={}
 keep(RunService.Heartbeat:Connect(function()
 if not alive()then return end
-local now=os.clock()
+local tP=os.clock()
+local now=tP
 for _,k in ipairs(killers())do
 local pos=k.root.Position
 local tr=Track[k.char]
@@ -795,6 +794,7 @@ end
 for ch in pairs(Track)do
 if not ch.Parent then Track[ch]=nil end
 end
+Gun.profAdd("lacak",os.clock()-tP)
 end))
 function Gun.steady(char)
 local tr=Track[char]
@@ -856,6 +856,7 @@ end
 Gun.solid=setmetatable({},{__mode="k"})
 Gun.avc=setmetatable({},{__mode="k"})
 Gun.shiftK=setmetatable({},{__mode="k"})
+Gun.LD={lvl=0,okSince=0,gunDt={1/30,1/20,1/12,1/8},shiftDt={0.1,0.15,0.25,0.4},avcDt={0.04,0.06,0.1,0.16},hops={8,8,5,3}}
 -- titik bidik: aimBase = titik dasar (kepala/badan), aimOf = titik dasar + geseran yang lagi dipakai biar peluru ga nabrak tembok
 function Gun.aimOf(part,origin,force)
 local p,kind,hp=Gun.aimBase(part,origin,force)
@@ -896,7 +897,7 @@ end
 function Gun.aimVis(origin,part)
 local now=os.clock()
 local c=Gun.avc[part]
-if c and now-c.t<0.04 then return c.v end
+if c and now-c.t<Gun.LD.avcDt[Gun.LD.lvl+1]then return c.v end
 local ch=part.Parent
 local wide=now<(Gun.wideUntil or 0)
 local cur=Gun.aimOf(part,origin)
@@ -1014,6 +1015,8 @@ end
 local oldNC
 local function hookBody(self,...)
 local method=getnamecallmethod()
+local PF=Gun.Prof
+if PF then PF.nc=PF.nc+1 end
 if method=="FireServer"or method=="InvokeServer"then
 local name=Spy[self]
 if name and alive()then
@@ -2169,7 +2172,9 @@ if drive.active and alive()and CFG.dodge.enabled then
 local hum=myHum()
 if hum then pcall(function()hum:Move(drive.dir,false)end)end
 end
+local tP=os.clock()
 local okT,eT=pcall(T.step,dt)
+Gun.profAdd("360",os.clock()-tP)
 if not okT then
 T.off(true)
 if os.clock()-(T.errAt or-10)>4 then T.errAt=os.clock()log("DODGE","360 error: "..tostring(eT))end
@@ -2463,19 +2468,56 @@ if not CFG.gun.instant or I.off or not Gun.fire then return false end
 if tool and Gun.ammoEmpty(tool)and I.ok==0 then return false end
 return true
 end
+-- benda mana yang boleh ditembus garis tembak. Dari log: "inviswall" (transparan penuh) dan sebuah "Part" transparan ternyata NAHAN peluru,
+-- jadi transparan tidak otomatis tembus: yang transparan penuh dan bisa ditabrak dianggap solid, nama berbau barrier solid,
+-- dan batasnya makin ketat tiap ada peluru yang kehalang benda transparan (dipelajari di learnBlocker)
+Gun.pierceMax,Gun.strictNC=0.99,false
+Gun.solidName={}
+Gun.SOLID_NAMES={"invis","barrier","boundary","border","collision"}
+function Gun.canPierce(inst)
+if Gun.solid[inst]then return false end
+if inst:FindFirstAncestorWhichIsA("Accessory")~=nil then return true end
+if inst.Name=="HumanoidRootPart"then return false end
+local tr=inst.Transparency
+if tr<=0.01 then return false end
+local nm=inst.Name:lower()
+if Gun.solidName[nm]then return false end
+for _,k in ipairs(Gun.SOLID_NAMES)do
+if nm:find(k,1,true)then return false end
+end
+if inst.CanCollide then
+if tr>=Gun.pierceMax then return false end
+elseif Gun.strictNC then
+return false
+end
+return true
+end
 -- garis tembak dari muzzle ke satu titik (Blockcast, tembus bagian transparan/aksesori kecuali benda yang udah terbukti nahan peluru)
-function Gun.pathClear(origin,point,ch,wide)
-local ign={myChar(),ch}
+function Gun.ignList(ch)
+local now=os.clock()
+local c=Gun.ignC
+local me=myChar()
+if not c or now-c.t>0.5 or c.me~=me then
+local base={}
 for _,p in ipairs(Players:GetPlayers())do
 if p~=LP and p.Character and not(p.Team and p.Team.Name:lower():find("killer"))then
-ign[#ign+1]=p.Character
+base[#base+1]=p.Character
 end
 end
+c={t=now,list=base,me=me}
+Gun.ignC=c
+end
+local ign={c.me,ch}
+for i=1,#c.list do ign[#ign+1]=c.list[i]end
+return ign
+end
+function Gun.pathClear(origin,point,ch,wide)
+local ign=Gun.ignList(ch)
 local o,dir=origin,point-origin
 local left=dir.Magnitude
 if left<0.5 then return true end
 local sz=wide and 0.9 or 0.5
-for _=1,8 do
+for _=1,Gun.LD.hops[Gun.LD.lvl+1]do
 rayP.FilterDescendantsInstances=ign
 local okc,res=pcall(function()
 return workspace:Blockcast(CFrame.new(o,o+dir),Vector3.new(sz,sz,sz),dir,rayP)
@@ -2483,10 +2525,7 @@ end)
 if not okc then res=workspace:Raycast(o,dir,rayP)end
 if not res then return true end
 local inst=res.Instance
-if Gun.solid[inst]then return false end
-local pierce=(inst.Transparency>0.01 and inst.Name~="HumanoidRootPart")
-or inst:FindFirstAncestorWhichIsA("Accessory")~=nil
-if not pierce then return false end
+if not Gun.canPierce(inst)then return false end
 ign[#ign+1]=inst
 local adv=(res.Distance or 0)+0.05
 left=left-adv
@@ -2498,7 +2537,7 @@ end
 return false
 end
 -- tiap ~0.1 dtk per killer: kalau titik bidik sekarang ketutup, cari titik lain di badan yang kelihatan (atas/bawah/samping)
-function Gun.updateShifts()
+function Gun.shiftRaw()
 local G=CFG.gun
 if not G.multiLOS then return end
 local origin=muzzleOrigin()
@@ -2509,7 +2548,7 @@ for _,k in ipairs(killers())do
 local ch=k.char
 local part=pickPart(ch)
 local rec=Gun.shiftK[ch]
-if part and(not rec or now-rec.chk>=0.1)then
+if part and(not rec or now-rec.chk>=Gun.LD.shiftDt[Gun.LD.lvl+1])then
 if not rec then
 rec={v=Vector3.new(0,0,0),t=0,chk=0,blind=false}
 Gun.shiftK[ch]=rec
@@ -2550,6 +2589,11 @@ end
 end
 end
 end
+function Gun.updateShifts()
+local t0=os.clock()
+Gun.shiftRaw()
+Gun.profAdd("bidik",os.clock()-t0)
+end
 -- peluru berhenti jauh sebelum killer = ketahan sesuatu (bukan lead yang salah)
 function Gun.shotBlocked(s,o,e)
 local part=s.part
@@ -2579,10 +2623,104 @@ local dd=s.part and s.part.Parent and(s.part.Position-o).Magnitude or 0
 if inst then
 Gun.solid[inst]=os.clock()
 if s.part then Gun.avc[s.part]=nil end
-log("GUN",string.format("peluru kehalang %s (%s) di %.0f dari %.0f stud -> dicatat solid, garis tembak diperketat",tostring(inst.Name),tostring(inst.ClassName),d.Magnitude,dd))
+local tr=tonumber(inst.Transparency)or 0
+local cc=inst.CanCollide
+local nm=tostring(inst.Name):lower()
+local generic=(nm=="part"or nm=="meshpart"or nm=="unionoperation"or nm=="wedgepart"or nm=="")
+if not generic then Gun.solidName[nm]=true end
+local learned=""
+if tr>0.01 then
+if cc then
+Gun.pierceMax=math.min(Gun.pierceMax,math.max(0.02,tr))
+learned=string.format(" | transparan>=%.2f yang bisa ditabrak sekarang dianggap solid",Gun.pierceMax)
+else
+Gun.strictNC=true
+learned=" | transparan yang ga bisa ditabrak juga dianggap solid"
+end
+end
+log("GUN",string.format("peluru kehalang %s (%s) T=%.2f collide=%s query=%s | di %.0f dari %.0f stud -> dicatat solid%s",
+tostring(inst.Name),tostring(inst.ClassName),tr,tostring(cc),tostring(inst.CanQuery),d.Magnitude,dd,generic and""or" (nama ikut dicatat)")..learned)
 else
 log("GUN",string.format("peluru berhenti di %.0f dari %.0f stud tapi bendanya ga ketemu -> garis tembak diperketat",d.Magnitude,dd))
 end
+end
+-- garis peluru lewat tepat di killer tapi server ga nganggep kena: catat kondisi killer biar penyebabnya keliatan di log
+function Gun.whyPass(s,o,e)
+local part=s.part
+local ch=part and part.Parent
+if not ch then return end
+local at={}
+for k,v in pairs(ch:GetAttributes())do
+at[#at+1]=tostring(k).."="..tostring(v)
+if#at>=14 then break end
+end
+table.sort(at)
+local tags={}
+pcall(function()
+for _,t in ipairs(CS:GetTags(ch))do tags[#tags+1]=t end
+end)
+local hum=ch:FindFirstChildOfClass("Humanoid")
+local st=hum and tostring(hum:GetState())or"-"
+local hp=hum and string.format("%.0f/%.0f",hum.Health,hum.MaxHealth)or"-"
+local so=s.origin and(s.origin-o).Magnitude or-1
+log("TEMBAK",string.format("garis lewat tepat tapi ga kena | atribut killer: %s | tag: %s | state %s hp %s | selisih muzzle klien vs server %.1f stud",
+table.concat(at,", "),table.concat(tags,","),st,hp,so))
+end
+-- ====== v24.2: pembatas beban + pengukur beban ======
+-- level dari frame time (bukan ping): 0 normal, 1 <30 fps, 2 <~18 fps, 3 <~12 fps. Level naik langsung, turun satu tingkat tiap 2 dtk stabil.
+-- Yang dikurangi: laju loop gun, cek garis tembak berulang, hop tembus benda. Tembakan itu sendiri tetap dicek penuh.
+task.spawn(function()
+while alive()do
+local ft=Net.frameDt
+local want=(ft<0.034)and 0 or((ft<0.05)and 1 or((ft<0.085)and 2 or 3))
+local L=Gun.LD
+local now=os.clock()
+if want>L.lvl then
+L.lvl,L.okSince=want,now
+log("BEBAN",string.format("fps %.0f -> beban skrip diturunin (level %d)",1/ft,want))
+elseif want<L.lvl then
+if now-L.okSince>2 then
+L.lvl,L.okSince=L.lvl-1,now
+log("BEBAN",string.format("fps %.0f -> beban skrip balik (level %d)",1/ft,L.lvl))
+end
+else
+L.okSince=now
+end
+task.wait(0.5)
+end
+end)
+Gun.Prof={w=os.clock(),cur={},last={},nc=0,ncLast=0}
+function Gun.profAdd(name,dt)
+local P=Gun.Prof
+local c=P.cur[name]
+if not c then
+c={sum=0,max=0,n=0}
+P.cur[name]=c
+end
+c.sum=c.sum+dt
+c.n=c.n+1
+if dt>c.max then c.max=dt end
+local now=os.clock()
+if now-P.w>=2 then
+local el=now-P.w
+local last={}
+for k,v in pairs(P.cur)do last[k]={ms=v.sum/el*1000,max=v.max*1000,n=v.n/el}end
+P.last,P.cur=last,{}
+P.ncLast,P.nc,P.w=P.nc/el,0,now
+end
+end
+function Gun.profText(espMs)
+local P=Gun.Prof
+local names={}
+for k in pairs(P.last)do names[#names+1]=k end
+table.sort(names)
+local out={}
+for _,k in ipairs(names)do
+local v=P.last[k]
+out[#out+1]=string.format("%s %.1f ms/dtk (maks %.1f ms, %.0fx/dtk)",k,v.ms,v.max,v.n)
+end
+if espMs then out[#out+1]=string.format("esp %.2f ms/langkah",espMs)end
+return string.format("beban skrip: %s | namecall %.0f/dtk | level %d",#out>0 and table.concat(out," | ")or"-",P.ncLast,Gun.LD.lvl)
 end
 log("GUN","v24: tembak instan (step dari roll) + garis tembak pintar (titik bidik bergeser) + blocker kepelajar aktif")
 
@@ -3076,9 +3214,11 @@ local acc,lastErr=0,0
 while alive()do
 local dt=RunService.Heartbeat:Wait()
 acc=acc+dt
-if acc>=1/30 then
+if acc>=Gun.LD.gunDt[Gun.LD.lvl+1]then
 acc=0
+local tP=os.clock()
 local ok,err=pcall(gunStep)
+Gun.profAdd("gun",os.clock()-tP)
 if not ok and os.clock()-lastErr>3 then
 lastErr=os.clock()
 log("GUN","error: "..tostring(err))
@@ -3274,6 +3414,7 @@ end
 end
 log("TEMBAK",string.format("%s | %.0f stud | killer %.0f st/s | meleset %.1f (kanan %+.1f atas %+.1f)%s | hit %d/%d",
 (hit and"KENA"or(blocked and"KEHALANG"or"MELESET")).." "..tostring(s.kind or"BODY"),dist,spd,m.Magnitude,mr,mu,note,Gun.hits,Gun.shots))
+if(not hit)and not blocked and m.Magnitude<=1.5 and len>dist+4 then pcall(Gun.whyPass,s,o,e)end
 end
 task.spawn(function()
 local ev
@@ -3385,7 +3526,9 @@ end
 end
 pcall(function()RunService:UnbindFromRenderStep("DP3_AimLock")end)
 RunService:BindToRenderStep("DP3_AimLock",Enum.RenderPriority.Last.Value,function(dt)
+local tP=os.clock()
 local ok,err=pcall(aimLockStep,dt)
+Gun.profAdd("kunci",os.clock()-tP)
 if not ok and os.clock()-lockErrAt>4 then
 lockErrAt=os.clock()
 log("LOCK","error: "..tostring(err))
@@ -8871,6 +9014,7 @@ string.format("parry: kirim %d | ok %d | meleset %d | antisipasi %d (ok %d, mele
 string.format("dodge: %d kali (animasi %d, antisipasi %d) | ga kena %d | kena %d | nunggu parry %d | diblok %d | animasi kebaca %d | terakhir: %s",dg.n,dg.anim,dg.pre,dg.ok or 0,dg.hit or 0,dg.wait or 0,dg.blocked,dg.seen,tostring(dg.why or"-")),
 string.format("cfg: parry.predict=%s fireUnknown=%s slack=%.2f | dodge.predict=%s onlyCooldown=%s | skill.precise=%s",tostring(CFG.parry.predict),tostring(CFG.parry.fireUnknown),CFG.parry.slack,tostring(CFG.dodge.predict),tostring(CFG.dodge.onlyCooldown),tostring(CFG.skill.precise)),
 string.format("gun: %s | hit %d/%d | auto fire %s | silent %s | instan %s (ok %d, gagal %d) | kehalang %d",tostring(Gun.status),Gun.hits,Gun.shots,CFG.gun.trigger and"ON"or"OFF",CFG.gun.silent and"ON"or"OFF",(CFG.gun.instant and(Gun.ins.off and"MATI-OTOMATIS"or"ON")or"OFF"),Gun.ins.ok,Gun.ins.bad,Gun.blk or 0),
+Gun.profText(ESP.stat.stepMs),
 string.format("skill: rung %s | hasil %d | args %s",tostring(Skill.tierName or"-"),Skill.resultN or 0,#qh>0 and table.concat(qh," ")or"-"),
 "skill handler: "..tostring(Skill.intro or"(belum ketemu)"),
 "skill riwayat:\n"..((Skill.hist and#Skill.hist>0)and table.concat(Skill.hist,"\n")or"(kosong)"),
