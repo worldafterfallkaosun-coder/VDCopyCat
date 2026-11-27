@@ -400,7 +400,7 @@ if type(ctx)~="table"then
 ctx={}
 ENV.DP_LOGCTX=ctx
 end
-local veilTags={VEIL=1,SPEARMATH=1,SPEED=1,EVAL=1,LEMPAR=1,["LEMPAR-V"]=1,SPEAR=1}
+local veilTags={VEIL=1,SPEARMATH=1,SPEED=1,EVAL=1,LEMPAR=1,["LEMPAR-V"]=1,SPEAR=1,["SPEAR state"]=1}
 local gunTags={GUN=1,TUNE=1,SEND=1,SERVER=1,TEMBAK=1,LOCK=1}
 local espAt=-1e9
 ENV.DP_LOGREL=function(tag,msg)
@@ -2677,11 +2677,17 @@ local L=Gun.LD
 local now=os.clock()
 if want>L.lvl then
 L.lvl,L.okSince=want,now
+if now-(L.logAt or 0)>30 then
+L.logAt=now
 log("BEBAN",string.format("fps %.0f -> beban skrip diturunin (level %d)",1/ft,want))
+end
 elseif want<L.lvl then
 if now-L.okSince>2 then
 L.lvl,L.okSince=L.lvl-1,now
+if now-(L.logAt or 0)>30 then
+L.logAt=now
 log("BEBAN",string.format("fps %.0f -> beban skrip balik (level %d)",1/ft,L.lvl))
+end
 end
 else
 L.okSince=now
@@ -2723,6 +2729,7 @@ if espMs then out[#out+1]=string.format("esp %.2f ms/langkah",espMs)end
 return string.format("beban skrip: %s | namecall %.0f/dtk | level %d",#out>0 and table.concat(out," | ")or"-",P.ncLast,Gun.LD.lvl)
 end
 log("GUN","v24: tembak instan (step dari roll) + garis tembak pintar (titik bidik bergeser) + blocker kepelajar aktif")
+log("GUN","v24.3: instan nunggu hold asli sesuai step (server ngitung step dari lama hold), tembak tanpa aim dimatiin")
 
 log("GUN","v23: lead gun diuji lawan hasil server (titik akhir peluru + jalur killer asli), kalibrasi gun lama di-reset")
 log("INFO","v21.10: kecepatan tombak = hold*165 (penuh di 1 dtk), auto lempar nahan 1.12 dtk, spawn tombak +3 stud, learner Veil satu jalur dari hasil server, learner gun median + regresi jarak")
@@ -3063,7 +3070,7 @@ end
 end
 Gun.wasAiming=aiming
 if not tool then Gun.status="gun ga dipegang";return end
-local noAimOK=CFG.gun.instant and CFG.gun.noAim and Gun.insOn(tool)
+local noAimOK=false
 if not aiming and not noAimOK then Gun.status="tahan aim, target dikunci silent (kamera ga gerak)";return end
 if not CFG.gun.trigger then Gun.status=(CFG.gun.instant and"auto fire OFF - nyalain (F5) biar nembak instan"or"auto fire OFF (lock/snap aja)");return end
 if not amSurvivor()then Gun.status="bukan survivor";return end
@@ -3088,7 +3095,14 @@ end
 local r
 local insMode=Gun.insOn(tool)
 if insMode then
-r=Gun.bestStep(tool,CFG.gun.fireStep)
+local br,_,rlk=Gun.bestStep(tool,CFG.gun.fireStep)
+if type(rlk)=="number"then
+if charged>=(stepInfo(br))+marginFor(br)then r=br end
+else
+for n=1,3 do
+if charged>=(stepInfo(n))+marginFor(n)then r=n end
+end
+end
 elseif CFG.gun.fireStep==0 then
 for n=1,3 do
 if charged>=(stepInfo(n))+marginFor(n)then r=n end
