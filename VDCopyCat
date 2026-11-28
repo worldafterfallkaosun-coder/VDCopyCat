@@ -112,6 +112,7 @@ silentNear=false,
 maxDist=220,
 aimPart="HumanoidRootPart",
 aimYOffset=0.3,
+centerFirst=true,
 aimPoint="auto",
 headYOffset=0,
 headMaxDist=120,
@@ -2459,7 +2460,8 @@ log("GUN","fix6: jam-guard tanpa mode paksa + margin charge adaptif aktif")
 -- jadi step terkecil yang aman bisa langsung dikirim tanpa nunggu charge 0.75/1.8/3.0 dtk.
 Gun.ins={ok=0,bad=0,streak=0,err=0,off=false,lastAt=0,n=0}
 Gun.visAt,Gun.jamSeen,Gun.losAt,Gun.losPart,Gun.wideUntil=0,0,0,nil,0
-Gun.SHIFT_C={{0,0},{1.0,0},{-0.8,0},{0,0.85},{0,-0.85}}
+Gun.SHIFT_C={{0,0},{0.5,0},{0,0.45},{0,-0.45},{1.0,0},{-0.5,0},{0,0.85},{0,-0.85}}
+log("GUN","fix7: titik bidik balik ke tengah badan begitu tengah kebuka lagi, geseran dicoba dari yang terkecil")
 -- step terkecil (>= from) yang aman buat roll sekarang. return: step, aman?, roll, adaPeluru
 function Gun.bestStep(tool,from)
 local roll=tool:GetAttribute("tofRoll")
@@ -2579,7 +2581,10 @@ if lat.Magnitude>1e-3 then lat=lat.Unit else lat=Vector3.new(1,0,0)end
 local function clear(off)
 return Gun.pathClear(origin,base+off+disp,ch,wide)
 end
-if clear(rec.v)then
+local zero=Vector3.new(0,0,0)
+if G.centerFirst~=false and rec.v.Magnitude>0.01 and clear(zero)then
+rec.v,rec.t,rec.blind=zero,now,false
+elseif clear(rec.v)then
 rec.t,rec.blind=now,false
 else
 local found
@@ -10912,7 +10917,7 @@ pcall(function()for _,c in ipairs(getconnections(s.hit.InputBegan))do c:Fire(fak
 for _,c in ipairs(MOD.lag.ended)do pcall(function()c:Fire(fake(Enum.UserInputState.End))end)end
 end
 local OPT_DESC={
-["gun.instant"]="auto fire nembak langsung tanpa nunggu charge, step dipilih dari roll",["gun.multiLOS"]="titik bidik digeser ke bagian badan yang kelihatan kalau ketutup",["gun.fireLOS"]="auto fire nahan tembakan kalau garis ke killer ketutup",["gun.noAim"]="instan nembak walau aim ga ditahan (eksperimen)",["gun.insWait"]="lama nunggu balasan server buat tembakan instan (dtk)",["gun.losForce"]="dekat killer: nekat nembak setelah garis ketutup segini lama (dtk)",
+["gun.instant"]="auto fire nembak langsung tanpa nunggu charge, step dipilih dari roll",["gun.multiLOS"]="titik bidik digeser ke bagian badan yang kelihatan kalau ketutup",["gun.centerFirst"]="titik bidik balik ke tengah badan begitu tengah kebuka (geseran ga nempel di pinggir)",["gun.fireLOS"]="auto fire nahan tembakan kalau garis ke killer ketutup",["gun.noAim"]="instan nembak walau aim ga ditahan (eksperimen)",["gun.insWait"]="lama nunggu balasan server buat tembakan instan (dtk)",["gun.losForce"]="dekat killer: nekat nembak setelah garis ketutup segini lama (dtk)",
 ["dodge.chaseRange"]="killer masuk segini (stud) -> 360 mulai",["dodge.radiusNear"]="radius lingkaran saat killer nempel (stud)",["dodge.radiusFar"]="radius lingkaran saat killer masih jauh (stud)",["dodge.burstRadius"]="radius lingkaran saat serangan kebaca (stud)",["dodge.burstTime"]="lama putaran saat serangan kebaca (dtk)",["dodge.minTurn"]="kecepatan putar minimum (rad/dtk)",["dodge.maxTurn"]="kecepatan putar maksimum (rad/dtk)",["dodge.spinAccel"]="percepatan putar, kecil = lebih halus (rad/dtk2)",["dodge.dirHold"]="arah putar minimal ditahan segini sebelum boleh balik (dtk)",["dodge.orbit"]="analog + kamera dipaksa muter mengitari killer ke belakangnya, berhasil -> kontrol balik normal",["dodge.orbitChase"]="orbit mulai otomatis saat killer ngadep dan ngedeketin",["dodge.orbitRange"]="jarak killer (stud) buat orbit otomatis",["dodge.orbitRadius"]="radius orbit mengitari killer (stud)",["dodge.orbitBehind"]="orbit dianggap berhasil kalau dot(hadap killer, posisiku) <= nilai ini (-1 = tepat di belakang)",["dodge.orbitMax"]="batas waktu satu orbit (dtk)",["dodge.orbitCool"]="jeda kontrol normal setelah orbit selesai (dtk)",["dodge.orbitCamTurn"]="kecepatan maks kamera ngikutin arah orbit (rad/dtk)",
 ["parry.range"]="jangkauan hit / parry (stud)",["parry.frontDot"]="killer harus di depan segini (dot)",
 ["parry.hitGuess"]="tebakan detik animasi mulai ke kena (animasi baru)",["parry.arriveLead"]="parry nyampe server segini sebelum kena (dtk)",
@@ -11006,7 +11011,7 @@ end
 end
 local PLABEL={["light.enabled"]="Terang peta",["parry.enabled"]="Auto parry",["skill.enabled"]="Auto skill check",["gun.aimLock"]="Aim lock gun",
 ["gun.trigger"]="Auto fire",["gun.smart"]="Gun pintar (nunggu momen kena)",["gun.snap"]="Gun snap",["gun.silent"]="Silent aim gun",["veil.silent"]="Silent aim spear",["esp.enabled"]="ESP",["ring.enabled"]="Cincin killer",
-["veil.enabled"]="Lock killer",["vault.enabled"]="Auto vault",["melee.enabled"]="Auto hit",["vault.fast"]="Vault cepat",["skill.hideUI"]="Sembunyikan UI skill check",["dodge.enabled"]="Auto dodge",["gun.instant"]="Tembak instan",["gun.multiLOS"]="Garis tembak pintar",["gun.fireLOS"]="Auto fire tunggu garis bersih",["gun.noAim"]="Tembak tanpa aim",["dodge.mode360"]="360 Tech dodge",["dodge.chase"]="Auto 360 saat dikejar",["dodge.autoMove"]="Auto maju saat 360",["speed.enabled"]="Speed lari"}
+["veil.enabled"]="Lock killer",["vault.enabled"]="Auto vault",["melee.enabled"]="Auto hit",["vault.fast"]="Vault cepat",["skill.hideUI"]="Sembunyikan UI skill check",["dodge.enabled"]="Auto dodge",["gun.instant"]="Tembak instan",["gun.multiLOS"]="Garis tembak pintar",["gun.centerFirst"]="Bidik tengah dulu",["gun.fireLOS"]="Auto fire tunggu garis bersih",["gun.noAim"]="Tembak tanpa aim",["dodge.mode360"]="360 Tech dodge",["dodge.chase"]="Auto 360 saat dikejar",["dodge.autoMove"]="Auto maju saat 360",["speed.enabled"]="Speed lari"}
 function K.pGet(key)
 if MOD.par.state~="ready"or not CFG13 then return nil end
 return CFG13[key]
@@ -12745,6 +12750,7 @@ W.toggle(c3,"Belajar dari tembakan","Koreksi lead dan bias dari balasan server",
 W.toggle(c3,"Garis tembak","Garis dari moncong ke killer yang dikunci. Hijau = jalur bersih, abu = ketutup tembok",K.pbool("gun.line"))
 W.toggle(c3,"Cek tembok","Tembak cuma kalau killer tidak ketutup tembok",K.pbool("gun.needLOS"))
 W.toggle(c3,"Garis tembak pintar","Kalau titik bidik ketutup, digeser ke bagian badan yang kelihatan (atas, bawah, bahu)",K.pbool("gun.multiLOS"))
+W.toggle(c3,"Bidik tengah dulu","Titik bidik balik ke tengah badan begitu tengah kebuka lagi. Geseran ke bahu/bawah cuma dipakai selama tengah ketutup. Mati = geseran nempel (cara lama)",K.pbool("gun.centerFirst"))
 W.toggle(c3,"Auto fire tunggu garis bersih","Auto fire nahan tembakan kalau garis ke killer ketutup. Dekat killer dan ada peluru: nekat setelah jeda",K.pbool("gun.fireLOS"))
 W.toggle(c3,"Tembak tanpa aim (eksperimen)","Instan nembak walau tombol aim ga ditahan. Mati sendiri kalau server nolak",K.pbool("gun.noAim"))
 local c4=W.section(p,"Skill check",false)
