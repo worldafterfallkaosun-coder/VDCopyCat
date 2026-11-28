@@ -104,7 +104,7 @@ leadBase=0.1,
 leadMax=0.7,
 autoTravel=false,
 fireStep=0,
-hitRadius=2.8,
+hitRadius=3.6,
 snapFov=8,
 silent=true,
 silentFov=180,
@@ -320,6 +320,11 @@ noDark=true,
 day=false,
 killFx=true,
 hideOverlay=true,
+},
+speed={
+enabled=false,
+pct=8,
+ramp=0.6,
 },
 }
 local Players=game:GetService("Players")
@@ -4238,6 +4243,11 @@ local seed=V.seedSpeed or C.speed
 if not seed then return nil end
 local h=feat and feat.hold
 if h then return math.clamp(h*seed,1,seed)end
+-- hold ga kebaca (tap cepat): dulu jatuh ke V.speed()/seed (kecepatan penuh),
+-- padahal game sering ngirim lemparan jauh lebih pelan (speed rendah) buat tap cepat
+-- -> arah dihitung salah, tombak jatuh pendek, kena "wall". Pakai rata2 speed
+-- tap-cepat yang udah kepelajari (V.noteSpeed) kalau ada.
+if V.quickS and V.quickN and V.quickN>=3 then return V.quickS end
 return nil
 end
 function V.noteSpeed(sp,S)
@@ -4245,6 +4255,10 @@ if type(S)~="number"or S<5 then return end
 local seed=V.seedSpeed or C.speed or 165
 V.sN=(V.sN or 0)+1
 local h=sp.feat and sp.feat.hold
+if not h and S<seed*0.97 then
+V.quickN=(V.quickN or 0)+1
+V.quickS=V.quickS and(V.quickS*0.7+S*0.3)or S
+end
 if V.sN<=14 then
 local pr=sp.S0
 local err=(pr and S>0)and math.abs(pr-S)/S*100 or nil
@@ -8062,12 +8076,46 @@ CFG.dodge.enabled=not CFG.dodge.enabled
 notify("Auto Dodge: "..(CFG.dodge.enabled and"ON"or"OFF"))
 end
 end))
--- speed lari dihapus (ga jalan). Sisa tombol SPD dari load lama dibersihin di sini.
+-- speed lari v2: lewat atribut speedboost (jalur resmi yang dipakai
+-- SurvivorAnimationsController / KillerActionController buat ngali-in WalkSpeed),
+-- bukan nge-geser CFrame langsung. Versi lama nge-geser CFrame tiap frame, lalu
+-- posisi itu ditimpa balik sama hasil replikasi server tiap heartbeat -> keliatan
+-- "lari kenceng tapi kepental mundur". speedboost ikut alur Humanoid resmi jadi
+-- ga baku-tarik sama server.
 pcall(function()
 local par=(gethui and gethui())or game:GetService("CoreGui")
 local o=par:FindFirstChild("DP3_SpeedBtn")
 if o then o:Destroy()end
 end)
+do
+local S=CFG.speed
+local cur,lastCh=0,nil
+keep(RunService.Heartbeat:Connect(function(dt)
+if not alive()then return end
+local ch=myChar()
+local hum=myHum()
+local goal=0
+if S.enabled==true and ch and hum and hum.Health>0 and dt>0 and dt<0.1 then
+local st=hum:GetState()
+if hum.MoveDirection.Magnitude>0.1 and st~=Enum.HumanoidStateType.Freefall
+and st~=Enum.HumanoidStateType.Ragdoll and not hum.Sit and not hum.PlatformStand then
+goal=1
+end
+end
+local step=dt/math.max(0.1,tonumber(S.ramp)or 0.6)
+if goal>cur then cur=math.min(goal,cur+step)else cur=math.max(goal,cur-step*2)end
+if lastCh and lastCh~=ch then cur=0 end
+lastCh=ch
+if not ch then return end
+local pct=math.clamp(tonumber(S.pct)or 0,0,20)
+local mult=1+(pct/100)*cur
+if cur<=0.001 then
+if ch:GetAttribute("speedboost")then ch:SetAttribute("speedboost",nil)end
+return
+end
+ch:SetAttribute("speedboost",mult)
+end))
+end
 do
 local L=CFG.light
 local Lighting=game:GetService("Lighting")
@@ -10880,7 +10928,7 @@ local OPT_RANGE={
 ["gun.headMaxDist"]={20,300,5},["gun.headMaxSpeed"]={2,40,1},["gun.aimHold"]={0,1,0.05},
 ["gun.headYOffset"]={-0.6,0.6,0.05},["esp.cardAlpha"]={0,0.9,0.05},["ring.thickness"]={0.1,1.5,0.05},
 ["veil.blockedHold"]={0,15,0.5},["gun.silentFov"]={10,180,5},["veil.silentFov"]={10,180,5},["gun.unsteadyScale"]={0.3,1,0.05},
-["pov.zoom"]={4,20,1},["pov.height"]={0,4,0.1},["veil.meleeLead"]={0,1,0.05},
+["pov.zoom"]={4,20,1},["pov.height"]={0,4,0.1},["veil.meleeLead"]={0,1,0.05},["speed.pct"]={0,20,1},["speed.ramp"]={0.2,2,0.1},
 }
 local function optAutoStep(v)
 if v==math.floor(v)and math.abs(v)>=2 then return 1 end
@@ -10923,7 +10971,7 @@ end
 end
 local PLABEL={["light.enabled"]="Terang peta",["parry.enabled"]="Auto parry",["skill.enabled"]="Auto skill check",["gun.aimLock"]="Aim lock gun",
 ["gun.trigger"]="Auto fire",["gun.smart"]="Gun pintar (nunggu momen kena)",["gun.snap"]="Gun snap",["gun.silent"]="Silent aim gun",["veil.silent"]="Silent aim spear",["esp.enabled"]="ESP",["ring.enabled"]="Cincin killer",
-["veil.enabled"]="Lock killer",["vault.enabled"]="Auto vault",["melee.enabled"]="Auto hit",["vault.fast"]="Vault cepat",["skill.hideUI"]="Sembunyikan UI skill check",["dodge.enabled"]="Auto dodge",["gun.instant"]="Tembak instan",["gun.multiLOS"]="Garis tembak pintar",["gun.fireLOS"]="Auto fire tunggu garis bersih",["gun.noAim"]="Tembak tanpa aim",["dodge.mode360"]="360 Tech dodge",["dodge.chase"]="Auto 360 saat dikejar",["dodge.autoMove"]="Auto maju saat 360"}
+["veil.enabled"]="Lock killer",["vault.enabled"]="Auto vault",["melee.enabled"]="Auto hit",["vault.fast"]="Vault cepat",["skill.hideUI"]="Sembunyikan UI skill check",["dodge.enabled"]="Auto dodge",["gun.instant"]="Tembak instan",["gun.multiLOS"]="Garis tembak pintar",["gun.fireLOS"]="Auto fire tunggu garis bersih",["gun.noAim"]="Tembak tanpa aim",["dodge.mode360"]="360 Tech dodge",["dodge.chase"]="Auto 360 saat dikejar",["dodge.autoMove"]="Auto maju saat 360",["speed.enabled"]="Speed lari"}
 function K.pGet(key)
 if MOD.par.state~="ready"or not CFG13 then return nil end
 return CFG13[key]
@@ -11001,9 +11049,9 @@ K.lagRestore()
 log("Semua sistem dimatikan")
 end
 K.SYSDEF={
-srv={name="Survivor",keys={"parry.enabled","skill.enabled","gun.aimLock","gun.trigger","gun.snap","gun.silent","vault.enabled","dodge.enabled"},
+srv={name="Survivor",keys={"parry.enabled","skill.enabled","gun.aimLock","gun.trigger","gun.snap","gun.silent","vault.enabled","dodge.enabled","speed.enabled"},
 master={"parry.enabled","skill.enabled","gun.aimLock","gun.trigger"}},
-klr={name="Killer",keys={"veil.enabled","veil.silent","pov.tpp","melee.enabled"},master={"veil.enabled"}},
+klr={name="Killer",keys={"veil.enabled","veil.silent","pov.tpp","melee.enabled","speed.enabled"},master={"veil.enabled"}},
 esp={name="ESP",keys={"esp.enabled"},master={"esp.enabled"}},
 }
 function K.sysCount(id)
@@ -12840,6 +12888,10 @@ W.toggle(cl,"Terangkan peta","Naikkan brightness, cahaya sekitar, dan exposure s
 W.toggle(cl,"Paksa siang","Kunci jam ke 14:00 supaya peta tidak malam",K.pbool("light.day"))
 W.toggle(cl,"Matikan blur dan depth of field","Efek yang bikin layar buram dimatikan",K.pbool("light.killFx"))
 W.toggle(cl,"Sembunyikan layar gelap game","Overlay Darkness milik game (lights out) disembunyikan",K.pbool("light.hideOverlay"))
+local csp=W.section(p,"Speed lari",false)
+W.toggle(csp,"Speed lari","Tambahan kecepatan lari halus lewat atribut speedboost (killer/survivor)",K.pbool("speed.enabled"))
+W.slider(csp,"Tambahan kecepatan",0,20,1," %",K.pnum("speed.pct"))
+W.slider(csp,"Waktu naik ke penuh",0.2,2,0.1," dtk",K.pnum("speed.ramp"))
 W.btnRow(p,{{"Reset skala ESP","norm",function()K.act("espReset")end}})
 end
 BT="lag"
