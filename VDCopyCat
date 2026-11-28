@@ -120,6 +120,7 @@ aimHold=0.3,
 lead=0,
 bulletSpeed=800,
 needLOS=true,
+line=true,
 instant=true,
 multiLOS=true,
 fireLOS=true,
@@ -256,6 +257,7 @@ silentFov=180,
 maxDist=220,
 smooth=0.6,
 needLOS=true,
+wallPass=true,
 skipHooked=true,
 stickBonus=7,
 assist=true,
@@ -1067,6 +1069,12 @@ local ok,err=pcall(function()
 local D2={fn=hookBody}
 ENV.DP3_HOOKD=D2
 D2.oldNC=hookmetamethod(game,"__namecall",newcclosure(function(self,...)
+local m=getnamecallmethod()
+if m~="FireServer"and m~="InvokeServer"then
+local PF=Gun.Prof
+if PF then PF.nc=PF.nc+1 end
+return D2.oldNC(self,...)
+end
 local f=D2.fn
 if f then return f(self,...)end
 return D2.oldNC(self,...)
@@ -1510,7 +1518,7 @@ if not seenTrack[t]and t.IsPlaying and t.TimePosition<0.3 then pcall(onTrack,t)e
 end
 end
 end
-task.wait(0.09)
+task.wait(((Gun.LD and Gun.LD.lvl)or 0)>=1 and 0.18 or 0.09)
 end
 end)
 end
@@ -2225,7 +2233,7 @@ if not seenTrack[t]and t.IsPlaying and t.TimePosition<0.3 then pcall(onTrack,t)e
 end
 end
 end
-task.wait(0.09)
+task.wait(((Gun.LD and Gun.LD.lvl)or 0)>=1 and 0.18 or 0.09)
 end
 end)
 end
@@ -3499,6 +3507,12 @@ end
 return best,bestAng
 end
 local lockErrAt,lockNameSeen=0,nil
+local function lineOff()
+if Gun.lineOn then
+Gun.lineOn=false
+if Gun.hideLine then Gun.hideLine()end
+end
+end
 local function aimLockStep(dt)
 if not alive()then
 pcall(function()RunService:UnbindFromRenderStep("DP3_AimLock")end)
@@ -3509,6 +3523,7 @@ local tool=c and equippedGun()
 if not(CFG.gun.aimLock and tool and aimingNow()and amSurvivor())
 or not hum or hum.Health<=0 or blockedByAction(c)then
 Gun.lockTarget,Gun.lockAng,lockNameSeen=nil,180,nil
+lineOff()
 return
 end
 local cam=workspace.CurrentCamera
@@ -3535,9 +3550,23 @@ Gun.lockBlind=blind
 Gun.lockTarget=part
 if not part then
 Gun.lockAng,lockNameSeen=180,nil
+lineOff()
 return
 end
 Gun.lockAng=ang
+if CFG.gun.line and Gun.drawLine then
+if nowL-(Gun.lineAt or 0)>=((Net.frameDt>0.028)and 0.09 or 0.04)then
+Gun.lineAt=nowL
+local tp=predictPos(part,origin)
+local dv=tp-origin
+local len=dv.Magnitude
+if len>1 then
+local clear=(not CFG.gun.needLOS)or Gun.aimVis(origin,part)
+Gun.lineOn=true
+Gun.drawLine(origin,dv.Unit,len,clear and Color3.fromRGB(88,240,176)or Color3.fromRGB(143,154,198))
+end
+end
+elseif Gun.lineOn then lineOff()end
 if lockNameSeen~=part.Parent then
 lockNameSeen=part.Parent
 log("LOCK",string.format("kunci silent ke %s (%.0f deg dari crosshair, kamera ga digerakkan)",part.Parent.Name,ang))
@@ -3990,7 +4019,8 @@ if to.Magnitude>0.1 then
 local ang=math.deg(math.acos(math.clamp(look:Dot(to.Unit),-1,1)))
 local isCur=(ch==cur)
 local inFov=ang<=(fovAll or C.fov)*(isCur and 1.4 or 1)
-if inFov and los(origin,point,ch,kindName)then
+local clear=inFov and los(origin,point,ch,kindName)
+if inFov and(clear or C.wallPass)then
 local score
 if C.priority=="near"then score=dist-(isCur and 10 or 0)
 elseif C.priority=="lowhp"then
@@ -4000,7 +4030,7 @@ if ch:GetAttribute("Trapped")then score=score-6 end
 score=score+(C.certWeight or 5)*math.min(aimErr(k,dist),4)
 if not best or score<best.score then
 best={k=k,off=off,kind=kindName,T=T,dir=dir,flight=flight,reach=reach,
-P=P,ang=ang,dist=dist,score=score}
+P=P,ang=ang,dist=dist,score=score,wall=not clear}
 end
 elseif inFov and isCur then
 held={k=k,off=off,kind=kindName,T=T,dir=dir,flight=flight,reach=reach,
@@ -4546,8 +4576,8 @@ if AD.arcShown==false then return end
 for _,bx in ipairs(AD.arc)do bx.Visible=false end
 AD.arcShown=false
 end
-local function drawArc(origin,dir,S,g,flight,col)
-if not(C.arc and origin and flight and flight>0)then
+local function drawArc(origin,dir,S,g,flight,col,force)
+if not((C.arc or force)and origin and flight and flight>0)then
 hideArc()
 return
 end
@@ -4587,8 +4617,11 @@ for _,bx in ipairs(arc)do bx.Color3=col end
 end
 AD.arcShown=true
 end
+function Gun.drawLine(origin,dir,len,col)drawArc(origin,dir,len,0,1,col,true)end
+Gun.hideLine=hideArc
 local hud={}
 local HC={
+wall=Color3.fromRGB(190,128,255),
 ready=Color3.fromRGB(88,240,176),
 cool=Color3.fromRGB(255,201,71),
 bad=Color3.fromRGB(255,107,122),
@@ -4979,6 +5012,7 @@ if now-V.steadyAt<CFG.gun.steadyWait then return end
 end
 V.steadyAt=nil
 local hold=(C.throwHold>0 and C.throwHold)or 1.12
+if best.wall then hold=math.max(hold,1.12)end
 V.autoHold={t=now+hold,hold=hold}
 V.nextThrow=now+hold+C.throwGap
 local ok,why=press(C.throwBind,hold,"vim")
@@ -5125,7 +5159,7 @@ hud.mOn=false
 hud.marker.Visible=false
 end
 if best and V.isVeil then
-local acol=best.blocked and HC.block or((not best.reach)and HC.bad or(ready and HC.ready or HC.cool))
+local acol=best.blocked and HC.block or((not best.reach)and HC.bad or(best.wall and HC.wall or(ready and HC.ready or HC.cool)))
 -- garis lintasan dibatasi frekuensinya: 10 adornment tiap frame bikin fps jatuh di HP
 local agap=(Net.frameDt>0.028)and 0.09 or 0.04
 if now-(X.arcAt or 0)>=agap then
@@ -5145,7 +5179,7 @@ hud.R=R
 hud.ring.Size=UDim2.fromOffset(R*2,R*2)
 end
 if best then
-local col=best.blocked and HC.block or((not best.reach)and HC.bad or((V.isVeil and not ready)and HC.cool or HC.ready))
+local col=best.blocked and HC.block or((not best.reach)and HC.bad or(best.wall and HC.wall or((V.isVeil and not ready)and HC.cool or HC.ready)))
 if hud.mCol~=col then
 hud.mCol=col
 hud.mst.Color=col
@@ -5157,7 +5191,7 @@ if hud.mnameT~=nm then
 hud.mnameT=nm
 hud.mname.Text=nm
 end
-local st=best.blocked and"KETUTUP"or((not best.reach)and"JAUH"or(V.isVeil and(ready and"SIAP"or"CD")or""))
+local st=best.blocked and"KETUTUP"or((not best.reach)and"JAUH"or(best.wall and"TEMBUS"or(V.isVeil and(ready and"SIAP"or"CD")or"")))
 local d=math.floor(best.dist+0.5)
 local fl=tonumber(best.flight)or 0
 local key=tostring(d).."|"..math.floor(fl*20+0.5).."|"..st.."|"..tostring(best.kind)
@@ -10081,7 +10115,8 @@ end
 if qh>qt and qt>0 then queue,qh,qt={},1,0 end
 local n=#parts
 local cam=workspace.CurrentCamera
-if n>0 and cam then
+NX.cf=not NX.cf
+if n>0 and cam and NX.cf then
 local cp=cam.CFrame.Position
 local far=userDist*TIER_DIST[tier+1]
 local near=far*0.85
@@ -12707,6 +12742,7 @@ W.slider(c3,"Auto: kepala sampai jarak",20,300,5," stud",K.pnum("gun.headMaxDist
 W.slider(c3,"Auto: kepala kalau killer lebih pelan",2,40,1," st/dtk",K.pnum("gun.headMaxSpeed"))
 W.toggle(c3,"Tunggu killer lurus","Auto fire nunggu arah dan kecepatan killer stabil",K.pbool("gun.steady"))
 W.toggle(c3,"Belajar dari tembakan","Koreksi lead dan bias dari balasan server",K.pbool("gun.learn"))
+W.toggle(c3,"Garis tembak","Garis dari moncong ke killer yang dikunci. Hijau = jalur bersih, abu = ketutup tembok",K.pbool("gun.line"))
 W.toggle(c3,"Cek tembok","Tembak cuma kalau killer tidak ketutup tembok",K.pbool("gun.needLOS"))
 W.toggle(c3,"Garis tembak pintar","Kalau titik bidik ketutup, digeser ke bagian badan yang kelihatan (atas, bawah, bahu)",K.pbool("gun.multiLOS"))
 W.toggle(c3,"Auto fire tunggu garis bersih","Auto fire nahan tembakan kalau garis ke killer ketutup. Dekat killer dan ada peluru: nekat setelah jeda",K.pbool("gun.fireLOS"))
@@ -12779,6 +12815,7 @@ W.row(c6,"Prioritas target",nil)
 W.seg(c6,{"cross","near","lowhp"},K.pstr("veil.priority",{"cross","near","lowhp"}))
 W.slider(c6,"Sudut dari crosshair",5,120,1," °",K.pnum("veil.fov"))
 W.slider(c6,"Kehalusan lock",0.1,1,0.05,"",K.pnum("veil.smooth"))
+W.toggle(c6,"Tembus tembok","Target di balik tembok tetap dikunci dan dilempar (spear tembus kalau ditahan penuh). Garis ungu = tembus",K.pbool("veil.wallPass"))
 W.toggle(c6,"Lock tahan walau ketutup","Target yang dikunci ketutup tembok atau objek: lock tidak lepas, kamera tetap ngikut, auto lempar nahan",K.pbool("veil.holdBlocked"))
 W.slider(c6,"Batas tahan ketutup (0 = tanpa batas)",0,15,0.5," dtk",K.pnum("veil.blockedHold"))
 W.slider(c6,"Lead killer jarak dekat",0,1,0.05," x",K.pnum("veil.meleeLead"))
